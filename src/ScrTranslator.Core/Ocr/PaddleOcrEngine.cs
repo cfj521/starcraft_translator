@@ -1,6 +1,7 @@
 using System.Drawing;
 using RapidOcrNet;
 using SkiaSharp;
+using OcrResult = ScrTranslator.Core.Ocr.OcrResult;
 
 namespace ScrTranslator.Core.Ocr;
 
@@ -10,23 +11,19 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
 
     public PaddleOcrEngine(string modelsDir)
     {
+        string det = Path.Combine(modelsDir, "det.onnx");
+        string rec = Path.Combine(modelsDir, "rec.onnx");
+        string cls = Path.Combine(modelsDir, "cls.onnx");
+        string keys = Path.Combine(modelsDir, "dict.txt");
+        foreach (var f in new[] { det, rec, cls, keys })
+            if (!File.Exists(f)) throw new FileNotFoundException("缺模型文件", f);
+
         _ocr = new RapidOcr();
-
-        string detPath = Path.Combine(modelsDir, "det.onnx");
-        string clsPath = Path.Combine(modelsDir, "cls.onnx");
-        string recPath = Path.Combine(modelsDir, "rec.onnx");
-        string keysPath = Path.Combine(modelsDir, "dict.txt");
-
-        if (!File.Exists(clsPath))
-            throw new FileNotFoundException($"cls.onnx 未找到，请将分类模型放到 {modelsDir}", clsPath);
-        _ocr.InitModels(
-            detPath: detPath,
-            clsPath: clsPath,
-            recPath: recPath,
-            keysPath: keysPath);
+        try { _ocr.InitModels(detPath: det, clsPath: cls, recPath: rec, keysPath: keys); }
+        catch { _ocr.Dispose(); throw; }
     }
 
-    public Task<Core.Ocr.OcrResult> RecognizeAsync(SKBitmap image, CancellationToken ct = default)
+    public Task<OcrResult> RecognizeAsync(SKBitmap image, CancellationToken ct = default)
         => Task.Run(() =>
         {
             var options = RapidOcrOptions.Default with { DoAngle = true };
@@ -43,7 +40,7 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
                     lines.Add(new OcrLine(block.Text, ToRect(block.BoxPoints), conf));
                 }
             }
-            return new Core.Ocr.OcrResult(lines);
+            return new OcrResult(lines);
         }, ct);
 
     private static RectangleF ToRect(SKPointI[] pts)
