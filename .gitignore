@@ -18,6 +18,9 @@ artifacts/
 [Tt]est[Rr]esult*/
 *.trx
 
+# superpowers SDD 进度账本（本地 scratch）
+.superpowers/
+
 # 本地配置 / 密钥（API Key 等不入库）
 appsettings.local.json
 secrets.json
