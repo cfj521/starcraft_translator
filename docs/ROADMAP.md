@@ -5,11 +5,11 @@
 ## Phase 0 — 工程骨架 + 透明置顶悬浮窗 🏗️
 **目标**：地基。一个能浮在游戏上、点击穿透的透明窗口。
 - [x] 在 Windows 装 .NET 10 SDK（`dotnet --version` 可用，已确认 10.0.301）
-- [ ] 建解决方案与工程骨架（可先单工程，目标框架 `net10.0-windows10.0.19041.0`，`UseWPF=true`）
-- [ ] WPF 透明置顶窗：`AllowsTransparency`、`Topmost`、无边框、透明背景
-- [ ] P/Invoke 实现**点击穿透**（`WS_EX_TRANSPARENT|WS_EX_LAYERED`）
-- [ ] 窗口上画一行测试中文，确认浮在其它窗口之上且不挡鼠标
-- [ ] 系统托盘图标 + 退出
+- [x] 建解决方案与工程骨架（可先单工程，目标框架 `net10.0-windows10.0.19041.0`，`UseWPF=true`）
+- [x] WPF 透明置顶窗：`AllowsTransparency`、`Topmost`、无边框、透明背景
+- [x] P/Invoke 实现**点击穿透**（`WS_EX_TRANSPARENT|WS_EX_LAYERED`）
+- [x] 窗口上画一行测试中文，确认浮在其它窗口之上且不挡鼠标
+- [x] 系统托盘图标 + 退出
 
 **验收**：开着记事本/游戏，悬浮窗里的中文浮在最上层，鼠标能点穿到下层。
 
