@@ -22,4 +22,10 @@
     <ProjectReference Include="..\..\src\ScrTranslator.Core\ScrTranslator.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="assets\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
