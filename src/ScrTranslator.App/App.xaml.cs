@@ -23,7 +23,8 @@ public partial class App : Application
         builder.Services.AddSingleton<TrayService>();
 
         string baseDir = AppContext.BaseDirectory;
-        builder.Services.AddSingleton(new FileLogger(Path.Combine(baseDir, "logs", "phase1-ocr.log")));
+        builder.Services.AddSingleton<FileLogger>(_ =>
+            new FileLogger(Path.Combine(baseDir, "logs", "phase1-ocr.log")));
         builder.Services.AddSingleton<IOcrEngine>(_ => new PaddleOcrEngine(Path.Combine(baseDir, "models")));
         builder.Services.AddSingleton<CaptureService>();
         builder.Services.AddSingleton(sp => new Phase1Probe(
@@ -44,8 +45,8 @@ public partial class App : Application
         bool running = false;
         _trayService.ToggleProbe = () =>
         {
-            if (running) { probe.Stop(); } else { probe.Start(); }
-            running = !running;
+            if (running) { probe.Stop(); running = false; }
+            else { running = probe.Start(); }
         };
     }
 

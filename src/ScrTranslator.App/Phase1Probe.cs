@@ -15,7 +15,7 @@ public sealed class Phase1Probe : IDisposable
     private readonly RoiConfig _cfg;
     private const string Scene = "custom_games_listing";
     private DateTime _lastShot = DateTime.MinValue;
-    private volatile bool _busy;
+    private int _busy; // 0=空闲 1=处理中
 
     public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, string roisJsonPath)
     {
@@ -24,20 +24,26 @@ public sealed class Phase1Probe : IDisposable
         _capture.FrameArrived += OnFrame;
     }
 
-    public void Start()
+    public bool Start()
     {
         var hwnd = WindowFinder.FindByProcess("StarCraft");
-        if (hwnd == IntPtr.Zero) { _log.Log("[probe] 未找到 StarCraft 窗口"); return; }
-        if (!_capture.Start(hwnd)) _log.Log("[probe] 捕获启动失败");
-        else _log.Log("[probe] 已开始捕获");
+        if (hwnd == IntPtr.Zero) { _log.Log("[probe] 未找到 StarCraft 窗口"); return false; }
+        if (!_capture.Start(hwnd)) { _log.Log("[probe] 捕获启动失败"); return false; }
+        _log.Log("[probe] 已开始捕获");
+        return true;
     }
 
     public void Stop() { _capture.Stop(); _log.Log("[probe] 已停止"); }
 
     private async void OnFrame(SKBitmap frame)
     {
-        if (_busy || (DateTime.Now - _lastShot).TotalMilliseconds < 400) { frame.Dispose(); return; }
-        _busy = true; _lastShot = DateTime.Now;
+        if ((DateTime.Now - _lastShot).TotalMilliseconds < 400
+            || Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            frame.Dispose();
+            return;
+        }
+        _lastShot = DateTime.Now;
         try
         {
             var bucket = RoiStore.SelectBucket(_cfg, Scene, frame.Width, frame.Height);
@@ -59,7 +65,7 @@ public sealed class Phase1Probe : IDisposable
             }
         }
         catch (Exception ex) { _log.Log($"[probe] 异常: {ex.Message}"); }
-        finally { frame.Dispose(); _busy = false; }
+        finally { frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }
     }
 
     // 仅退订帧回调；CaptureService 是 DI 单例，其 Stop/Dispose 由容器管理（有意设计）。
