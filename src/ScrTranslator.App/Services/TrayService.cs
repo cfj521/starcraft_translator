@@ -14,16 +14,22 @@ public sealed class TrayService : IDisposable
 
     public TrayService(OverlayWindow overlay) => _overlay = overlay;
 
+    public Action? ToggleProbe { get; set; }
+
     public void Initialize()
     {
         var toggleItem = new MenuItem { Header = "显示/隐藏悬浮窗" };
         toggleItem.Click += (_, _) => ToggleOverlay();
+
+        var probeItem = new MenuItem { Header = "开始/停止 Phase1 探测" };
+        probeItem.Click += (_, _) => ToggleProbe?.Invoke();
 
         var exitItem = new MenuItem { Header = "退出" };
         exitItem.Click += (_, _) => Application.Current.Shutdown();
 
         var menu = new ContextMenu();
         menu.Items.Add(toggleItem);
+        menu.Items.Add(probeItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(exitItem);
 

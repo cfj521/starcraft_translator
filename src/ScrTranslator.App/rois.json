@@ -1,0 +1,14 @@
+{
+  "scenes": {
+    "custom_games_listing": {
+      "buckets": [
+        {
+          "resolution": "1920x1080",
+          "rois": [
+            { "name": "game_name_column", "type": "RoomList", "rect": [0.18, 0.27, 0.24, 0.42] }
+          ]
+        }
+      ]
+    }
+  }
+}
