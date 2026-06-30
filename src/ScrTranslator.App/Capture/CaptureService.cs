@@ -80,12 +80,16 @@ public sealed class CaptureService : IDisposable
 
     private async void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
     {
-        using var frame = sender.TryGetNextFrame();
-        if (frame is null) return;
-        using var sbmp = await SoftwareBitmap.CreateCopyFromSurfaceAsync(
-            frame.Surface, BitmapAlphaMode.Premultiplied);
-        var sk = ToSkBitmap(sbmp);
-        FrameArrived?.Invoke(sk);
+        try
+        {
+            using var frame = sender.TryGetNextFrame();
+            if (frame is null) return;
+            using var sbmp = await SoftwareBitmap.CreateCopyFromSurfaceAsync(
+                frame.Surface, BitmapAlphaMode.Premultiplied);
+            var sk = ToSkBitmap(sbmp);
+            FrameArrived?.Invoke(sk);
+        }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[CaptureService] frame error: {ex}"); }
     }
 
     private static unsafe SKBitmap ToSkBitmap(SoftwareBitmap sbmp)
@@ -95,8 +99,13 @@ public sealed class CaptureService : IDisposable
         var sk = new SKBitmap(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul));
         using var buf = conv.LockBuffer(BitmapBufferAccessMode.Read);
         using var reference = buf.CreateReference();
+        var desc = buf.GetPlaneDescription(0);
+        int stride = desc.Stride;
         ((IMemoryBufferByteAccess)reference).GetBuffer(out byte* src, out uint cap);
-        Buffer.MemoryCopy(src, (void*)sk.GetPixels(), sk.ByteCount, cap);
+        byte* dst = (byte*)sk.GetPixels();
+        int rowBytes = w * 4;
+        for (int y = 0; y < h; y++)
+            Buffer.MemoryCopy(src + (long)y * stride, dst + (long)y * rowBytes, rowBytes, rowBytes);
         return sk;
     }
 
@@ -157,9 +166,10 @@ public sealed class CaptureService : IDisposable
 
     public void Stop()
     {
+        if (_framePool is not null) _framePool.FrameArrived -= OnFrameArrived;
         _session?.Dispose(); _session = null;
         _framePool?.Dispose(); _framePool = null;
-        _device = null;
+        _device?.Dispose(); _device = null;
     }
 
     public void Dispose() => Stop();

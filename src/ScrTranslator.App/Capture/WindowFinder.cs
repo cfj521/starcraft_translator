@@ -8,8 +8,9 @@ public static class WindowFinder
     public static IntPtr FindByProcess(string processName)
     {
         foreach (var p in Process.GetProcessesByName(processName))
-            if (p.MainWindowHandle != IntPtr.Zero)
-                return p.MainWindowHandle;
+            using (p)
+                if (p.MainWindowHandle != IntPtr.Zero)
+                    return p.MainWindowHandle;
         return IntPtr.Zero;
     }
 }
