@@ -1,0 +1,24 @@
+<Window x:Class="ScrTranslator.App.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ScrTranslator Overlay"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        Width="600" Height="80"
+        Left="400" Top="40">
+    <Grid>
+        <TextBlock Text="星际翻译 测试 가나다"
+                   FontSize="36" FontWeight="Bold"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Foreground="White">
+            <TextBlock.Effect>
+                <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="1"/>
+            </TextBlock.Effect>
+        </TextBlock>
+    </Grid>
+</Window>
