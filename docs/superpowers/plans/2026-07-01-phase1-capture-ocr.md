@@ -17,6 +17,8 @@
 - 模型文件提交进 git `models/`，csproj 拷到输出目录。
 - 日志写文件（自写 StreamWriter sink，不引重日志库），路径 `logs/phase1-ocr.log`。
 - ROI 坐标相对比例(0~1)、按分辨率分桶；匹配规则：精确 `WxH` → 最近宽高比 → 第一桶+warning。
+- **rois.json 以本 plan 的 `scenes.<name>.buckets[]` 数组格式为准**（spec §rois.json 的扁平示例已简化失真，分桶匹配需数组形式）。
+- **模型文件名统一为 `det.onnx` / `rec.onnx` / `dict.txt`**（取代 spec 示例中的 `rec_korean.onnx` / `korean_dict.txt`；下载后按此改名，PaddleOcrEngine 据此加载）。
 - 玩家 ID 不翻译属后续 Phase；本期只识别+打印，不翻译。
 - 捕获目标 SC:R（进程 `StarCraft.exe`），须窗口化运行。
 
@@ -524,18 +526,48 @@ public sealed class CaptureService : IDisposable
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IMemoryBufferByteAccess { unsafe void GetBuffer(out byte* buffer, out uint capacity); }
 
+    [DllImport("d3d11.dll", PreserveSig = true)]
+    private static extern int D3D11CreateDevice(
+        IntPtr pAdapter, int driverType, IntPtr software, uint flags,
+        IntPtr pFeatureLevels, uint featureLevels, uint sdkVersion,
+        out IntPtr ppDevice, out int pFeatureLevel, out IntPtr ppImmediateContext);
+
+    private static readonly Guid IID_IDXGIDevice = new("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
+
     private static IDirect3DDevice CreateDirect3DDevice()
     {
-        // 用 D3D11CreateDevice 建设备 → 取 IDXGIDevice →
-        // CreateDirect3D11DeviceFromDXGIDevice → Marshal.GetObjectForIUnknown as IDirect3DDevice
-        throw new NotImplementedException("见 Step 2 说明，按 CsWinRT 互操作实现");
+        const int D3D_DRIVER_TYPE_HARDWARE = 1;
+        const uint D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20;
+        const uint D3D11_SDK_VERSION = 7;
+        Marshal.ThrowExceptionForHR(D3D11CreateDevice(
+            IntPtr.Zero, D3D_DRIVER_TYPE_HARDWARE, IntPtr.Zero,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT, IntPtr.Zero, 0, D3D11_SDK_VERSION,
+            out IntPtr devicePtr, out _, out IntPtr ctxPtr));
+        try
+        {
+            Guid dxgi = IID_IDXGIDevice;
+            Marshal.ThrowExceptionForHR(Marshal.QueryInterface(devicePtr, ref dxgi, out IntPtr dxgiPtr));
+            try
+            {
+                CreateDirect3D11DeviceFromDXGIDevice(dxgiPtr, out IntPtr inspectable);
+                try { return MarshalInspectable<IDirect3DDevice>.FromAbi(inspectable); }
+                finally { Marshal.Release(inspectable); }
+            }
+            finally { Marshal.Release(dxgiPtr); }
+        }
+        finally
+        {
+            Marshal.Release(devicePtr);
+            if (ctxPtr != IntPtr.Zero) Marshal.Release(ctxPtr);
+        }
     }
 
     private static IGraphicsCaptureItemInterop GraphicsCaptureItemInteropFactory()
-    {
-        // 取 GraphicsCaptureItem 的 activation factory 并 QI 到 IGraphicsCaptureItemInterop
-        throw new NotImplementedException("见 Step 2 说明");
-    }
+        // CsWinRT：取 GraphicsCaptureItem 的 activation factory 并转 interop 接口。
+        // ⚠ 此处与上面 CreateForWindow 调用是本任务唯一需对照官方 Win32CaptureSample 校验的互操作点：
+        //   CsWinRT 跨版本 activation-factory API 有差异；若本写法编译/运行不过，按当前 CsWinRT 版本与官方示例调整。
+        => WinRT.ActivationFactory.Get("Windows.Graphics.Capture.GraphicsCaptureItem")
+               .AsInterface<IGraphicsCaptureItemInterop>();
 
     public void Stop()
     {
@@ -548,18 +580,26 @@ public sealed class CaptureService : IDisposable
 }
 ```
 
-> **实现说明（本任务的核心适配点，CsWinRT 互操作样板）**：上面 `CreateDirect3DDevice()` 与 `GraphicsCaptureItemInteropFactory()`、像素拷贝是 WinRT 互操作样板，参考微软官方 `Win32CaptureSample` / `ScreenCapture` 示例落实：
-> - D3D 设备：`D3D11CreateDevice(BGRA_SUPPORT)` → `IDXGIDevice` → `CreateDirect3D11DeviceFromDXGIDevice` → `Marshal.GetObjectForIUnknown(ptr)` 转 `IDirect3DDevice`。
-> - interop 工厂：`WindowsRuntimeMarshal`/`GetActivationFactory(typeof(GraphicsCaptureItem))` QI 到 `IGraphicsCaptureItemInterop`。
-> - 像素拷贝：`SoftwareBitmap.CopyToBuffer(sk.GetPixels()…)` 直接写入 `SKBitmap` 像素缓冲（替换上面 `GetPixelArray` 占位）。
-> 该任务以"能编译 + Task 4 端到端真实捕获出非空帧"为验收，互操作细节在实现期对照官方示例敲定。
+文件顶部 using 需含：`using WinRT;`（`MarshalInspectable` / `ActivationFactory`）。
 
-- [ ] **Step 3: 构建验证**
+> **实现说明**：上面代码已给出 `CreateDirect3DDevice()`（标准 D3D11CreateDevice → IDXGIDevice → CreateDirect3D11DeviceFromDXGIDevice → `MarshalInspectable<IDirect3DDevice>.FromAbi`）与像素拷贝（`IMemoryBufferByteAccess` + `Buffer.MemoryCopy`）的完整实现。**唯一需在实现期对照官方 [Win32CaptureSample](https://github.com/microsoft/Windows.UI.Composition-Win32-Samples) 校验的点是 `GraphicsCaptureItemInteropFactory()` 与 `CreateForWindow` 互操作**（CsWinRT 跨版本 activation-factory API 有差异）。
+> **完成判据**：本任务**不以 `dotnet build` 成功为完成**（build 通过仅说明语法 OK），而以 **Task 4 端到端真实捕获出非空帧**为准——若互操作写法不对，会在 Task 4 运行时暴露，届时按官方示例修正。
+
+- [ ] **Step 3: 开启 unsafe（csproj）**
+
+在 `src/ScrTranslator.App/ScrTranslator.App.csproj` 的主 `<PropertyGroup>` 内加一行：
+
+```xml
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+```
+
+- [ ] **Step 4: 构建验证**
 
 Run: `dotnet build src/ScrTranslator.App`
-Expected: 成功（接口与样板编译通过；互操作实现完成后无 NotImplemented 残留）。
+Expected: 编译成功、无 `NotImplementedException` 残留（已全部给出实现）。
+注意：**build 成功不代表互操作正确**——`GraphicsCaptureItemInteropFactory`/`CreateForWindow` 的正确性要到 Task 4 端到端真实捕获才验证；若那时报错，按官方示例修正本文件。
 
-- [ ] **Step 4: 提交**
+- [ ] **Step 5: 提交**
 
 ```bash
 git add -A
@@ -581,6 +621,8 @@ git commit -m "feat(app): CaptureService — Graphics.Capture 捕获窗口帧转
 **Interfaces:**
 - Consumes: `CaptureService`(T3)、`PaddleOcrEngine`/`IOcrEngine`(T2)、`RoiStore`(T1)。
 - Produces: `class Phase1Probe { void Start(); void Stop(); }`
+
+> **偏离 spec 说明**：spec §输出 提"M.E.L. + 自写 sink"。本期为简化，Phase1Probe 直接用独立 `FileLogger`（裸 StreamWriter），**不接 M.E.L. ILoggerProvider**；Phase 2 正式搭日志体系时再统一到 `Microsoft.Extensions.Logging`。
 
 - [ ] **Step 1: 写 `FileLogger.cs`**
 
@@ -688,7 +730,11 @@ public sealed class Phase1Probe : IDisposable
                 Rectangle px = RoiStore.ToPixels(roi.Rect, frame.Width, frame.Height);
                 if (px.Width <= 0 || px.Height <= 0) continue;
                 using var sub = new SKBitmap(px.Width, px.Height);
-                frame.ExtractSubset(sub, new SKRectI(px.Left, px.Top, px.Right, px.Bottom));
+                if (!frame.ExtractSubset(sub, new SKRectI(px.Left, px.Top, px.Right, px.Bottom)))
+                {
+                    _log.Log($"[{roi.Name}] 裁剪失败 rect={px}");
+                    continue;
+                }
                 var res = await _ocr.RecognizeAsync(sub);
                 foreach (var line in res.Lines)
                     _log.Log($"[{roi.Name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
@@ -700,6 +746,7 @@ public sealed class Phase1Probe : IDisposable
         finally { frame.Dispose(); _busy = false; }
     }
 
+    // 仅退订帧回调；CaptureService 是 DI 单例，其 Stop/Dispose 由容器管理（有意设计）。
     public void Dispose() { _capture.FrameArrived -= OnFrame; }
 }
 ```
@@ -710,15 +757,15 @@ public sealed class Phase1Probe : IDisposable
 
 ```csharp
         var probeItem = new MenuItem { Header = "开始/停止 Phase1 探测" };
-        probeItem.Click += (_, _) => _toggleProbe?.Invoke();
+        probeItem.Click += (_, _) => ToggleProbe?.Invoke();
         menu.Items.Add(probeItem);
         menu.Items.Add(new Separator());
 ```
 
-并给 `TrayService` 加一个回调字段 + 构造或属性注入：
+并给 `TrayService` 加一个回调属性（由 App 启动时赋值，在 Start/Stop Phase1Probe 间切换）：
 
 ```csharp
-    public Action? _toggleProbe; // 由 App 启动时赋值：在 Start/Stop Phase1Probe 间切换
+    public Action? ToggleProbe { get; set; }
 ```
 
 > 保持 Phase 0 既有"显示/隐藏悬浮窗""退出"两项不变，新项插在其间。
@@ -746,7 +793,7 @@ public sealed class Phase1Probe : IDisposable
         var probe = _host.Services.GetRequiredService<Phase1Probe>();
         bool running = false;
         _trayService.Initialize();
-        _trayService._toggleProbe = () =>
+        _trayService.ToggleProbe = () =>
         {
             if (running) { probe.Stop(); } else { probe.Start(); }
             running = !running;
