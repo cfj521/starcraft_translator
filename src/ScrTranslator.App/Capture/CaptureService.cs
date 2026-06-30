@@ -15,6 +15,8 @@ public sealed class CaptureService : IDisposable
     private IDirect3DDevice? _device;
     private Direct3D11CaptureFramePool? _framePool;
     private GraphicsCaptureSession? _session;
+    private DateTime _lastFrame = DateTime.MinValue;
+    private static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(400);
 
     // ── COM 互操作接口 ──────────────────────────────────────────────────────
 
@@ -84,6 +86,11 @@ public sealed class CaptureService : IDisposable
         {
             using var frame = sender.TryGetNextFrame();
             if (frame is null) return;
+
+            var now = DateTime.Now;
+            if (now - _lastFrame < MinInterval) return;   // 节流：取帧已释放(using),跳过转换
+            _lastFrame = now;
+
             using var sbmp = await SoftwareBitmap.CreateCopyFromSurfaceAsync(
                 frame.Surface, BitmapAlphaMode.Premultiplied);
             var sk = ToSkBitmap(sbmp);
