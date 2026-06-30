@@ -33,6 +33,15 @@
 - **输出**：写**日志文件**（`Microsoft.Extensions.Logging` + 文件 sink）。
 - **测试场景**：自定义游戏列表（custom games listing）的 Game Name 列（静态韩文房间名，区域清晰）。
 
+## 与上游文档的偏离（已与用户确认，本 Phase 以本 spec 为准）
+
+本 spec 在以下点偏离 ROADMAP / CLAUDE.md / TECH_DESIGN，均为有意决策，后续应回写更新这些文档：
+
+- **OCR 引擎**：ROADMAP Phase 1 与 CLAUDE.md 原写 `Windows.Media.Ocr`（TECH_DESIGN 把 PaddleOCR 列为"后续/Phase 5"）。**本 Phase 跳过 Windows.Media.Ocr，直接用 PaddleOCR(ONNX)**。理由：游戏字体偏小、系统 OCR 韩文识别率已知不足；模型随包分发免装系统语言包。原文档中 Windows.Media.Ocr 作为 Phase 1 基线的描述在本 Phase 作废。
+- **ROI 获取方式**：ROADMAP Phase 1 第 3 项是"交互式框选工具"。**本 Phase 以预写的静态 `rois.json` 替代**，不另建交互工具；交互式拖框校准 UI → Phase 4。ROADMAP Phase 1 验收（控制台稳定打印正确韩文）由本 spec §验收 #2/#3 覆盖。
+- **CaptureService 位置**：TECH_DESIGN §5 把它放 `Core/Capture/`。**本 spec 迁至 App 层**，因其 WinRT 依赖无法在非 Windows 环境单测（符合 CLAUDE.md "Core 无 UI 依赖可单测"）。
+- **FrameArrived 签名**：TECH_DESIGN §3.1 为 `event Action<CaptureFrame>`。**本 Phase 简化为 `event Action<SKBitmap>`**，不传帧元数据；Phase 2 变化检测若需时间戳/帧序号，届时再扩展接口。
+
 ## 架构与 Core/App 拆分
 
 遵循 CLAUDE.md：业务逻辑放 Core（无 UI 依赖、可单测）；WinRT/窗口相关放 App。
@@ -86,6 +95,7 @@ SC:R HWND
 ```
 - `rect` = [x, y, w, h]，相对比例(0~1)，相对窗口客户区。
 - `resolution` 为该套坐标校准时的分辨率（分桶键）。
+- **分辨率匹配规则**（RoiStore 的可测行为）：先按 `"WxH"` 字符串**精确匹配**当前窗口客户区分辨率；无精确匹配 → 选**宽高比最接近**的桶（相对坐标按比例可用）；仍无 → 取 json 第一个桶并记 warning。Phase 1 只有一个桶时走精确匹配分支，但该规则是 TDD 的明确依据。
 - Phase 1 只需 `custom_games_listing` 一个场景一个 ROI；具体数值在真实窗口上实测微调。
 
 ## OCR 引擎细节
@@ -98,20 +108,20 @@ SC:R HWND
 ## 捕获细节
 
 - 互操作：`Windows.Graphics.Capture` 经 CsWinRT；`CreateForWindow` 需 `IGraphicsCaptureItemInterop`（COM 互操作）。
-- D3D11 设备：`D3D11CreateDevice` → `IDirect3DDevice`（`Direct3D11Helpers` / `CreateDirect3DDeviceFromSharpDXDevice` 思路；本项目用 CsWinRT 互操作创建）。
+- D3D11 设备：`D3D11CreateDevice` 建设备后，通过 CsWinRT 互操作（`CreateDirect3D11DeviceFromDXGIDevice`）包装出 `IDirect3DDevice`；**不引入 SharpDX**。
 - 用 `CreateFreeThreaded` 帧池，回调在线程池线程，避免 WPF 无 DispatcherQueue 的问题。
 - Win10/11 捕获会给被捕获窗口加黄色边框（系统行为），可接受。
 
 ## 输出（日志）
 
-- 复用 Phase 0 的 Host：加 `Microsoft.Extensions.Logging` 文件输出（轻量文件 logger，或 `ILogger` + 自写 file sink，避免重依赖）。
+- 复用 Phase 0 的 Host：`Microsoft.Extensions.Logging` + **自写 `StreamWriter` 文件 sink**（不引入 Serilog 等重日志库，符合轻量取向）。
 - 日志条目：`[scene/roi] text="..." bounds=(x,y,w,h) conf=0.xx`；空结果/低置信度也记一行便于诊断。
 - 日志路径：输出目录下 `logs/phase1-ocr.log`（`.gitignore` 已忽略 `*.log`）。
 
 ## 测试策略
 
 - **RoiStore（TDD，xUnit）**：相对↔像素换算、clamp 越界、按分辨率选集、rect 解析。
-- **PaddleOcrEngine（集成测试）**：仓库内置一张韩文样图（截自场景1 的 Game Name 区域或自制韩文 PNG）；断言识别结果**包含预期韩文子串**且置信度 > 阈值。验证 OCR 路径不依赖游戏在场。
+- **PaddleOcrEngine（集成测试）**：仓库内置一张韩文样图（截自场景1 的 Game Name 区域或自制韩文 PNG）；断言识别结果**包含预期韩文子串**且置信度 > **0.6**（参考阈值，实现期按样图实测微调后写死）。验证 OCR 路径不依赖游戏在场。
 - **CaptureService + 端到端**：无法单测（需真实窗口），由手动验收覆盖。
 
 ## 验收标准
