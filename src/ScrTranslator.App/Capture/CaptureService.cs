@@ -1,0 +1,166 @@
+using System.Runtime.InteropServices;
+using SkiaSharp;
+using Windows.Graphics.Capture;
+using Windows.Graphics.DirectX;
+using Windows.Graphics.DirectX.Direct3D11;
+using Windows.Graphics.Imaging;
+using WinRT;
+
+namespace ScrTranslator.App.Capture;
+
+public sealed class CaptureService : IDisposable
+{
+    public event Action<SKBitmap>? FrameArrived;
+
+    private IDirect3DDevice? _device;
+    private Direct3D11CaptureFramePool? _framePool;
+    private GraphicsCaptureSession? _session;
+
+    // ── COM 互操作接口 ──────────────────────────────────────────────────────
+
+    [ComImport]
+    [Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
+    private interface IGraphicsCaptureItemInterop
+    {
+        IntPtr CreateForWindow([In] IntPtr window, in Guid iid);
+    }
+
+    [ComImport, Guid("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMemoryBufferByteAccess { unsafe void GetBuffer(out byte* buffer, out uint capacity); }
+
+    // ── D3D11 / WinRT 原生函数 ───────────────────────────────────────────────
+
+    [DllImport("d3d11.dll", EntryPoint = "CreateDirect3D11DeviceFromDXGIDevice",
+        SetLastError = true, ExactSpelling = true, PreserveSig = false)]
+    private static extern void CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IntPtr graphicsDevice);
+
+    [DllImport("d3d11.dll", PreserveSig = true)]
+    private static extern int D3D11CreateDevice(
+        IntPtr pAdapter, int driverType, IntPtr software, uint flags,
+        IntPtr pFeatureLevels, uint featureLevels, uint sdkVersion,
+        out IntPtr ppDevice, out int pFeatureLevel, out IntPtr ppImmediateContext);
+
+    // WinRT Activation 原生 API（绕过 CsWinRT 版本差异）
+    [DllImport("combase.dll", EntryPoint = "WindowsCreateString",
+        CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int WindowsCreateString(
+        string sourceString, int length, out IntPtr hstring);
+
+    [DllImport("combase.dll", EntryPoint = "WindowsDeleteString", ExactSpelling = true)]
+    private static extern int WindowsDeleteString(IntPtr hstring);
+
+    [DllImport("combase.dll", EntryPoint = "RoGetActivationFactory", ExactSpelling = true)]
+    private static extern int RoGetActivationFactory(
+        IntPtr activatableClassId, ref Guid iid, out IntPtr factory);
+
+    private static readonly Guid IID_IDXGIDevice = new("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
+
+    // ── 公开接口 ─────────────────────────────────────────────────────────────
+
+    public bool Start(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+
+        var interop = GraphicsCaptureItemInteropFactory();
+        Guid itemGuid = typeof(GraphicsCaptureItem).GUID;
+        IntPtr itemPtr = interop.CreateForWindow(hwnd, itemGuid);
+        var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(itemPtr);
+        Marshal.Release(itemPtr);
+
+        _device = CreateDirect3DDevice();
+        _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+            _device, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, item.Size);
+        _framePool.FrameArrived += OnFrameArrived;
+        _session = _framePool.CreateCaptureSession(item);
+        _session.StartCapture();
+        return true;
+    }
+
+    private async void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
+    {
+        using var frame = sender.TryGetNextFrame();
+        if (frame is null) return;
+        using var sbmp = await SoftwareBitmap.CreateCopyFromSurfaceAsync(
+            frame.Surface, BitmapAlphaMode.Premultiplied);
+        var sk = ToSkBitmap(sbmp);
+        FrameArrived?.Invoke(sk);
+    }
+
+    private static unsafe SKBitmap ToSkBitmap(SoftwareBitmap sbmp)
+    {
+        using var conv = SoftwareBitmap.Convert(sbmp, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+        int w = conv.PixelWidth, h = conv.PixelHeight;
+        var sk = new SKBitmap(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul));
+        using var buf = conv.LockBuffer(BitmapBufferAccessMode.Read);
+        using var reference = buf.CreateReference();
+        ((IMemoryBufferByteAccess)reference).GetBuffer(out byte* src, out uint cap);
+        Buffer.MemoryCopy(src, (void*)sk.GetPixels(), sk.ByteCount, cap);
+        return sk;
+    }
+
+    private static IDirect3DDevice CreateDirect3DDevice()
+    {
+        const int D3D_DRIVER_TYPE_HARDWARE = 1;
+        const uint D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20;
+        const uint D3D11_SDK_VERSION = 7;
+        Marshal.ThrowExceptionForHR(D3D11CreateDevice(
+            IntPtr.Zero, D3D_DRIVER_TYPE_HARDWARE, IntPtr.Zero,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT, IntPtr.Zero, 0, D3D11_SDK_VERSION,
+            out IntPtr devicePtr, out _, out IntPtr ctxPtr));
+        try
+        {
+            Guid dxgi = IID_IDXGIDevice;
+            Marshal.ThrowExceptionForHR(Marshal.QueryInterface(devicePtr, ref dxgi, out IntPtr dxgiPtr));
+            try
+            {
+                CreateDirect3D11DeviceFromDXGIDevice(dxgiPtr, out IntPtr inspectable);
+                try { return MarshalInspectable<IDirect3DDevice>.FromAbi(inspectable); }
+                finally { Marshal.Release(inspectable); }
+            }
+            finally { Marshal.Release(dxgiPtr); }
+        }
+        finally
+        {
+            Marshal.Release(devicePtr);
+            if (ctxPtr != IntPtr.Zero) Marshal.Release(ctxPtr);
+        }
+    }
+
+    /// <summary>
+    /// 通过原生 RoGetActivationFactory + HSTRING 获取 IGraphicsCaptureItemInterop，
+    /// 完全绕过 CsWinRT 版本差异（.As&lt;T&gt;() 在 CsWinRT 2.x 已弃用且返回 ObjectReference&lt;T&gt; 而非 T）。
+    /// </summary>
+    private static IGraphicsCaptureItemInterop GraphicsCaptureItemInteropFactory()
+    {
+        const string clsid = "Windows.Graphics.Capture.GraphicsCaptureItem";
+        Marshal.ThrowExceptionForHR(WindowsCreateString(clsid, clsid.Length, out IntPtr hstring));
+        try
+        {
+            Guid iid = new Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
+            Marshal.ThrowExceptionForHR(RoGetActivationFactory(hstring, ref iid, out IntPtr factoryPtr));
+            try
+            {
+                return (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+            }
+            finally
+            {
+                Marshal.Release(factoryPtr);
+            }
+        }
+        finally
+        {
+            WindowsDeleteString(hstring);
+        }
+    }
+
+    public void Stop()
+    {
+        _session?.Dispose(); _session = null;
+        _framePool?.Dispose(); _framePool = null;
+        _device = null;
+    }
+
+    public void Dispose() => Stop();
+}
