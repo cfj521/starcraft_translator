@@ -1,9 +1,7 @@
-﻿<Application x:Class="ScrTranslator.App.App"
+<Application x:Class="ScrTranslator.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:ScrTranslator.App"
-             StartupUri="MainWindow.xaml">
+             ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
-         
     </Application.Resources>
 </Application>
