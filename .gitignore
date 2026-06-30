@@ -1,0 +1,32 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+publish/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.DotSettings.user
+
+# .NET
+project.lock.json
+artifacts/
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+
+# 本地配置 / 密钥（API Key 等不入库）
+appsettings.local.json
+secrets.json
+*.key
+
+# Claude Code 本地配置（含权限，不入库）
+.claude/settings.local.json
+
+# OS / Misc
+Thumbs.db
+.DS_Store
+*.log

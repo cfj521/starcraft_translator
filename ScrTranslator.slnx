@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ScrTranslator.App/ScrTranslator.App.csproj" />
+    <Project Path="src/ScrTranslator.Core/ScrTranslator.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ScrTranslator.Core.Tests/ScrTranslator.Core.Tests.csproj" />
+  </Folder>
+</Solution>
