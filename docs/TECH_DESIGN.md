@@ -9,10 +9,8 @@
 | 运行时 | .NET 10 | 最新 LTS（支持至 2028）、现代、WPF 支持好 |
 | UI / 悬浮层 | WPF | 透明窗口、矢量渲染、CJK 字体好 |
 | 屏幕捕获 | `Windows.Graphics.Capture` (WinRT) | 抓指定窗口、性能好、官方 API；DXGI Desktop Duplication 备选 |
-| OCR (MVP) | `Windows.Media.Ocr` (WinRT) | 系统内置、离线免费、装韩文语言包即用 |
-| OCR (升级) | PaddleOCR / RapidOCR (ONNX Runtime) | 韩文识别更准，模型可随包分发 |
-| 快翻译 | Papago / 百度翻译 API | 韩文强、低延迟、便宜 |
-| LLM 翻译 | Claude API（`claude-haiku-4-5` 速度 / `claude-sonnet-4-6` 质量） | 懂游戏黑话、可加术语表与上下文 |
+| OCR | PaddleOCR / RapidOcrNet (ONNX Runtime) + 韩文 mobile 模型 | 韩文识别准、随包分发、**无需系统语言包**（已取代原 `Windows.Media.Ocr` 方案） |
+| LLM 翻译（Phase 2 起） | **OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** / **阿里云 DashScope（OpenAI 兼容 Chat）**，单活跃可切换 | 懂游戏黑话、可加术语表与上下文。**不再用 Claude / Papago / 百度**。详见 `docs/superpowers/specs/2026-07-02-phase2-translation-design.md` |
 | 配置/序列化 | System.Text.Json | 内置 |
 | 依赖注入 | Microsoft.Extensions.DependencyInjection | 模块解耦 |
 | 日志 | Microsoft.Extensions.Logging + Serilog(可选) | 排障 |
@@ -112,8 +110,8 @@
   1. **预处理/分流**：若该 ROI 列为"ID 列" 且配置 `TranslatePlayerId=false`（默认）→ 不翻译，原样输出；开关打开则照常翻译。聊天/房间名/地图列各有独立开关。
   2. **术语表**：整句或分词命中 GLOSSARY → 直接映射（无网络）。
   3. **缓存**：`MemoryCache<原文, 译文>` 命中 → 直出。
-  4. **快引擎**（`FastProvider`，Papago/百度）异步 → 发"临时态"译文事件。
-  5. **LLM**（`LlmProvider`，Claude）异步，prompt 注入术语表+场景(聊天/房间名)+最近上下文 → 发"最终态"事件，覆盖临时态。
+  4. **翻译 provider**（`ITranslationProvider`，OpenAI 订阅 / 阿里云 DashScope 单活跃）批量调用 → 上屏中文。**Phase 2 为单级**（术语/缓存未命中即调当前活跃 provider）。
+  5. **两级编排（Phase 3 目标）**：快态 provider 临时态 → 质量态 provider 最终态原地替换。当前 Phase 2 未做。
 - **LLM Prompt 要点**：系统提示设定"星际争霸韩服游戏聊天翻译"角色；附术语表；要求口语化、简短、保留游戏黑话语气；ID/数字/英文缩写不乱翻。
 - **限流**：LLM 请求合并/节流，避免刷屏时狂发请求。
 
@@ -198,8 +196,8 @@ starcraft_translator/
 - `Microsoft.Extensions.DependencyInjection` / `.Hosting` / `.Logging`
 - `System.Drawing.Common` 或 `SixLabors.ImageSharp`（图像处理）
 - `Microsoft.Extensions.Caching.Memory`（缓存）
-- 翻译 SDK：Anthropic（Claude，REST 直调即可）、百度/Papago（REST）
-- （升级）`Sdcb.PaddleOCR` 或 `RapidOCR` ONNX 包
+- 翻译：**裸 HttpClient**（不用 SDK）——阿里云 DashScope（OpenAI 兼容 `/chat/completions`）、OpenAI 订阅（Codex OAuth + `/responses` SSE 流式）；密钥/token 走 `SecretStore`（DPAPI）
+- OCR：`RapidOcrNet` + 韩文 mobile 模型（已采用）
 
 ---
 

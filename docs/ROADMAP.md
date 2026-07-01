@@ -23,20 +23,22 @@
 
 **验收**：框住游戏里一段韩文（或先用韩文图片/记事本验证），控制台稳定打印出正确韩文。
 
-## Phase 2 — 接快翻译 + 悬浮显示中文（端到端 MVP）🚀
-**目标**：最小可用闭环。
-- [ ] 实现 `ITranslationProvider`，接一个快翻译 API（Papago 或百度），韩→中
-- [ ] OCR 文本 → 翻译 → 悬浮窗在 ROI 旁显示中文
-- [ ] 加变化检测 + 缓存，避免重复翻译同一句
-- [ ] API Key 走配置 + DPAPI 加密
+## Phase 2 — 接 LLM 翻译 + 悬浮显示中文（端到端 MVP）🚀
+**目标**：最小可用闭环。**方向已改**：不用 Papago/百度快翻，改 **OpenAI 订阅 + 阿里云 DashScope 两个 LLM provider，单活跃可切换**（见 `docs/superpowers/specs/2026-07-02-phase2-translation-design.md`）。
+- [x] 实现 `ITranslationProvider` + 两 provider（DashScope=OpenAI兼容Chat；ChatGPT订阅=Codex OAuth+Responses流式），单活跃可切换
+- [x] OCR 文本 → 翻译 → 悬浮窗在 ROI 位置显示中文（Phase1Probe 接 `TranslationService`）
+- [x] 变化检测 + 缓存（LRU），避免重复翻译同一句
+- [x] 术语表精确命中直出（`Glossary` 读 `GLOSSARY.md`）
+- [x] API Key / OAuth token 走 **DPAPI 加密**（`SecretStore`）+ 最小托盘配置入口（登录/填Key/选引擎）
+- [ ] **实机 e2e 验收（待用户）**：真实 SC:R + 网络 + OAuth 登录 + 上屏中文
 
-**验收**：游戏房间里出现一句韩文，数秒内悬浮显示出中文。
+**验收**：游戏房间里出现一句韩文，数秒内悬浮显示出中文。代码完成于分支 `phase2-translation`（46 Core 单测绿），待实机 e2e。
 
 ## Phase 3 — LLM 两级翻译 + 术语表 + 缓存 🧠
 **目标**：翻译质量到位。
-- [ ] 实现 `LlmProvider`（Claude REST），system prompt 注入术语表 + 场景 + 上下文
-- [ ] 两级编排：快引擎临时态 → LLM 最终态原地替换（视觉区分）
-- [ ] 加载 `GLOSSARY.md`/数据文件，命中条目直出
+- [ ] 两级编排：快态（如 DashScope flash）临时态 → 质量态（OpenAI订阅/qwen-max）最终态原地替换（视觉区分）。**provider 已在 Phase 2 落地（OpenAI订阅+阿里云，非 Claude）**，Phase 3 只加两级编排。
+- [ ] system prompt 注入术语表 + 场景 + 最近上下文（Phase 2 已有基础 system prompt）
+- [x] 加载 `GLOSSARY.md`/数据文件，命中条目直出（Phase 2 已完成）
 - [ ] LLM 节流/合并，防刷屏
 - [ ] Core 层单测：术语表、缓存、ID 列过滤、prompt 组装
 
