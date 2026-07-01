@@ -20,9 +20,11 @@ public sealed class CaptureService : IDisposable
 
     // ── COM 互操作接口 ──────────────────────────────────────────────────────
 
+    // IGraphicsCaptureItemInterop 是 IUnknown 派生的经典 COM 接口（非 IInspectable）；
+    // 标 IInspectable 会触发 CoreCLR 的 PlatformNotSupportedException 且 vtable 槽位错位。
     [ComImport]
     [Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IGraphicsCaptureItemInterop
     {
         IntPtr CreateForWindow([In] IntPtr window, in Guid iid);
