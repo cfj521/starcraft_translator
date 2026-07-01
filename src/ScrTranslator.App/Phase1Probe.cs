@@ -5,6 +5,7 @@ using ScrTranslator.App.Logging;
 using ScrTranslator.Core;
 using ScrTranslator.Core.Ocr;
 using SkiaSharp;
+using Windows.Graphics.Capture;
 
 namespace ScrTranslator.App;
 
@@ -28,11 +29,23 @@ public sealed class Phase1Probe : IDisposable
 
     public bool Start()
     {
-        var hwnd = WindowFinder.FindByProcess("StarCraft");
-        if (hwnd == IntPtr.Zero) { _log.Log("[probe] 未找到 StarCraft 窗口"); return false; }
-        if (!_capture.Start(hwnd)) { _log.Log("[probe] 捕获启动失败"); return false; }
-        _log.Log("[probe] 已开始捕获");
-        return true;
+        try
+        {
+            _log.Log("[probe] Start 被调用");
+            bool supported = GraphicsCaptureSession.IsSupported();
+            _log.Log($"[probe] GraphicsCapture.IsSupported={supported}");
+            var hwnd = WindowFinder.FindByProcess("StarCraft");
+            _log.Log($"[probe] FindByProcess(StarCraft) hwnd={hwnd}");
+            if (hwnd == IntPtr.Zero) { _log.Log("[probe] 未找到 StarCraft 窗口"); return false; }
+            if (!_capture.Start(hwnd)) { _log.Log("[probe] 捕获启动失败"); return false; }
+            _log.Log("[probe] 已开始捕获");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Log($"[probe] Start 异常: {ex}");
+            return false;
+        }
     }
 
     public void Stop()

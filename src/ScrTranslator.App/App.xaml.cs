@@ -18,6 +18,24 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // 全局异常兜底：写 crash.log，且 UI 线程异常不再静默杀进程（诊断用）。
+        string crashLog = Path.Combine(AppContext.BaseDirectory, "logs", "crash.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(crashLog)!);
+        void LogCrash(string src, object? ex) =>
+            File.AppendAllText(crashLog, $"{DateTime.Now:HH:mm:ss.fff} [{src}] {ex}\n");
+
+        DispatcherUnhandledException += (_, args) =>
+        {
+            LogCrash("Dispatcher", args.Exception);
+            args.Handled = true; // 保持进程存活，让日志可读、悬浮/托盘不被杀
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) => LogCrash("AppDomain", args.ExceptionObject);
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            LogCrash("Task", args.Exception);
+            args.SetObserved();
+        };
+
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<OverlayWindow>();
         builder.Services.AddSingleton<TrayService>();
