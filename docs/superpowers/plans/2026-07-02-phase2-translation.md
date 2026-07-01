@@ -1207,41 +1207,57 @@ public sealed class OpenAiOAuth : ITokenSource
 - Consumes: `TranslationService`、`OpenAiOAuth`、`SecretStore`、两 provider、`TranslationSettings`。
 - Produces: `Phase1Probe` 内新增依赖 `TranslationService translator`；`OnFrame` 收集当行韩文→`translator.TranslateAsync`→`OverlayItem(中文,x,y)`；加变化检测（缓存上帧各 ROI 韩文集合）。
 
-- [ ] **Step 1: DI 注册**（App.xaml.cs `ConfigureServices`）——注册单例：
+- [ ] **Step 0: 先建 SettingsHolder**（Core，可变包装以支持运行时切引擎；record 不可变）：
+```csharp
+// src/ScrTranslator.Core/Translation/SettingsHolder.cs
+namespace ScrTranslator.Core.Translation;
+public sealed class SettingsHolder { public TranslationSettings Current { get; set; } = TranslationSettings.Default; }
+```
+
+- [ ] **Step 0b: GLOSSARY.md 随包拷贝**（避免相对路径打包失效）——App csproj 加：
+```xml
+<ItemGroup>
+  <Content Include="..\..\docs\GLOSSARY.md" Link="GLOSSARY.md">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  </Content>
+</ItemGroup>
+```
+运行期用 `Path.Combine(AppContext.BaseDirectory, "GLOSSARY.md")`。缺文件时 `Glossary.LoadFromMarkdown` 返回空、优雅降级。
+
+- [ ] **Step 1: DI 注册**——**注意**：现有 `App.xaml.cs` 用 `Host.CreateApplicationBuilder()`，下面 `services` 即 `builder.Services`（映射过去，不是 `ConfigureServices`）。注册单例：
 ```csharp
 services.AddSingleton<SecretStore>();
 services.AddSingleton(new HttpClient());
 services.AddSingleton<OpenAiOAuth>();
 services.AddSingleton<ITokenSource>(sp => sp.GetRequiredService<OpenAiOAuth>());
-services.AddSingleton(TranslationSettings.Default); // MVP：内存态，可后续持久化
-services.AddSingleton(sp => Glossary.LoadFromMarkdown(Path.Combine(AppContext.BaseDirectory, "..","..","..","..","..","docs","GLOSSARY.md")));
-// 更稳妥：把 GLOSSARY.md 作为 App 内容随包拷贝；实现期改为 CopyToOutputDirectory 后用 BaseDirectory 直取。
+services.AddSingleton<SettingsHolder>();   // 可变，托盘切引擎改 .Current
+services.AddSingleton(sp => Glossary.LoadFromMarkdown(Path.Combine(AppContext.BaseDirectory, "GLOSSARY.md")));
 services.AddSingleton<TranslationCache>();
 services.AddSingleton(sp => new OpenAiCompatibleChatClient(sp.GetRequiredService<HttpClient>(),
     "https://dashscope.aliyuncs.com/compatible-mode/v1",
     () => sp.GetRequiredService<SecretStore>().Load().DashScopeApiKey));
 services.AddSingleton(sp => new CodexResponsesClient(sp.GetRequiredService<HttpClient>()));
 services.AddSingleton(sp => new DashScopeProvider(sp.GetRequiredService<OpenAiCompatibleChatClient>(),
-    () => sp.GetRequiredService<TranslationSettings>().DashScopeModel));
+    () => sp.GetRequiredService<SettingsHolder>().Current.DashScopeModel));
 services.AddSingleton(sp => new ChatGptSubscriptionProvider(sp.GetRequiredService<CodexResponsesClient>(),
-    sp.GetRequiredService<ITokenSource>(), () => sp.GetRequiredService<TranslationSettings>().ChatGptModel));
+    sp.GetRequiredService<ITokenSource>(), () => sp.GetRequiredService<SettingsHolder>().Current.ChatGptModel));
 services.AddSingleton(sp => new TranslationService(
     sp.GetRequiredService<Glossary>(), sp.GetRequiredService<TranslationCache>(),
-    () => sp.GetRequiredService<TranslationSettings>().Active == TranslationEngine.DashScope
-        ? sp.GetRequiredService<DashScopeProvider>()
+    () => sp.GetRequiredService<SettingsHolder>().Current.Active == TranslationEngine.DashScope
+        ? (ITranslationProvider)sp.GetRequiredService<DashScopeProvider>()
         : sp.GetRequiredService<ChatGptSubscriptionProvider>()));
 ```
-> 注：DashScope apiKey 在构造时读一次；改 key 后需重启或重建 client——MVP 可接受，实现期若想热更改成每次 `CompleteAsync` 前读 SecretStore（把 key 也做成 `Func<string>`）。**实现期采用 `Func<string>` 版**避免重启，见下 Step 微调。
+DashScope apiKey 走 `Func<string>` 每次读 SecretStore，改 key 无需重启。
 
 - [ ] **Step 2: apiKey 热更**——A4 的 client 已是 `Func<string> apiKeyGetter`，DI 直接传 `() => sp.GetRequiredService<SecretStore>().Load().DashScopeApiKey`，改 key 后无需重启即生效（无需再重构）。
 
 - [ ] **Step 3: DashScopeKeyWindow**（最简：TextBox + 确定；确定后 `store.Load()`→设 `DashScopeApiKey`→`store.Save()`）。
 
-- [ ] **Step 4: 托盘菜单**（在现有托盘构建处加三项）：
-  - `登录 ChatGPT（订阅）` → `await oauth.LoginAsync(...)`；完成后菜单标题显示 `已登录: {email}({plan})`。
-  - `设置阿里云 Key` → 弹 DashScopeKeyWindow。
-  - `翻译引擎 ▸ DashScope | ChatGPT` → 单选，改 `TranslationSettings.Active`（因是 record，需换成可变持有者：把 TranslationSettings 注册为可变包装 `SettingsHolder{ TranslationSettings Current }` 单例；Provider 的 `Func` 从 holder 读）。
-    - 微调：新增 `sealed class SettingsHolder { public TranslationSettings Current { get; set; } = TranslationSettings.Default; }`，DI 单例；上面所有 `GetRequiredService<TranslationSettings>()` 改 `GetRequiredService<SettingsHolder>().Current`。
+- [ ] **Step 4: 托盘菜单**（现有 `TrayService` 用 WPF `MenuItem`/`ContextMenu`）：
+  - **先给 `TrayService` 构造函数新增依赖**：`OpenAiOAuth oauth`、`SettingsHolder settings`、`SecretStore store`，及一个开 `DashScopeKeyWindow` 的委托/工厂（或直接 new 窗口）。**同步在 DI 里更新 `TrayService` 的注册**（现有注册要带上新依赖，否则构造失败）。
+  - `登录 ChatGPT（订阅）` → `await oauth.LoginAsync(CancellationToken.None)`；完成后菜单项标题显示 `已登录: {email}({plan})`（`oauth.Status()`）。
+  - `设置阿里云 Key` → 弹 `DashScopeKeyWindow`。
+  - `翻译引擎 ▸ DashScope | ChatGPT` → 两个可勾选 `MenuItem` 单选，点击设 `settings.Current = settings.Current with { Active = TranslationEngine.X }`，并更新勾选态。SettingsHolder 已在 Step 0/1 注册，Provider 的 `Func` 已从 holder 读，切换即时生效。
 
 - [ ] **Step 5: Phase1Probe 接翻译**——注入 `TranslationService`；`OnFrame` 里把每个 ROI 的 OCR 行文本收集，`var zh = await translator.TranslateAsync(koLines, ct)`，用 `zh[k]` 替换 `OverlayItem` 文本（坐标不变）。**变化检测**：字段 `Dictionary<string, string> _lastRoiText`（key=roi.Name，value=该 ROI 所有行拼接）；与本帧比较，未变则跳过翻译与 `ShowLines`。
 
@@ -1255,17 +1271,22 @@ foreach (var roi in bucket.Rois) { /* 裁剪+OCR 后 */
 var joined = string.Join("\n", koLines);
 if (joined == _lastJoined) return;   // 未变，跳过（finally 仍 Dispose+复位）
 _lastJoined = joined;
+var engine = _settings.Current.Active;                 // 注入 SettingsHolder _settings 供日志记引擎
+var sw = System.Diagnostics.Stopwatch.StartNew();
 var zh = koLines.Count > 0 ? await _translator.TranslateAsync(koLines, CancellationToken.None) : Array.Empty<string>();
+sw.Stop();
 for (int k = 0; k < koLines.Count; k++)
 {
     var (bounds, px) = metas[k];
     var frameBounds = new RectangleF(bounds.X + px.Left, bounds.Y + px.Top, bounds.Width, bounds.Height);
     var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
     items.Add(new OverlayItem(zh[k], scr.X, scr.Y));
-    _log.Log($"[{k}] \"{koLines[k]}\" -> \"{zh[k]}\"");
+    // 验收要求日志含 原文/译文/引擎/耗时（来源 glossary/cache/api 为可选，本层不区分）
+    _log.Log($"[{k}] \"{koLines[k]}\" -> \"{zh[k]}\" engine={engine} {sw.ElapsedMilliseconds}ms");
 }
 ```
 > 实现期按 `Phase1Probe.cs` 现有真实结构落地（上面为示意，注意 px 属于某个 roi，需在循环内配对；保持既有 winRect 守卫与 finally）。
+> **构造依赖**：`Phase1Probe` 构造函数新增 `TranslationService translator`、`SettingsHolder settings`（字段 `_translator`/`_settings`）；新增字段 `string _lastJoined = ""`（变化检测）。同步更新 App.xaml.cs 里 `Phase1Probe` 的构造/DI（现为手动 new 或 DI，按现状加参数）。
 
 - [ ] **Step 6: build** — `dotnet build` 预期 0 错误。
 - [ ] **Step 7: 回归** — `dotnet test`（含 A4 重构后的 client 测试）预期全绿。
