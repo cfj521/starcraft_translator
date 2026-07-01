@@ -13,6 +13,7 @@ public partial class App : Application
 {
     private IHost? _host;
     private TrayService? _trayService;
+    private HotkeyService? _hotkeys;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -62,15 +63,28 @@ public partial class App : Application
 
         var probe = _host.Services.GetRequiredService<Phase1Probe>();
         bool running = false;
-        _trayService.ToggleProbe = () =>
+        void ToggleProbe()
         {
             if (running) { probe.Stop(); running = false; }
             else { running = probe.Start(); }
-        };
+        }
+        void ToggleOverlay()
+        {
+            if (overlay.IsVisible) overlay.Hide(); else overlay.Show();
+        }
+        _trayService.ToggleProbe = ToggleProbe;
+
+        // 全局热键：F9 开关探测、F10 显隐悬浮窗（游戏有焦点时也生效）
+        var log = _host.Services.GetRequiredService<FileLogger>();
+        _hotkeys = new HotkeyService(overlay);
+        bool f9 = _hotkeys.Register(HotkeyService.MOD_NONE, HotkeyService.VK_F9, ToggleProbe);
+        bool f10 = _hotkeys.Register(HotkeyService.MOD_NONE, HotkeyService.VK_F10, ToggleOverlay);
+        log.Log($"[hotkey] 注册 F9(开关探测)={f9} F10(显隐悬浮)={f10}");
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _hotkeys?.Dispose();
         _trayService?.Dispose();
         _host?.Dispose();
         base.OnExit(e);

@@ -36,4 +36,13 @@ internal static class NativeMethods
         => GetWindowRect(hwnd, out RECT r)
             ? System.Drawing.Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom)
             : System.Drawing.Rectangle.Empty;
+
+    // ── 全局热键 ──────────────────────────────────────────────────────────────
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 }
