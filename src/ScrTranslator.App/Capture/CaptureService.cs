@@ -60,8 +60,7 @@ public sealed class CaptureService : IDisposable
         if (hwnd == IntPtr.Zero) return false;
         Hwnd = hwnd;
 
-        Guid itemGuid = typeof(GraphicsCaptureItem).GUID;
-        IntPtr itemPtr = CreateItemForWindow(hwnd, itemGuid);
+        IntPtr itemPtr = CreateItemForWindow(hwnd, IID_IGraphicsCaptureItem);
         var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(itemPtr);
         Marshal.Release(itemPtr);
 
@@ -139,6 +138,11 @@ public sealed class CaptureService : IDisposable
     }
 
     private static readonly Guid IID_IGraphicsCaptureItemInterop = new("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
+
+    // CreateForWindow 需要 IGraphicsCaptureItem *接口* 的 IID，而非运行时类 GUID。
+    // typeof(GraphicsCaptureItem).GUID / GuidGenerator.GetIID 返回的是 CsWinRT 合成的
+    // 类 GUID(cc7b16ab-...)，传给 CreateForWindow 会得 E_NOINTERFACE。必须用官方接口 IID。
+    internal static readonly Guid IID_IGraphicsCaptureItem = new("79C3F95B-31F7-4EC2-A464-632EF5D30760");
 
     /// <summary>
     /// RoGetActivationFactory 拿到 GraphicsCaptureItem 的 IGraphicsCaptureItemInterop 工厂指针，

@@ -10,7 +10,9 @@ public sealed class FileLogger : IDisposable
     public FileLogger(string path)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        _w = new StreamWriter(path, append: true) { AutoFlush = true };
+        // FileShare.ReadWrite：容忍上一个实例/日志查看器仍持有文件，避免启动因文件占用而崩溃。
+        var fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+        _w = new StreamWriter(fs) { AutoFlush = true };
     }
 
     public void Log(string msg)
