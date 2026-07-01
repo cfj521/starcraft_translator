@@ -110,7 +110,6 @@ public sealed class Phase1Probe : IDisposable
             // 变化检测：本帧全部 ROI 韩文与上一帧完全相同则跳过翻译与上屏（省 API 费用，减少闪烁）。
             var joined = string.Join("\n", koLines);
             if (joined == _lastJoined) return; // finally 仍会 Dispose(frame) 并复位 _busy
-            _lastJoined = joined;
 
             var engine = _settings.Current.Active;
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -127,6 +126,9 @@ public sealed class Phase1Probe : IDisposable
                 items.Add(new OverlayItem(zh[k], scr.X, scr.Y));
                 _log.Log($"[{roiName}][{k}] \"{koLines[k]}\" -> \"{zh[k]}\" engine={engine} {sw.ElapsedMilliseconds}ms");
             }
+            // 翻译与映射均成功后才提交"已展示"状态：若上面任一步抛出(被外层 catch)，
+            // 本帧不标记为已展示，下一帧同内容仍会重试，避免误判"未变"导致永不上屏。
+            _lastJoined = joined;
             _log.Log($"[probe] 上屏 {items.Count} 行");
             _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
         }

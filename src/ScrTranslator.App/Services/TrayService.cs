@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using H.NotifyIcon;
 using ScrTranslator.App.Auth;
+using ScrTranslator.App.Logging;
 using ScrTranslator.App.Secrets;
 using ScrTranslator.Core.Translation;
 
@@ -16,14 +17,15 @@ public sealed class TrayService : IDisposable
     private readonly OpenAiOAuth _oauth;
     private readonly SettingsHolder _settings;
     private readonly SecretStore _store;
+    private readonly FileLogger _log;
     private TaskbarIcon? _trayIcon;
     private MenuItem? _loginItem;
     private MenuItem? _engineDashScopeItem;
     private MenuItem? _engineChatGptItem;
 
-    public TrayService(OverlayWindow overlay, OpenAiOAuth oauth, SettingsHolder settings, SecretStore store)
+    public TrayService(OverlayWindow overlay, OpenAiOAuth oauth, SettingsHolder settings, SecretStore store, FileLogger log)
     {
-        _overlay = overlay; _oauth = oauth; _settings = settings; _store = store;
+        _overlay = overlay; _oauth = oauth; _settings = settings; _store = store; _log = log;
     }
 
     public Action? ToggleProbe { get; set; }
@@ -83,13 +85,22 @@ public sealed class TrayService : IDisposable
     {
         if (_loginItem is null) return;
         _loginItem.IsEnabled = false;
+        _loginItem.Header = "登录中…（浏览器完成授权）";
         try
         {
             // 带超时，避免用户中途放弃登录时无限等待浏览器回调。
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
-            await _oauth.LoginAsync(cts.Token);
+            bool ok = await _oauth.LoginAsync(cts.Token);
+            _log.Log($"[tray] ChatGPT 登录 {(ok ? "成功" : "失败/未完成")}");
+            if (!ok)
+                MessageBox.Show("ChatGPT 登录未完成或失败（可能：端口 1455 被占用、超时、网络问题或未在浏览器完成授权）。请重试；详情见 logs/phase1-ocr.log。",
+                    "登录失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-        catch { /* 登录失败/取消：静默，菜单文本仍反映真实登录态 */ }
+        catch (Exception ex)
+        {
+            _log.Log($"[tray] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
+            MessageBox.Show($"ChatGPT 登录出错：{ex.Message}", "登录失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
         finally
         {
             RefreshLoginText();
