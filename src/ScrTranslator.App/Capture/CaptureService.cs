@@ -20,16 +20,6 @@ public sealed class CaptureService : IDisposable
 
     // ── COM 互操作接口 ──────────────────────────────────────────────────────
 
-    // IGraphicsCaptureItemInterop 是 IUnknown 派生的经典 COM 接口（非 IInspectable）；
-    // 标 IInspectable 会触发 CoreCLR 的 PlatformNotSupportedException 且 vtable 槽位错位。
-    [ComImport]
-    [Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IGraphicsCaptureItemInterop
-    {
-        IntPtr CreateForWindow([In] IntPtr window, in Guid iid);
-    }
-
     [ComImport, Guid("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IMemoryBufferByteAccess { unsafe void GetBuffer(out byte* buffer, out uint capacity); }
@@ -70,9 +60,8 @@ public sealed class CaptureService : IDisposable
         if (hwnd == IntPtr.Zero) return false;
         Hwnd = hwnd;
 
-        var interop = GraphicsCaptureItemInteropFactory();
         Guid itemGuid = typeof(GraphicsCaptureItem).GUID;
-        IntPtr itemPtr = interop.CreateForWindow(hwnd, itemGuid);
+        IntPtr itemPtr = CreateItemForWindow(hwnd, itemGuid);
         var item = MarshalInterface<GraphicsCaptureItem>.FromAbi(itemPtr);
         Marshal.Release(itemPtr);
 
@@ -149,21 +138,29 @@ public sealed class CaptureService : IDisposable
         }
     }
 
+    private static readonly Guid IID_IGraphicsCaptureItemInterop = new("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
+
     /// <summary>
-    /// 通过原生 RoGetActivationFactory + HSTRING 获取 IGraphicsCaptureItemInterop，
-    /// 完全绕过 CsWinRT 版本差异（.As&lt;T&gt;() 在 CsWinRT 2.x 已弃用且返回 ObjectReference&lt;T&gt; 而非 T）。
+    /// RoGetActivationFactory 拿到 GraphicsCaptureItem 的 IGraphicsCaptureItemInterop 工厂指针，
+    /// 再按 COM vtable 用函数指针直接调用 CreateForWindow（不经 RCW，绕开封送不确定性）。
+    /// vtable: [0]QI [1]AddRef [2]Release [3]CreateForWindow。
     /// </summary>
-    private static IGraphicsCaptureItemInterop GraphicsCaptureItemInteropFactory()
+    private static unsafe IntPtr CreateItemForWindow(IntPtr hwnd, Guid itemIid)
     {
         const string clsid = "Windows.Graphics.Capture.GraphicsCaptureItem";
         Marshal.ThrowExceptionForHR(WindowsCreateString(clsid, clsid.Length, out IntPtr hstring));
         try
         {
-            Guid iid = new Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
-            Marshal.ThrowExceptionForHR(RoGetActivationFactory(hstring, ref iid, out IntPtr factoryPtr));
+            Guid interopIid = IID_IGraphicsCaptureItemInterop;
+            Marshal.ThrowExceptionForHR(RoGetActivationFactory(hstring, ref interopIid, out IntPtr factoryPtr));
             try
             {
-                return (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+                void** vtbl = *(void***)factoryPtr;
+                var createForWindow =
+                    (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, Guid*, IntPtr*, int>)vtbl[3];
+                IntPtr itemPtr;
+                Marshal.ThrowExceptionForHR(createForWindow(factoryPtr, hwnd, &itemIid, &itemPtr));
+                return itemPtr;
             }
             finally
             {
