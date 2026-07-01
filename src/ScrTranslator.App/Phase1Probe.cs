@@ -1,5 +1,6 @@
 using System.Drawing;
 using ScrTranslator.App.Capture;
+using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
 using ScrTranslator.Core;
 using ScrTranslator.Core.Ocr;
@@ -12,14 +13,15 @@ public sealed class Phase1Probe : IDisposable
     private readonly CaptureService _capture;
     private readonly IOcrEngine _ocr;
     private readonly FileLogger _log;
+    private readonly OverlayWindow _overlay;
     private readonly RoiConfig _cfg;
     private const string Scene = "custom_games_listing";
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
 
-    public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, string roisJsonPath)
+    public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay, string roisJsonPath)
     {
-        _capture = capture; _ocr = ocr; _log = log;
+        _capture = capture; _ocr = ocr; _log = log; _overlay = overlay;
         _cfg = RoiStore.Load(roisJsonPath);
         _capture.FrameArrived += OnFrame;
     }
@@ -33,7 +35,12 @@ public sealed class Phase1Probe : IDisposable
         return true;
     }
 
-    public void Stop() { _capture.Stop(); _log.Log("[probe] 已停止"); }
+    public void Stop()
+    {
+        _capture.Stop();
+        _log.Log("[probe] 已停止");
+        _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+    }
 
     private async void OnFrame(SKBitmap frame)
     {
@@ -46,6 +53,14 @@ public sealed class Phase1Probe : IDisposable
         _lastShot = DateTime.Now;
         try
         {
+            var frameSize = new Size(frame.Width, frame.Height);
+            var winRect = NativeMethods.GetWindowScreenRect(_capture.Hwnd);
+            if (winRect.IsEmpty)
+            {
+                _log.Log("[probe] 获取窗口矩形失败，跳过本帧上屏");
+                return; // finally 仍会 Dispose(frame) 并复位 _busy
+            }
+            var items = new List<OverlayItem>();
             var bucket = RoiStore.SelectBucket(_cfg, Scene, frame.Width, frame.Height);
             foreach (var roi in bucket.Rois)
             {
@@ -59,15 +74,23 @@ public sealed class Phase1Probe : IDisposable
                 }
                 var res = await _ocr.RecognizeAsync(sub);
                 foreach (var line in res.Lines)
+                {
                     _log.Log($"[{roi.Name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
+                    var frameBounds = new RectangleF(
+                        line.Bounds.X + px.Left, line.Bounds.Y + px.Top,
+                        line.Bounds.Width, line.Bounds.Height);
+                    var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
+                    items.Add(new OverlayItem(line.Text, scr.X, scr.Y));
+                }
                 if (res.Lines.Count == 0)
                     _log.Log($"[{roi.Name}] (空)");
             }
+            _log.Log($"[probe] 上屏 {items.Count} 行");
+            _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
         }
         catch (Exception ex) { _log.Log($"[probe] 异常: {ex.Message}"); }
         finally { frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }
     }
 
-    // 仅退订帧回调；CaptureService 是 DI 单例，其 Stop/Dispose 由容器管理（有意设计）。
     public void Dispose() { _capture.FrameArrived -= OnFrame; }
 }

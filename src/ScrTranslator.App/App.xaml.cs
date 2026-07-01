@@ -31,6 +31,7 @@ public partial class App : Application
             sp.GetRequiredService<CaptureService>(),
             sp.GetRequiredService<IOcrEngine>(),
             sp.GetRequiredService<FileLogger>(),
+            sp.GetRequiredService<OverlayWindow>(),
             Path.Combine(baseDir, "rois.json")));
 
         _host = builder.Build();

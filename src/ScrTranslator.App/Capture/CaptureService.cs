@@ -61,9 +61,12 @@ public sealed class CaptureService : IDisposable
 
     // ── 公开接口 ─────────────────────────────────────────────────────────────
 
+    public IntPtr Hwnd { get; private set; }
+
     public bool Start(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return false;
+        Hwnd = hwnd;
 
         var interop = GraphicsCaptureItemInteropFactory();
         Guid itemGuid = typeof(GraphicsCaptureItem).GUID;

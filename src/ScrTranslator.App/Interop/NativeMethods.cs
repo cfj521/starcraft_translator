@@ -23,4 +23,17 @@ internal static class NativeMethods
         int newStyle = WindowStyles.ApplyClickThrough(exStyle);
         SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(newStyle));
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    /// <summary>窗口在屏幕的物理像素矩形；失败返回 Empty。</summary>
+    public static System.Drawing.Rectangle GetWindowScreenRect(IntPtr hwnd)
+        => GetWindowRect(hwnd, out RECT r)
+            ? System.Drawing.Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom)
+            : System.Drawing.Rectangle.Empty;
 }
