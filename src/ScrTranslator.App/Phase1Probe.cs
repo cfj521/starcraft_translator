@@ -39,7 +39,7 @@ public sealed class Phase1Probe : IDisposable
     {
         _capture.Stop();
         _log.Log("[probe] 已停止");
-        _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+        _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
     }
 
     private async void OnFrame(SKBitmap frame)
@@ -55,9 +55,9 @@ public sealed class Phase1Probe : IDisposable
         {
             var frameSize = new Size(frame.Width, frame.Height);
             var winRect = NativeMethods.GetWindowScreenRect(_capture.Hwnd);
-            if (winRect.IsEmpty)
+            if (winRect.IsEmpty || winRect.Width <= 0 || winRect.Height <= 0 || winRect.Left <= -30000 || winRect.Top <= -30000)
             {
-                _log.Log("[probe] 获取窗口矩形失败，跳过本帧上屏");
+                _log.Log("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
             var items = new List<OverlayItem>();
@@ -86,7 +86,7 @@ public sealed class Phase1Probe : IDisposable
                     _log.Log($"[{roi.Name}] (空)");
             }
             _log.Log($"[probe] 上屏 {items.Count} 行");
-            _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
+            _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
         }
         catch (Exception ex) { _log.Log($"[probe] 异常: {ex.Message}"); }
         finally { frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }
