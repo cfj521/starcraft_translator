@@ -9,16 +9,6 @@
         ShowInTaskbar="False"
         ResizeMode="NoResize"
         WindowStartupLocation="Manual"
-        Width="600" Height="80"
-        Left="400" Top="40">
-    <Grid>
-        <TextBlock Text="星际翻译 测试 가나다"
-                   FontSize="36" FontWeight="Bold"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                   Foreground="White">
-            <TextBlock.Effect>
-                <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="1"/>
-            </TextBlock.Effect>
-        </TextBlock>
-    </Grid>
+        Left="0" Top="0">
+    <Canvas x:Name="RootCanvas"/>
 </Window>
