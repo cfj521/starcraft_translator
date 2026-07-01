@@ -45,6 +45,7 @@ public sealed class Glossary
     {
         chinese = "";
         if (string.IsNullOrWhiteSpace(koreanLine)) return false;
-        return _map.TryGetValue(koreanLine.Trim(), out chinese!);
+        if (_map.TryGetValue(koreanLine.Trim(), out var v)) { chinese = v; return true; }
+        return false; // 保证未命中时 chinese 为 ""（TryGetValue 会把 out 置 null）
     }
 }

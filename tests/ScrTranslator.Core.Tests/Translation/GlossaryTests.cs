@@ -11,5 +11,6 @@ public class GlossaryTests
     [Fact] public void Zh_TakesFirstSlashSegment() { Assert.True(Load().TryGet("러시", out var zh)); Assert.Equal("速攻", zh); }
     [Fact] public void Miss_ReturnsFalse() { Assert.False(Load().TryGet("없음", out _)); }
     [Fact] public void Miss_Empty() { Assert.False(Load().TryGet("", out _)); }
+    [Fact] public void Miss_ChineseIsEmptyNotNull() { Load().TryGet("없음", out var zh); Assert.Equal("", zh); }
     [Fact] public void MissingFile_EmptyGlossary() { Assert.Equal(0, Glossary.LoadFromMarkdown("nope.md").Count); }
 }
