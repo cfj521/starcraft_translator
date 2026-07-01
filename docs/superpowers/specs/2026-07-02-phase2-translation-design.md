@@ -26,7 +26,7 @@
 - `ITranslationProvider` — 翻译提供方接口。
 - `TranslationService` — 编排：术语表 → 缓存 → 活跃 provider；批量；写回缓存。
 - `TranslationCache` — 有界 LRU，键=规整后韩文，值=中文。
-- `Glossary` — 从 `docs/GLOSSARY.md` 解析术语，精确命中直出。
+- `Glossary` — 从 `docs/GLOSSARY.md` 解析术语，精确命中直出。**格式**：md 表格 `| 韩文 | 中文 | 备注 |`（第 3 列为上下文备注）；韩文/中文单元格可含 ` / ` 分隔的多写法（如 `인구수 / 인구`），韩文侧每个写法都注册为独立键、中文取该单元格首选项（第一个 ` / ` 段）。解析器只认表格行、跳过表头/分隔行/非表格文本。**注**：术语多为单词级黑话，整行精确命中对完整房间名基本不会命中——这符合设计（长句交给 provider），glossary 只截黑话短词，不期望覆盖长句。
 - `ITokenSource` — 抽象"取一个有效的 ChatGPT access token + accountId"，App 侧实现（含刷新/持久化）。
 - `TranslationSettings` — 活跃引擎、各引擎模型、超时秒数等（**非密钥**，可明文）。
 - `Providers/OpenAiCompatibleChatClient` — POST `/chat/completions`，任意 OpenAI 兼容端点（DashScope 用）。
@@ -71,14 +71,14 @@ public interface ITranslationProvider
 
 ### DashScope（`OpenAiCompatibleChatClient`）
 - `POST {baseUrl}/chat/completions`，`Authorization: Bearer {apiKey}`。
-- baseUrl `https://dashscope.aliyuncs.com/compatible-mode/v1`，默认 model `qwen3.6-flash`。
+- baseUrl `https://dashscope.aliyuncs.com/compatible-mode/v1`，默认 model **待核实**（参考项目配置写 `qwen3.6-flash`，但 DashScope 兼容模式官方常见为 `qwen-flash`/`qwen-plus`/`qwen-turbo`；实现前按官方模型表确认，错 id 会首调 4xx）。
 - body：`{ "model", "messages":[{system},{user}], "stream": false }`。
 - 解析 `choices[0].message.content`。
 
 ### ChatGPT 订阅（`CodexResponsesClient`）
 - `POST https://chatgpt.com/backend-api/codex/responses`。
 - 头：`Authorization: Bearer {accessToken}`、`ChatGPT-Account-ID: {accountId}`、`originator: codex_cli_rs`。
-- body：`{ "model", "instructions": {system}, "input":[{"role":"user","content":[{"type":"input_text","text":{user}}]}], "stream": true, "store": false }`。默认 model `gpt-5`。
+- body：`{ "model", "instructions": {system}, "input":[{"role":"user","content":[{"type":"input_text","text":{user}}]}], "stream": true, "store": false }`。默认 model **待确认**（`gpt-5` / `gpt-5-codex`；参考项目默认 `gpt-4o`。codex responses 端点接受的 id 在实现期显式确认一次，避免反复试）。
 - **必须流式**：读 SSE，累积 `event: response.output_text.delta` 的 `delta`，遇 `response.completed` 或 `[DONE]` 结束。非流式会被拒。
 - token 由 `ITokenSource.GetAsync(ct)`（返回 accessToken+accountId），App 侧临期刷新。
 
@@ -92,7 +92,7 @@ public interface ITranslationProvider
 ### OpenAiOAuth（实现 ITokenSource，复刻参考项目）
 - 常量同参考：`CLIENT_ID=app_EMoamEEZ73f0CkXaXp7hrann`、`AUTH_BASE=https://auth.openai.com`、`REDIRECT_URI=http://localhost:1455/auth/callback`、`SCOPE=openid profile email offline_access`、`ORIGINATOR=codex_cli_rs`。
 - 登录：`gen_pkce`(S256) → 浏览器打开 authorize URL（空格编码 `%20`）→ **本地 1455 监听**用 `TcpListener`（127.0.0.1 + 尽量兼顾 ::1）手解单个 GET 取 `code`/`state`，避开 `HttpListener` 的 URL ACL；→ `exchange_code`(POST `/oauth/token`, grant=authorization_code) → 存 tokens。
-- `GetValidAccessToken`：解 access_token JWT 的 `exp`/`chatgpt_account_id`/`plan_type`/`email`（不验签，仅本地读）；距过期 <5min 用 `refresh_token`（grant=refresh_token）刷新并回写 SecretStore；无 refresh_token → 抛"未登录"。
+- `GetValidAccessToken`：解 access_token JWT 的 `exp`/`chatgpt_account_id`/`plan_type`/`email`（不验签，仅本地读）；距过期 <5min 用 `refresh_token`（POST `/oauth/token`, `grant_type=refresh_token` + `client_id` + `refresh_token` + **`scope=SCOPE`**，scope 必带否则可能刷新失败）刷新并回写 SecretStore；无 refresh_token → 抛"未登录"。
 - 线程安全：刷新加锁，锁内重读避免重复刷新。
 
 ### 托盘菜单（最小配置入口，非完整配置窗口）
