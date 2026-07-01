@@ -10,4 +10,6 @@ public class BatchProtocolTests
     { Assert.Null(BatchProtocol.Parse("[1] 甲", 2)); }
     [Fact] public void Parse_MissingIndex_Null()
     { Assert.Null(BatchProtocol.Parse("[1] 甲\n[3] 丙", 2)); }
+    [Fact] public void Parse_DuplicateIndex_Null()
+    { Assert.Null(BatchProtocol.Parse("[1] 甲\n[2] 乙\n[1] 甲2", 2)); }
 }

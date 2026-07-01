@@ -25,7 +25,8 @@ public sealed class TranslationService
             {
                 var zh = j < translated.Count ? translated[j] : missText[j];
                 result[missIdx[j]] = zh;
-                if (!ReferenceEquals(zh, missText[j]) && zh != missText[j]) _cache.Set(missText[j], zh);
+                // 仅跳过降级回原文(引用相等)的情况；合法译文即使与原文文本相同也缓存，避免反复请求
+                if (!ReferenceEquals(zh, missText[j])) _cache.Set(missText[j], zh);
             }
         }
         return result;

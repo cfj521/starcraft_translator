@@ -32,4 +32,24 @@ public class ProvidersTests
         var r = await new DashScopeProvider(client, () => "m").TranslateAsync(Array.Empty<string>(), CancellationToken.None);
         Assert.Empty(r);
     }
+
+    private sealed class FakeTokens : ITokenSource
+    {
+        public Task<(string accessToken, string accountId)> GetAsync(CancellationToken ct)
+            => Task.FromResult(("TOK", "ACC"));
+    }
+
+    [Fact]
+    public async Task ChatGpt_TranslatesBatch_ViaTokenSourceAndSse()
+    {
+        var sse = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"[1] 甲\\n[2] 乙\"}\n\n" +
+                  "data: [DONE]\n\n";
+        var stub = new StubHttpMessageHandler(sse);
+        var client = new CodexResponsesClient(new HttpClient(stub));
+        var p = new ChatGptSubscriptionProvider(client, new FakeTokens(), () => "gpt-5");
+        var r = await p.TranslateAsync(new[] { "가", "나" }, CancellationToken.None);
+        Assert.Equal(new[] { "甲", "乙" }, r);
+        Assert.Equal("chatgpt", p.Name);
+        Assert.Equal("Bearer TOK", stub.LastRequest!.Headers.Authorization!.ToString());
+    }
 }

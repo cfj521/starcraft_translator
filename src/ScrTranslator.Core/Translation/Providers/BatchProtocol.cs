@@ -24,7 +24,11 @@ public static class BatchProtocol
         {
             var m = Row.Match(raw.TrimEnd('\r'));
             if (!m.Success) continue;
-            if (int.TryParse(m.Groups[1].Value, out var idx)) found[idx] = m.Groups[2].Value.Trim();
+            if (int.TryParse(m.Groups[1].Value, out var idx))
+            {
+                if (found.ContainsKey(idx)) return null; // 序号重复 → 整批降级回原文
+                found[idx] = m.Groups[2].Value.Trim();
+            }
         }
         if (found.Count != expected) return null;
         var res = new string[expected];
