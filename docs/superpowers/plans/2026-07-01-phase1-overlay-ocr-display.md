@@ -327,6 +327,11 @@ public sealed class Phase1Probe : IDisposable
         {
             var frameSize = new Size(frame.Width, frame.Height);
             var winRect = NativeMethods.GetWindowScreenRect(_capture.Hwnd);
+            if (winRect.IsEmpty)
+            {
+                _log.Log("[probe] 获取窗口矩形失败，跳过本帧上屏");
+                return; // finally 仍会 Dispose(frame) 并复位 _busy
+            }
             var items = new List<OverlayItem>();
             var bucket = RoiStore.SelectBucket(_cfg, Scene, frame.Width, frame.Height);
             foreach (var roi in bucket.Rois)
