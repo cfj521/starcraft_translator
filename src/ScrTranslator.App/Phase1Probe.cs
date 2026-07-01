@@ -4,6 +4,7 @@ using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
 using ScrTranslator.Core;
 using ScrTranslator.Core.Ocr;
+using ScrTranslator.Core.Translation;
 using SkiaSharp;
 using Windows.Graphics.Capture;
 
@@ -16,14 +17,19 @@ public sealed class Phase1Probe : IDisposable
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
     private readonly RoiConfig _cfg;
+    private readonly TranslationService _translator;
+    private readonly SettingsHolder _settings;
     private const string Scene = "custom_games_listing";
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
+    private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
 
-    public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay, string roisJsonPath)
+    public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay,
+        string roisJsonPath, TranslationService translator, SettingsHolder settings)
     {
         _capture = capture; _ocr = ocr; _log = log; _overlay = overlay;
         _cfg = RoiStore.Load(roisJsonPath);
+        _translator = translator; _settings = settings;
         _capture.FrameArrived += OnFrame;
     }
 
@@ -51,6 +57,7 @@ public sealed class Phase1Probe : IDisposable
     public void Stop()
     {
         _capture.Stop();
+        _lastJoined = ""; // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
         _log.Log("[probe] 已停止");
         _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
     }
@@ -73,8 +80,9 @@ public sealed class Phase1Probe : IDisposable
                 _log.Log("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
-            var items = new List<OverlayItem>();
             var bucket = RoiStore.SelectBucket(_cfg, Scene, frame.Width, frame.Height);
+            var koLines = new List<string>();
+            var metas = new List<(RectangleF frameBounds, string roiName)>();
             foreach (var roi in bucket.Rois)
             {
                 Rectangle px = RoiStore.ToPixels(roi.Rect, frame.Width, frame.Height);
@@ -92,11 +100,32 @@ public sealed class Phase1Probe : IDisposable
                     var frameBounds = new RectangleF(
                         line.Bounds.X + px.Left, line.Bounds.Y + px.Top,
                         line.Bounds.Width, line.Bounds.Height);
-                    var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
-                    items.Add(new OverlayItem(line.Text, scr.X, scr.Y));
+                    koLines.Add(line.Text);
+                    metas.Add((frameBounds, roi.Name));
                 }
                 if (res.Lines.Count == 0)
                     _log.Log($"[{roi.Name}] (空)");
+            }
+
+            // 变化检测：本帧全部 ROI 韩文与上一帧完全相同则跳过翻译与上屏（省 API 费用，减少闪烁）。
+            var joined = string.Join("\n", koLines);
+            if (joined == _lastJoined) return; // finally 仍会 Dispose(frame) 并复位 _busy
+            _lastJoined = joined;
+
+            var engine = _settings.Current.Active;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var zh = koLines.Count > 0
+                ? await _translator.TranslateAsync(koLines, CancellationToken.None)
+                : Array.Empty<string>();
+            sw.Stop();
+
+            var items = new List<OverlayItem>();
+            for (int k = 0; k < koLines.Count; k++)
+            {
+                var (frameBounds, roiName) = metas[k];
+                var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
+                items.Add(new OverlayItem(zh[k], scr.X, scr.Y));
+                _log.Log($"[{roiName}][{k}] \"{koLines[k]}\" -> \"{zh[k]}\" engine={engine} {sw.ElapsedMilliseconds}ms");
             }
             _log.Log($"[probe] 上屏 {items.Count} 行");
             _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));

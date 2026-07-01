@@ -3,16 +3,28 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using H.NotifyIcon;
+using ScrTranslator.App.Auth;
+using ScrTranslator.App.Secrets;
+using ScrTranslator.Core.Translation;
 
 namespace ScrTranslator.App.Services;
 
-/// <summary>系统托盘图标：显隐悬浮窗、退出。</summary>
+/// <summary>系统托盘图标：显隐悬浮窗、开关探测、登录 ChatGPT/填 DashScope Key/选翻译引擎、退出。</summary>
 public sealed class TrayService : IDisposable
 {
     private readonly OverlayWindow _overlay;
+    private readonly OpenAiOAuth _oauth;
+    private readonly SettingsHolder _settings;
+    private readonly SecretStore _store;
     private TaskbarIcon? _trayIcon;
+    private MenuItem? _loginItem;
+    private MenuItem? _engineDashScopeItem;
+    private MenuItem? _engineChatGptItem;
 
-    public TrayService(OverlayWindow overlay) => _overlay = overlay;
+    public TrayService(OverlayWindow overlay, OpenAiOAuth oauth, SettingsHolder settings, SecretStore store)
+    {
+        _overlay = overlay; _oauth = oauth; _settings = settings; _store = store;
+    }
 
     public Action? ToggleProbe { get; set; }
 
@@ -24,12 +36,33 @@ public sealed class TrayService : IDisposable
         var probeItem = new MenuItem { Header = "开始/停止 Phase1 探测" };
         probeItem.Click += (_, _) => ToggleProbe?.Invoke();
 
+        _loginItem = new MenuItem { Header = "登录 ChatGPT（订阅）" };
+        _loginItem.Click += async (_, _) => await OnLoginChatGptAsync();
+        RefreshLoginText();
+
+        var keyItem = new MenuItem { Header = "设置阿里云 Key" };
+        keyItem.Click += (_, _) => OnSetDashScopeKey();
+
+        _engineDashScopeItem = new MenuItem { Header = "DashScope（阿里云）", IsCheckable = true };
+        _engineDashScopeItem.Click += (_, _) => SetEngine(TranslationEngine.DashScope);
+        _engineChatGptItem = new MenuItem { Header = "ChatGPT（订阅）", IsCheckable = true };
+        _engineChatGptItem.Click += (_, _) => SetEngine(TranslationEngine.ChatGpt);
+        RefreshEngineChecks();
+
+        var engineMenu = new MenuItem { Header = "翻译引擎" };
+        engineMenu.Items.Add(_engineDashScopeItem);
+        engineMenu.Items.Add(_engineChatGptItem);
+
         var exitItem = new MenuItem { Header = "退出" };
         exitItem.Click += (_, _) => Application.Current.Shutdown();
 
         var menu = new ContextMenu();
         menu.Items.Add(toggleItem);
         menu.Items.Add(probeItem);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(_loginItem);
+        menu.Items.Add(keyItem);
+        menu.Items.Add(engineMenu);
         menu.Items.Add(new Separator());
         menu.Items.Add(exitItem);
 
@@ -44,6 +77,51 @@ public sealed class TrayService : IDisposable
             ContextMenu = menu,
         };
         _trayIcon.ForceCreate();
+    }
+
+    private async System.Threading.Tasks.Task OnLoginChatGptAsync()
+    {
+        if (_loginItem is null) return;
+        _loginItem.IsEnabled = false;
+        try
+        {
+            // 带超时，避免用户中途放弃登录时无限等待浏览器回调。
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
+            await _oauth.LoginAsync(cts.Token);
+        }
+        catch { /* 登录失败/取消：静默，菜单文本仍反映真实登录态 */ }
+        finally
+        {
+            RefreshLoginText();
+            _loginItem.IsEnabled = true;
+        }
+    }
+
+    private void RefreshLoginText()
+    {
+        if (_loginItem is null) return;
+        var (loggedIn, email, plan) = _oauth.Status();
+        _loginItem.Header = loggedIn ? $"已登录: {email}({plan})" : "登录 ChatGPT（订阅）";
+    }
+
+    private void OnSetDashScopeKey()
+    {
+        var win = new DashScopeKeyWindow(_store) { Owner = null };
+        win.ShowDialog();
+    }
+
+    private void SetEngine(TranslationEngine engine)
+    {
+        _settings.Current = _settings.Current with { Active = engine };
+        RefreshEngineChecks();
+    }
+
+    private void RefreshEngineChecks()
+    {
+        if (_engineDashScopeItem is null || _engineChatGptItem is null) return;
+        var active = _settings.Current.Active;
+        _engineDashScopeItem.IsChecked = active == TranslationEngine.DashScope;
+        _engineChatGptItem.IsChecked = active == TranslationEngine.ChatGpt;
     }
 
     private void ToggleOverlay()

@@ -1,11 +1,16 @@
 using System.IO;
+using System.Net.Http;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using ScrTranslator.App.Auth;
 using ScrTranslator.App.Capture;
 using ScrTranslator.App.Logging;
+using ScrTranslator.App.Secrets;
 using ScrTranslator.App.Services;
 using ScrTranslator.Core.Ocr;
+using ScrTranslator.Core.Translation;
+using ScrTranslator.Core.Translation.Providers;
 
 namespace ScrTranslator.App;
 
@@ -39,19 +44,49 @@ public partial class App : Application
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<OverlayWindow>();
-        builder.Services.AddSingleton<TrayService>();
 
         string baseDir = AppContext.BaseDirectory;
         builder.Services.AddSingleton<FileLogger>(_ =>
             new FileLogger(Path.Combine(baseDir, "logs", "phase1-ocr.log")));
         builder.Services.AddSingleton<IOcrEngine>(_ => new PaddleOcrEngine(Path.Combine(baseDir, "models")));
         builder.Services.AddSingleton<CaptureService>();
+
+        // --- 翻译管线 DI（B3）---
+        builder.Services.AddSingleton<SecretStore>();
+        builder.Services.AddSingleton(new HttpClient());
+        builder.Services.AddSingleton<OpenAiOAuth>();
+        builder.Services.AddSingleton<ITokenSource>(sp => sp.GetRequiredService<OpenAiOAuth>());
+        builder.Services.AddSingleton<SettingsHolder>(); // 可变，托盘切引擎改 .Current
+        builder.Services.AddSingleton(_ => Glossary.LoadFromMarkdown(Path.Combine(baseDir, "GLOSSARY.md")));
+        builder.Services.AddSingleton<TranslationCache>();
+        builder.Services.AddSingleton(sp => new OpenAiCompatibleChatClient(
+            sp.GetRequiredService<HttpClient>(),
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            () => sp.GetRequiredService<SecretStore>().Load().DashScopeApiKey));
+        builder.Services.AddSingleton(sp => new CodexResponsesClient(sp.GetRequiredService<HttpClient>()));
+        builder.Services.AddSingleton(sp => new DashScopeProvider(
+            sp.GetRequiredService<OpenAiCompatibleChatClient>(),
+            () => sp.GetRequiredService<SettingsHolder>().Current.DashScopeModel));
+        builder.Services.AddSingleton(sp => new ChatGptSubscriptionProvider(
+            sp.GetRequiredService<CodexResponsesClient>(),
+            sp.GetRequiredService<ITokenSource>(),
+            () => sp.GetRequiredService<SettingsHolder>().Current.ChatGptModel));
+        builder.Services.AddSingleton(sp => new TranslationService(
+            sp.GetRequiredService<Glossary>(),
+            sp.GetRequiredService<TranslationCache>(),
+            () => sp.GetRequiredService<SettingsHolder>().Current.Active == TranslationEngine.DashScope
+                ? (ITranslationProvider)sp.GetRequiredService<DashScopeProvider>()
+                : sp.GetRequiredService<ChatGptSubscriptionProvider>()));
+
+        builder.Services.AddSingleton<TrayService>();
         builder.Services.AddSingleton(sp => new Phase1Probe(
             sp.GetRequiredService<CaptureService>(),
             sp.GetRequiredService<IOcrEngine>(),
             sp.GetRequiredService<FileLogger>(),
             sp.GetRequiredService<OverlayWindow>(),
-            Path.Combine(baseDir, "rois.json")));
+            Path.Combine(baseDir, "rois.json"),
+            sp.GetRequiredService<TranslationService>(),
+            sp.GetRequiredService<SettingsHolder>()));
 
         _host = builder.Build();
 
