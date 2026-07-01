@@ -29,6 +29,8 @@ public sealed class TrayService : IDisposable
     }
 
     public Action? ToggleProbe { get; set; }
+    /// <summary>切引擎/登录成功后触发（用于复位管线变化检测，让静止画面立即重译）。</summary>
+    public Action? OnTranslationStateChanged { get; set; }
 
     public void Initialize()
     {
@@ -92,6 +94,7 @@ public sealed class TrayService : IDisposable
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
             bool ok = await _oauth.LoginAsync(cts.Token);
             _log.Log($"[tray] ChatGPT 登录 {(ok ? "成功" : "失败/未完成")}");
+            if (ok) OnTranslationStateChanged?.Invoke(); // 登录成功后让静止画面立即用登录态重译
             if (!ok)
                 MessageBox.Show("ChatGPT 登录未完成或失败（可能：端口 1455 被占用、超时、网络问题或未在浏览器完成授权）。请重试；详情见 logs/phase1-ocr.log。",
                     "登录失败", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -125,6 +128,7 @@ public sealed class TrayService : IDisposable
     {
         _settings.Current = _settings.Current with { Active = engine };
         RefreshEngineChecks();
+        OnTranslationStateChanged?.Invoke(); // 切引擎后让静止画面立即用新引擎重译
     }
 
     private void RefreshEngineChecks()

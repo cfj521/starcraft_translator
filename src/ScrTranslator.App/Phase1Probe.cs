@@ -54,6 +54,9 @@ public sealed class Phase1Probe : IDisposable
         }
     }
 
+    /// <summary>复位变化检测：切引擎/登录成功后调用，让静止画面也立即用新引擎/新登录态重译上屏。</summary>
+    public void ResetChangeDetection() => _lastJoined = "";
+
     public void Stop()
     {
         _capture.Stop();
@@ -113,9 +116,15 @@ public sealed class Phase1Probe : IDisposable
 
             var engine = _settings.Current.Active;
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var zh = koLines.Count > 0
-                ? await _translator.TranslateAsync(koLines, CancellationToken.None)
-                : Array.Empty<string>();
+            IReadOnlyList<string> zh;
+            if (koLines.Count > 0)
+            {
+                // 超时保护(spec §6)：超时/失败 → TranslationService 降级回原文，避免网络挂起时 overlay 冻结。
+                int timeout = Math.Max(1, _settings.Current.TimeoutSeconds);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+                zh = await _translator.TranslateAsync(koLines, cts.Token);
+            }
+            else zh = Array.Empty<string>();
             sw.Stop();
 
             var items = new List<OverlayItem>();

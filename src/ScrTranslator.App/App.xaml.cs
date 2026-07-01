@@ -108,6 +108,7 @@ public partial class App : Application
             if (overlay.IsVisible) overlay.Hide(); else overlay.Show();
         }
         _trayService.ToggleProbe = ToggleProbe;
+        _trayService.OnTranslationStateChanged = probe.ResetChangeDetection; // 切引擎/登录成功后立即重译静止画面
 
         // 全局热键：F9 开关探测、F10 显隐悬浮窗（游戏有焦点时也生效）
         var log = _host.Services.GetRequiredService<FileLogger>();
