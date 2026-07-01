@@ -59,7 +59,9 @@ public sealed class OpenAiOAuth : ITokenSource
     {
         var (verifier, challenge) = OAuthPkce.GenPkce();
         var state = Guid.NewGuid().ToString("N");
-        using var listener = new TcpListener(IPAddress.Loopback, 1455);
+        // 双栈：TcpListener.Create 绑 IPv6Any 且 DualMode，同时收 IPv4/IPv6。
+        // 必须双栈——RedirectUri 用 localhost，Windows 上常解析为 ::1，单绑 127.0.0.1 会被拒。
+        using var listener = TcpListener.Create(1455);
         try { listener.Start(); } catch { return false; } // 端口占用
         Process.Start(new ProcessStartInfo(OAuthPkce.BuildAuthorizeUrl(challenge, state)) { UseShellExecute = true });
         try

@@ -30,7 +30,8 @@ public sealed class SecretStore
 
     public void Save(SecretData data)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        var dir = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir); // 裸文件名(无目录)时跳过,避免 ArgumentException
         var json = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(data));
         var enc = ProtectedData.Protect(json, null, DataProtectionScope.CurrentUser);
         File.WriteAllBytes(_path, enc);
