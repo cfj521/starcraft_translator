@@ -138,6 +138,13 @@ public class RoiStoreTests
     }
 
     [Fact]
+    public void SelectBucket_SceneMissing_ThrowsInvalidOperationException_NotKeyNotFound()
+    {
+        var cfg = RoiStore.Load(Path.Combine(Path.GetTempPath(), "definitely_missing_" + Guid.NewGuid() + ".json"));
+        Assert.Throws<InvalidOperationException>(() => RoiStore.SelectBucket(cfg, "custom_games_listing", 1920, 1080));
+    }
+
+    [Fact]
     public void Save_WritesAtomically_NoLeftoverTempFile()
     {
         var roi = new Roi("x", "Chat", new RelRect(0, 0, 1, 1));

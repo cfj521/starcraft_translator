@@ -24,12 +24,15 @@ public sealed class Phase1Probe : IDisposable
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
     private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
+    private readonly bool _roiAvailable; // 构造时算一次：Scene 是否存在且 bucket 非空，避免每帧重复判断/抛异常
+    private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
 
     public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay,
         string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary)
     {
         _capture = capture; _ocr = ocr; _log = log; _overlay = overlay;
         _cfg = RoiStore.Load(roisJsonPath);
+        _roiAvailable = _cfg.Scenes.TryGetValue(Scene, out var buckets) && buckets.Count > 0;
         _tiered = tiered; _settings = settings;
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
@@ -78,6 +81,15 @@ public sealed class Phase1Probe : IDisposable
         _lastShot = DateTime.Now;
         try
         {
+            if (!_roiAvailable)
+            {
+                if (!_roiMissingLogged)
+                {
+                    _log.Log("[probe] rois.json 缺失/为空，未加载任何 ROI——请先校准（F8）");
+                    _roiMissingLogged = true;
+                }
+                return; // finally 仍会 Dispose(frame) 并复位 _busy
+            }
             var frameSize = new Size(frame.Width, frame.Height);
             var winRect = NativeMethods.GetWindowScreenRect(_capture.Hwnd);
             if (winRect.IsEmpty || winRect.Width <= 0 || winRect.Height <= 0 || winRect.Left <= -30000 || winRect.Top <= -30000)

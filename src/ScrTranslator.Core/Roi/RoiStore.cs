@@ -21,7 +21,8 @@ public static class RoiStore
 
     public static SceneBucket SelectBucket(RoiConfig cfg, string scene, int width, int height)
     {
-        var buckets = cfg.Scenes[scene];
+        if (!cfg.Scenes.TryGetValue(scene, out var buckets) || buckets.Count == 0)
+            throw new InvalidOperationException($"未找到场景 '{scene}' 的 ROI 配置（rois.json 缺失/损坏/为空——请先校准）");
         string key = $"{width}x{height}";
         foreach (var b in buckets)
             if (b.Resolution == key) return b;
@@ -118,6 +119,14 @@ public static class RoiStore
 
         string tmp = jsonPath + ".tmp" + Guid.NewGuid().ToString("N");
         File.WriteAllText(tmp, json);
-        File.Move(tmp, jsonPath, overwrite: true);
+        try
+        {
+            File.Move(tmp, jsonPath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { /* best-effort 清理，忽略失败 */ }
+            throw;
+        }
     }
 }
