@@ -6,7 +6,7 @@ public class TranslationServiceTests
     {
         public List<string> Requested = new(); public bool Throw;
         public string Name => "fake";
-        public Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> lines, CancellationToken ct)
+        public Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> lines, TranslationContext ctx, CancellationToken ct)
         {
             if (Throw) throw new InvalidOperationException();
             Requested.AddRange(lines);

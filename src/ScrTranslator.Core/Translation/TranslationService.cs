@@ -19,7 +19,7 @@ public sealed class TranslationService
         if (missText.Count > 0)
         {
             IReadOnlyList<string> translated;
-            try { translated = await _active().TranslateAsync(missText, ct); }
+            try { translated = await _active().TranslateAsync(missText, new TranslationContext("custom_games_listing", null), ct); }
             catch { translated = missText; } // 降级回原文
             for (int j = 0; j < missIdx.Count; j++)
             {

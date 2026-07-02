@@ -5,11 +5,11 @@ public sealed class ChatGptSubscriptionProvider : ITranslationProvider
     public ChatGptSubscriptionProvider(CodexResponsesClient client, ITokenSource tokens, Func<string> modelGetter)
     { _client = client; _tokens = tokens; _model = modelGetter; }
     public string Name => "chatgpt";
-    public async Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> lines, CancellationToken ct)
+    public async Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> lines, TranslationContext ctx, CancellationToken ct)
     {
         if (lines.Count == 0) return Array.Empty<string>();
         var (token, account) = await _tokens.GetAsync(ct);
-        var reply = await _client.CompleteAsync(_model(), BatchProtocol.SystemPrompt, BatchProtocol.BuildUser(lines), token, account, ct);
+        var reply = await _client.CompleteAsync(_model(), PromptBuilder.BuildSystemPrompt(ctx), BatchProtocol.BuildUser(lines), token, account, ct);
         return BatchProtocol.Parse(reply, lines.Count) ?? lines;
     }
 }
