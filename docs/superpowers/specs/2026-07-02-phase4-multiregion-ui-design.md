@@ -33,7 +33,9 @@
 
 ## 2. 范围分解（4 个子模块，M1 为基座）
 
-Phase 4 体量大，拆 4 个子模块，**M1 数据基座**是唯一重 Core/可单测部分，且是其余三者的地基；M2/M3/M4 为 WPF，彼此基本独立，均依赖 M1。**实现顺序：M1 →（M2 ∥ M3 ∥ M4）**。
+Phase 4 体量大，拆 4 个子模块，**M1 数据基座**是唯一重 Core/可单测部分，且是其余三者的地基；M2/M3/M4 为 WPF，均依赖 M1。**实现顺序建议：M1 →（M3、M4）→ M2**。注：M2/M3/M4 并非完全独立——**M2 的"区域"页有"进入校准"按钮会打开 M3 的 `CalibrationWindow`**（M2→M3 依赖）。故若先做 M2，该按钮先 stub/置灰，待 M3 落地再接；或按上面顺序先出 M3。plan 需显式处理此依赖，不可假设 M2 能脱离 M3 完整实现。
+
+**M1 内部可再分两批**（供 plan 排期，二者较解耦）：**M1a** = ROI v2（列定义）+ `rois.json` v2 解析/`Save` + 内容范围门控（`TranslationScope`/`HitColumn`）；**M1b** = `AppSettings`/`SettingsStore`/`HotkeyDefaults`/`HotkeyConflict` + 各调用点适配（`Current.Translation.*`）+ 启动加载接线。
 
 - **M1 数据基座（Core 为主，TDD）**：ROI 模型 v2（RoomList 列定义 + 逐列翻译标志）+ `rois.json` schema v2 + 旧格式兼容；`AppSettings` 模型 + `settings.json` 持久化（非密钥）+ 热键绑定持久化；**内容范围翻译门控**（按 ROI 类型/列决定哪些行翻、ID 列取 `TranslatePlayerId`）；`Phase1Probe` 接入门控（多 ROI 遍历）。
 - **M2 配置窗口（WPF）**：六页多标签 + 关于；绑定 `AppSettings`；应用/确定/取消；托盘双击 + `Ctrl+F9` 打开。密钥/登录复用现有入口。
@@ -58,6 +60,7 @@ public record Roi(string Name, string Type, RelRect Rect,
     IReadOnlyList<RoiColumn>? Columns = null);           // 仅 RoomList 用；其它类型为 null
 ```
 - `Type` 仍存字符串（兼容旧 `rois.json`）；解析时映射到 `RoiType`，未知串按 `Chat` 兜底并记日志。
+- **`kind` 同理兜底**：`columns[].kind` 字符串映射到 `ColumnKind`，**未知串按 `Other` 兜底并记日志**（`Other` 不翻，最安全——不会误把未知列当内容/ID 列翻）。
 - `Columns` 为可选：旧 `rois.json`（无 columns 字段）读出来 `Columns=null` → 视为"整块翻译，无列语义"（等同 Phase 2 现状）。
 - **列翻译标志不单列布尔**：`ColumnKind` 决定——`RoomName`/`MapName` 属"内容列"（按对应内容范围开关翻），`PlayerId` 属 ID 列（按 `TranslatePlayerId`），`Other` 不翻。这样"ID 列是否翻译"= `TranslatePlayerId`，与 UI_DESIGN §3.4 联动一致，无需在 ROI 里再存布尔。
 
@@ -105,9 +108,10 @@ public sealed record AppSettings
 - `GeneralSettings`：`string TargetProcess="StarCraft"`、`bool AutoStart=false`、`bool StartMinimized=true`、`bool AutoTranslateOnLaunch=false`。
 - `OcrSettings`：`int ChatPollMs=300`、`int OtherPollMs=800`、`bool Upscale=true`、`bool Grayscale=true`、`bool Binarize=false`、`int ChangeSensitivity=5`（0..10）。
 - `AppearanceSettings`：`string FontFamily="Microsoft YaHei"`、`int FontSize=18`、`double Opacity=0.8`、`bool ShowOriginalAndTranslation=false`。
-- `HotkeyBinding(uint Modifiers, uint Vk)`；`HotkeyDefaults.Map` = 六功能默认（见 §6）。
+- `HotkeyBinding(uint Modifiers, uint Vk)`；`HotkeyDefaults.Map` = 六功能默认（见 §6）。**VK/MOD 常量单一来源**：现 `VK_F7..F11`/`MOD_*` 在 App 的 `HotkeyService`；随 `HotkeyBinding`/`HotkeyDefaults` 一起**移到 Core**（纯数值常量，App 侧引用 Core），避免两份 Win32 魔数各自漂移。
 - **持久化**：`SettingsStore`（Core 无 UI；用 `System.Text.Json`）读写 `%AppData%/ScrTranslator/settings.json`；**只存非密钥**（密钥仍 SecretStore/DPAPI）。文件缺失/损坏 → 返回 `AppSettings` 默认（不崩）。往返测试保证 round-trip 稳定。
 - `SettingsHolder` 升级为持有 `AppSettings`（`Current`），保留其"运行时可变"语义；托盘/配置窗改 `Current` 后调 `SettingsStore.Save` + 触发 `OnTranslationStateChanged`（复位变化检测，已实现）。
+- **启动加载（关键，防 Save-without-Load）**：`App.xaml.cs` 组合根在构造/注册 `SettingsHolder` 时**必须**调 `SettingsStore.Load()` 作为初始 `Current`（缺文件即默认）。否则会出现"写了 settings.json 却从不读回、每次重启静默复位"——M1 的 `SettingsStore` 往返单测覆盖不到这条 App 接线，须在 §9 交付物显式落地。
 
 > **兼容**：`SettingsHolder.Current` 现返回 `TranslationSettings`；升级为 `AppSettings` 会改动 Phase 2/3 已接线处（`TrayService`/`Phase1Probe`/`App.xaml.cs` 用 `Current.Xxx`）。M1 一并改为 `Current.Translation.Xxx`，保持行为等价（**回归验收项 6**）。
 
@@ -156,7 +160,7 @@ public sealed record AppSettings
 ## 7. 测试策略
 
 **M1 Core 单测（无 UI，TDD）**：
-- ROI v2 解析：旧 `rois.json`（无 columns）→ `Columns=null`；v2（有 columns）→ 正确 `RoiColumn` 列表；未知 type 兜底 Chat；`RoiStore.Save` 往返（含 columns）稳定。
+- ROI v2 解析：旧 `rois.json`（无 columns）→ `Columns=null`；v2（有 columns）→ 正确 `RoiColumn` 列表；未知 type 兜底 Chat；**未知 kind 兜底 Other（且不翻）**；`RoiStore.Save` 往返（含 columns）稳定。
 - `TranslationScope.ShouldTranslate`：Chat/MapInfo 型取对应开关；RoomList 各 `ColumnKind` 分别取 RoomName/MapInfo/PlayerId 开关、Other→false；RoomList 无列→按 RoomName；`TranslatePlayerId` 默认 false 时 PlayerId 列不翻、置 true 后翻。
 - `HitColumn`：命中区间、边界(`[start,end)`)、无列→null、未命中→null。
 - `SettingsStore` 往返：默认值 round-trip；缺文件→默认；损坏 JSON→默认不崩；只含非密钥（断言序列化不含任何 key 字段）。
@@ -172,7 +176,7 @@ public sealed record AppSettings
 
 ## 9. 交付物清单（实现期，本次仅 spec+plan）
 
-**M1 Core**：`RoiType`/`ColumnKind`/`RoiColumn`/`Roi`(+Columns)、`RoiStore`(v2 解析+`Save`)、`TranslationScope`/`HitColumn`/`ContentScopeSettings`、`AppSettings`/`GeneralSettings`/`OcrSettings`/`AppearanceSettings`/`HotkeyBinding`/`HotkeyDefaults`、`SettingsStore`、`HotkeyConflict`、`TranslationSettings`(+4 内容范围字段)、`SettingsHolder`(持 `AppSettings`) + 单测；`Phase1Probe`/`TrayService`/`App.xaml.cs` 适配 `Current.Translation.*`。
+**M1 Core**：`RoiType`/`ColumnKind`/`RoiColumn`/`Roi`(+Columns)、`RoiStore`(v2 解析+`Save`)、`TranslationScope`/`HitColumn`/`ContentScopeSettings`、`AppSettings`/`GeneralSettings`/`OcrSettings`/`AppearanceSettings`/`HotkeyBinding`/`HotkeyDefaults`、`SettingsStore`、`HotkeyConflict`、`TranslationSettings`(+4 内容范围字段)、`SettingsHolder`(持 `AppSettings`) + 单测；`Phase1Probe`/`TrayService`/`App.xaml.cs` 适配 `Current.Translation.*`；**`App.xaml.cs` 启动调 `SettingsStore.Load()` 填充 `SettingsHolder.Current`**（防 Save-without-Load）。
 **M2 App**：`SettingsWindow`(+6 页 + 关于) + 打开入口接线。
 **M3 App**：`CalibrationWindow` + 拖框/划列/存盘。
 **M4 App**：`HotkeyService` 重构 + `Rebind` + 录制 UI + 新功能动作接线 + 提示。
