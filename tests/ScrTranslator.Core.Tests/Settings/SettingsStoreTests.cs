@@ -17,6 +17,8 @@ public class SettingsStoreTests
         Assert.True(back.Translation.TranslatePlayerId);
         Assert.Equal(250, back.Ocr.ChatPollMs);
         Assert.Equal(6, back.Hotkeys.Count);
+        Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk);
+        Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["OpenConfig"].Modifiers);
     }
 
     [Fact] public void Load_MissingFile_ReturnsDefault()
