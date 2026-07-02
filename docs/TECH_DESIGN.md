@@ -111,7 +111,7 @@
   2. **术语表**：整句或分词命中 GLOSSARY → 直接映射（无网络）。
   3. **缓存**：`MemoryCache<原文, 译文>` 命中 → 直出。
   4. **翻译 provider**（`ITranslationProvider`，OpenAI 订阅 / 阿里云 DashScope 单活跃）批量调用 → 上屏中文。**Phase 2 为单级**（术语/缓存未命中即调当前活跃 provider）。
-  5. **两级编排（Phase 3 目标）**：快态 provider 临时态 → 质量态 provider 最终态原地替换。当前 Phase 2 未做。
+  5. **两级编排（Phase 3 已落地，默认关闭）**：快态 provider（DashScope qwen-flash）临时态 → 质量态 provider（Active 引擎）最终态原地替换；术语经 `PromptBuilder` 注入 system prompt。见 `TieredTranslator`。缓存存最终态；快态永不入缓存。
 - **LLM Prompt 要点**：系统提示设定"星际争霸韩服游戏聊天翻译"角色；附术语表；要求口语化、简短、保留游戏黑话语气；ID/数字/英文缩写不乱翻。
 - **限流**：LLM 请求合并/节流，避免刷屏时狂发请求。
 

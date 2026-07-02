@@ -36,11 +36,11 @@
 
 ## Phase 3 — LLM 两级翻译 + 术语表 + 缓存 🧠
 **目标**：翻译质量到位。
-- [ ] 两级编排：快态（如 DashScope flash）临时态 → 质量态（OpenAI订阅/qwen-max）最终态原地替换（视觉区分）。**provider 已在 Phase 2 落地（OpenAI订阅+阿里云，非 Claude）**，Phase 3 只加两级编排。
-- [ ] system prompt 注入术语表 + 场景 + 最近上下文（Phase 2 已有基础 system prompt）
+- [x] 两级编排：快态（DashScope qwen-flash）临时态 → 质量态（Active 引擎）最终态原地替换（视觉区分：临时灰斜体/最终白）。默认关闭(opt-in)，托盘可开。
+- [x] system prompt 注入术语表 + 场景（`PromptBuilder`）
 - [x] 加载 `GLOSSARY.md`/数据文件，命中条目直出（Phase 2 已完成）
-- [ ] LLM 节流/合并，防刷屏
-- [ ] Core 层单测：术语表、缓存、ID 列过滤、prompt 组装
+- [x] LLM 节流/合并，防刷屏（复用变化检测+单飞+缓存存最终态；两级不加压）
+- [x] Core 层单测：编排(单/两级)、prompt 组装、术语枚举、ctx 注入
 
 **验收**：常见黑话(`ㅋㅋ`、`gg`、`러시`、`앞마당` 等)翻译准确；普通句子通顺；临时态→最终态可见替换。
 
