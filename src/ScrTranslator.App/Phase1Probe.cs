@@ -118,6 +118,8 @@ public sealed class Phase1Probe : IDisposable
 
             var engine = _settings.Current.Active;
             var ctx = new TranslationContext(Scene, _glossaryHint);
+            // 两级共用这一个超时预算(非每级各一份)：快态+质量态合计不超过 TimeoutSeconds。
+            // 快态本就很快,故实际质量态仍有充裕时间；超时被 TieredTranslator 视作降级并回落,不会卡死取帧。
             int timeout = Math.Max(1, _settings.Current.TimeoutSeconds);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
 

@@ -8,6 +8,9 @@ public sealed record TranslateOutcome(bool AllResolved);
 /// 两级/单级翻译编排。术语/缓存命中直出(Direct)；未命中行——两级时先快态(Provisional,不缓存)
 /// 再质量态(Final,缓存);单级时仅质量态(Final)。onStage 回调携带全量快照,调用方负责 marshal UI。
 /// "引用相等 == 降级"贯穿:凡回落传入引用的行一律不缓存。
+/// 注:只要本次调用有 miss 行(进入翻译轮次),终态快照会把**全部**行(含本轮 Direct 命中行)
+/// 统一标为 Final——整批一起"定稿"上屏；Direct 仅出现在全命中早退路径与两级临时态快照里。
+/// (Direct 与 Final 渲染无差别,只有 Provisional 会被降样式,故此重标视觉上是 no-op。)
 /// </summary>
 public sealed class TieredTranslator
 {

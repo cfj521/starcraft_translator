@@ -171,7 +171,7 @@ public static class PromptBuilder
 | 单级(TwoLevel=false) | 完全等同 Phase 2：一次质量态请求，失败回原文 |
 | 术语表/缓存命中 | 不走网络，`Direct` Final 直出（两级也无临时态闪烁） |
 
-超时：快态、质量态各自受同一 `TimeoutSeconds`（默认 10s）的 `CancellationToken` 约束（两级最坏 ~2×TimeoutSeconds，但实际快态远快；可接受，Phase 5 再调）。
+超时（**实现采共用预算，非每级各一份**）：调用方(`Phase1Probe`)对整次 `TranslateAsync` 建**一个** `CancellationTokenSource(TimeoutSeconds)`（默认 10s），快态+质量态**合计**受此单一预算约束（总上界 = 1×TimeoutSeconds，而非 2×）。快态本就很快，质量态仍有充裕时间；超时被 `TieredTranslator` 视作降级并回落(§3.2)，不会卡死取帧。此语义比"每级各 1×(最坏 2×)"更保守、更利于实时性；如未来需要给质量态独立预算，再在调用方拆分。
 
 ## 7. 测试策略
 
