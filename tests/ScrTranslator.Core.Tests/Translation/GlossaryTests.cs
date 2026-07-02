@@ -13,4 +13,14 @@ public class GlossaryTests
     [Fact] public void Miss_Empty() { Assert.False(Load().TryGet("", out _)); }
     [Fact] public void Miss_ChineseIsEmptyNotNull() { Load().TryGet("없음", out var zh); Assert.Equal("", zh); }
     [Fact] public void MissingFile_EmptyGlossary() { Assert.Equal(0, Glossary.LoadFromMarkdown("nope.md").Count); }
+    [Fact] public void Entries_ExposesDedupedPairs()
+    {
+        var g = Load();
+        Assert.Contains(g.Entries, kv => kv.Key == "저그" && kv.Value == "虫族");
+        Assert.Equal(g.Count, g.Entries.Count);
+    }
+    [Fact] public void Entries_EmptyGlossary_IsEmpty()
+    {
+        Assert.Empty(Glossary.LoadFromMarkdown("nope.md").Entries);
+    }
 }

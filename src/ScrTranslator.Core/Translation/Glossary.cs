@@ -5,6 +5,7 @@ public sealed class Glossary
     private readonly Dictionary<string, string> _map;
     private Glossary(Dictionary<string, string> map) => _map = map;
     public int Count => _map.Count;
+    public IReadOnlyCollection<KeyValuePair<string, string>> Entries => _map;
 
     public static Glossary FromEntries(IEnumerable<(string ko, string zh)> entries)
     {
