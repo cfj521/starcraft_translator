@@ -67,4 +67,56 @@ public class RoiStoreTests
         };
         return new RoiConfig(scenes);
     }
+
+    [Fact]
+    public void Load_OldRois_NoColumns_ColumnsNull()
+    {
+        // 复用现有 assets/rois 或写临时旧格式(无 columns)
+        var json = "{\"scenes\":{\"s\":{\"buckets\":[{\"resolution\":\"1920x1080\",\"rois\":[" +
+                   "{\"name\":\"房间\",\"type\":\"RoomList\",\"rect\":[0.1,0.2,0.3,0.4]}]}]}}}";
+        var path = Path.GetTempFileName(); File.WriteAllText(path, json);
+        var cfg = RoiStore.Load(path);
+        var roi = cfg.Scenes["s"][0].Rois[0];
+        Assert.Null(roi.Columns);
+        Assert.Equal("RoomList", roi.Type);
+    }
+
+    [Fact]
+    public void Load_V2_ParsesColumns()
+    {
+        var json = "{\"scenes\":{\"s\":{\"buckets\":[{\"resolution\":\"1920x1080\",\"rois\":[" +
+                   "{\"name\":\"房间\",\"type\":\"RoomList\",\"rect\":[0.1,0.2,0.3,0.4]," +
+                   "\"columns\":[{\"start\":0.0,\"end\":0.3,\"kind\":\"PlayerId\"}," +
+                   "{\"start\":0.3,\"end\":1.0,\"kind\":\"RoomName\"}]}]}]}}}";
+        var path = Path.GetTempFileName(); File.WriteAllText(path, json);
+        var roi = RoiStore.Load(path).Scenes["s"][0].Rois[0];
+        Assert.NotNull(roi.Columns);
+        Assert.Equal(2, roi.Columns!.Count);
+        Assert.Equal(ColumnKind.PlayerId, roi.Columns[0].Kind);
+        Assert.Equal(0.3, roi.Columns[1].RelStart);
+    }
+
+    [Fact]
+    public void RoiTypes_UnknownType_FallsBackChat()
+        => Assert.Equal(RoiType.Chat, RoiTypes.Parse("nonsense"));
+
+    [Fact]
+    public void ColumnKinds_UnknownKind_FallsBackOther()
+        => Assert.Equal(ColumnKind.Other, ColumnKinds.Parse("nonsense"));
+
+    [Fact]
+    public void Save_Then_Load_RoundTrips_WithColumns()
+    {
+        var roi = new Roi("房间", "RoomList", new RelRect(0.1, 0.2, 0.3, 0.4),
+            new[] { new RoiColumn(0.0, 0.3, ColumnKind.PlayerId), new RoiColumn(0.3, 1.0, ColumnKind.RoomName) });
+        var cfg = new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>
+            { ["s"] = new[] { new SceneBucket("1920x1080", new[] { roi }) } });
+        var path = Path.GetTempFileName();
+        RoiStore.Save(cfg, path);
+        var back = RoiStore.Load(path).Scenes["s"][0].Rois[0];
+        Assert.Equal("RoomList", back.Type);
+        Assert.Equal(2, back.Columns!.Count);
+        Assert.Equal(ColumnKind.RoomName, back.Columns[1].Kind);
+        Assert.Equal(1.0, back.Columns[1].RelEnd);
+    }
 }

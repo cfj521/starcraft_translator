@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Linq;
 using System.Text.Json;
 
 namespace ScrTranslator.Core;
@@ -57,15 +58,48 @@ public static class RoiStore
                     var r = roiEl.GetProperty("rect");
                     var rect = new RelRect(
                         r[0].GetDouble(), r[1].GetDouble(), r[2].GetDouble(), r[3].GetDouble());
+                    IReadOnlyList<RoiColumn>? columns = null;
+                    if (roiEl.TryGetProperty("columns", out var colsEl) && colsEl.ValueKind == JsonValueKind.Array)
+                    {
+                        var list = new List<RoiColumn>();
+                        foreach (var c in colsEl.EnumerateArray())
+                            list.Add(new RoiColumn(
+                                c.GetProperty("start").GetDouble(),
+                                c.GetProperty("end").GetDouble(),
+                                ColumnKinds.Parse(c.GetProperty("kind").GetString() ?? "Other")));
+                        columns = list;
+                    }
                     rois.Add(new Roi(
                         roiEl.GetProperty("name").GetString()!,
                         roiEl.GetProperty("type").GetString()!,
-                        rect));
+                        rect, columns));
                 }
                 bucketList.Add(new SceneBucket(res, rois));
             }
             scenes[sceneProp.Name] = bucketList;
         }
         return new RoiConfig(scenes);
+    }
+
+    public static void Save(RoiConfig cfg, string jsonPath)
+    {
+        var scenes = new Dictionary<string, object>();
+        foreach (var (scene, buckets) in cfg.Scenes)
+        {
+            scenes[scene] = new
+            {
+                buckets = buckets.Select(b => new
+                {
+                    resolution = b.Resolution,
+                    rois = b.Rois.Select(r => r.Columns is null
+                        ? (object)new { name = r.Name, type = r.Type, rect = new[] { r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H } }
+                        : new { name = r.Name, type = r.Type, rect = new[] { r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H },
+                                columns = r.Columns.Select(c => new { start = c.RelStart, end = c.RelEnd, kind = c.Kind.ToString() }) })
+                })
+            };
+        }
+        var root = new { scenes };
+        File.WriteAllText(jsonPath, JsonSerializer.Serialize(root,
+            new JsonSerializerOptions { WriteIndented = true }));
     }
 }
