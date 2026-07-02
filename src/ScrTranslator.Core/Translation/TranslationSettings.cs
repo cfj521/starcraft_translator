@@ -9,5 +9,9 @@ public sealed record TranslationSettings
     public bool TwoLevel { get; init; } = false;
     public TranslationEngine FastEngine { get; init; } = TranslationEngine.DashScope;
     public string FastModel { get; init; } = "qwen-flash";
+    public bool TranslateChat { get; init; } = true;
+    public bool TranslateRoomName { get; init; } = true;
+    public bool TranslateMapInfo { get; init; } = true;
+    public bool TranslatePlayerId { get; init; } = false;
     public static TranslationSettings Default => new();
 }
