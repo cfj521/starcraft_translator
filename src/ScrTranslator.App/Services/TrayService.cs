@@ -193,6 +193,13 @@ public sealed class TrayService : IDisposable
             _overlay.Show();
     }
 
+    /// <summary>M4：热键切换类动作触发后的短提示（如"玩家ID翻译: 开"）。用系统气泡通知，托盘未初始化时静默忽略。</summary>
+    public void ShowToast(string title, string message)
+    {
+        try { _trayIcon?.ShowNotification(title, message); }
+        catch (Exception ex) { _log.Log($"[tray] 显示提示失败: {ex.Message}"); }
+    }
+
     public void Dispose()
     {
         _trayIcon?.Dispose();

@@ -213,16 +213,16 @@
                                     <GridViewColumn Header="操作" Width="100">
                                         <GridViewColumn.CellTemplate>
                                             <DataTemplate>
-                                                <Button Content="修改" IsEnabled="False" Width="70"/>
+                                                <Button Content="修改" Width="70" Tag="{Binding Key}" Click="OnRebindHotkeyClick"/>
                                             </DataTemplate>
                                         </GridViewColumn.CellTemplate>
                                     </GridViewColumn>
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                        <Button x:Name="ResetHotkeysButton" Content="恢复默认热键" Width="120" HorizontalAlignment="Left" Margin="0,10,0,0" IsEnabled="False"/>
+                        <Button x:Name="ResetHotkeysButton" Content="恢复默认热键" Width="120" HorizontalAlignment="Left" Margin="0,10,0,0" Click="OnResetHotkeysClick"/>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,8,0,0"
-                                   Text="点「修改」录制新组合键 / 冲突高亮 / 「恢复默认」——录制交互留待后续版本（M4）实现，本页当前只读展示当前绑定。"/>
+                                   Text="点「修改」后按下新组合键即可录制（Esc 取消）；冲突会提示并放弃，成功则立即生效并保存。"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

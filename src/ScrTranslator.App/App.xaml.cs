@@ -171,7 +171,8 @@ public partial class App : Application
                 oauthForSettings,
                 log,
                 OpenCalibration,
-                probe.ResetChangeDetection);
+                probe.ResetChangeDetection,
+                _hotkeys!); // 此时尚未 new，但 OpenSettings 只会在其后被调用（字段，非局部变量捕获）
             settingsWindow.Closed += (_, _) => settingsWindow = null;
             settingsWindow.Show();
             settingsWindow.Activate();
@@ -179,12 +180,39 @@ public partial class App : Application
         _trayService.OpenSettings = OpenSettings;
         _openSettingsAction = OpenSettings;
 
-        // 全局热键：F9 开关探测、F10 显隐悬浮窗、F8 进入校准（游戏有焦点时也生效）
+        // 玩家 ID 翻译开关（F7）：翻转 Translation.TranslatePlayerId + 落盘 + 复位变化检测 + 短提示。
+        void TogglePlayerId()
+        {
+            var cur = settingsHolder.Current;
+            bool newVal = !cur.Translation.TranslatePlayerId;
+            settingsHolder.Current = cur with { Translation = cur.Translation with { TranslatePlayerId = newVal } };
+            try { SettingsStore.Save(settingsHolder.Current, settingsPath); }
+            catch (Exception ex) { log.Log($"[hotkey] 保存 settings.json 失败: {ex.Message}"); }
+            probe.ResetChangeDetection();
+            _trayService.ShowToast("玩家ID翻译", newVal ? "已开启" : "已关闭");
+        }
+
+        // 暂停/继续（F11）：不与 F9 的开关探测互相干扰，交给 Phase1Probe 内部的处理跳过标记。
+        void TogglePause()
+        {
+            bool nowPaused = probe.TogglePause();
+            _trayService.ShowToast("翻译", nowPaused ? "已暂停" : "已继续");
+        }
+
+        // 全局热键：从 SettingsHolder.Current.Hotkeys 驱动注册全部六功能（游戏有焦点时也生效）。
         _hotkeys = new HotkeyService(overlay);
-        bool f9 = _hotkeys.Register(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9, ToggleProbe);
-        bool f10 = _hotkeys.Register(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10, ToggleOverlay);
-        bool f8 = _hotkeys.Register(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8, OpenCalibration);
-        log.Log($"[hotkey] 注册 F9(开关探测)={f9} F10(显隐悬浮)={f10} F8(进入校准)={f8}");
+        var hotkeyActions = new Dictionary<string, Action>
+        {
+            ["ToggleTranslate"] = ToggleProbe,
+            ["ToggleOverlay"] = ToggleOverlay,
+            ["Calibrate"] = OpenCalibration,
+            ["OpenConfig"] = OpenSettings,
+            ["TogglePlayerId"] = TogglePlayerId,
+            ["TogglePause"] = TogglePause,
+        };
+        var hotkeyResults = _hotkeys.RegisterAll(settingsHolder.Current.Hotkeys, hotkeyActions);
+        foreach (var (func, ok) in hotkeyResults)
+            log.Log($"[hotkey] 注册 {func}={ok}");
     }
 
     protected override void OnExit(ExitEventArgs e)

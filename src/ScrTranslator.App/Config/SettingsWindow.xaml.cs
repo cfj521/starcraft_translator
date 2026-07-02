@@ -1,14 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using ScrTranslator.App.Auth;
 using ScrTranslator.App.Capture;
 using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
 using ScrTranslator.App.Secrets;
+using ScrTranslator.App.Services;
 using ScrTranslator.Core;
 using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
@@ -30,10 +33,14 @@ public partial class SettingsWindow : Window
     private readonly FileLogger _log;
     private readonly Action _openCalibration;
     private readonly Action? _onStateChanged;
+    private readonly HotkeyService _hotkeyService;
 
     private sealed record RoiRow(string Name, string Type, string Position);
     private sealed record ColumnRow(string RoiName, string Range, string Kind);
-    private sealed record HotkeyRow(string Function, string Current);
+    private sealed record HotkeyRow(string Key, string Function, string Current);
+
+    // 录制中的功能名；非 null 表示正在等待下一次按键组合。
+    private string? _recordingFunc;
 
     private static readonly (string Key, string Label)[] HotkeyOrder =
     {
@@ -55,7 +62,8 @@ public partial class SettingsWindow : Window
         OpenAiOAuth oauth,
         FileLogger log,
         Action openCalibration,
-        Action? onStateChanged)
+        Action? onStateChanged,
+        HotkeyService hotkeyService)
     {
         InitializeComponent();
         _holder = holder;
@@ -66,6 +74,7 @@ public partial class SettingsWindow : Window
         _log = log;
         _openCalibration = openCalibration;
         _onStateChanged = onStateChanged;
+        _hotkeyService = hotkeyService;
 
         VersionText.Text = $"版本 {Assembly.GetExecutingAssembly().GetName().Version}";
 
@@ -191,9 +200,12 @@ public partial class SettingsWindow : Window
     {
         var rows = new List<HotkeyRow>();
         foreach (var (key, label) in HotkeyOrder)
-            rows.Add(new HotkeyRow(label, hotkeys.TryGetValue(key, out var b) ? FormatHotkey(b) : "未绑定"));
+            rows.Add(new HotkeyRow(key, label, hotkeys.TryGetValue(key, out var b) ? FormatHotkey(b) : "未绑定"));
         HotkeyListView.ItemsSource = rows;
     }
+
+    private static string FuncLabel(string func) =>
+        HotkeyOrder.FirstOrDefault(x => x.Key == func).Label ?? func;
 
     private static string FormatHotkey(HotkeyBinding b)
     {
@@ -264,6 +276,107 @@ public partial class SettingsWindow : Window
     }
 
     private void OnEnterCalibrationClick(object sender, RoutedEventArgs e) => _openCalibration();
+
+    // ── 热键录制/重绑 ────────────────────────────────────────────────────
+
+    private void OnRebindHotkeyClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not string func) return;
+        if (_recordingFunc is not null) return; // 已在录制另一项，忽略
+        _recordingFunc = func;
+        btn.Content = "按下组合键…(Esc取消)";
+        PreviewKeyDown += OnRecordKeyDown;
+        Focus();
+    }
+
+    private void OnRecordKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_recordingFunc is null) return;
+        e.Handled = true;
+        string func = _recordingFunc;
+
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key == Key.Escape) { StopRecording(); return; }
+        // 纯修饰键按下时先不处理，等真正的功能键。
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+            or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin)
+            return;
+
+        if (!TryMapKey(key, out uint vk))
+        {
+            MessageBox.Show(this, $"不支持的按键：{key}（当前支持 F7–F11，可加 Ctrl/Alt/Shift 组合）",
+                "热键", MessageBoxButton.OK, MessageBoxImage.Warning);
+            StopRecording();
+            return;
+        }
+
+        uint mods = HotkeyKeys.MOD_NONE;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) mods |= HotkeyKeys.MOD_CONTROL;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) mods |= HotkeyKeys.MOD_ALT;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) mods |= HotkeyKeys.MOD_SHIFT;
+        var binding = new HotkeyBinding(mods, vk);
+
+        var prospective = new Dictionary<string, HotkeyBinding>(_holder.Current.Hotkeys) { [func] = binding };
+        var conflictGroup = HotkeyConflict.Find(prospective).FirstOrDefault(g => g.Contains(func));
+        if (conflictGroup is not null)
+        {
+            string others = string.Join("、", conflictGroup.Where(f => f != func).Select(FuncLabel));
+            MessageBox.Show(this, $"该组合键已被“{others}”占用，请换一个组合。", "热键冲突",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            StopRecording();
+            return;
+        }
+
+        if (!_hotkeyService.Rebind(func, binding))
+        {
+            MessageBox.Show(this, "注册失败：该组合键可能已被其它程序占用，请换一个组合。", "热键",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            StopRecording();
+            return;
+        }
+
+        _holder.Current = _holder.Current with { Hotkeys = prospective };
+        SaveHotkeys();
+        StopRecording();
+    }
+
+    private void StopRecording()
+    {
+        PreviewKeyDown -= OnRecordKeyDown;
+        _recordingFunc = null;
+        LoadHotkeyList(_holder.Current.Hotkeys); // 重画整表，恢复按钮文案
+    }
+
+    private static bool TryMapKey(Key key, out uint vk)
+    {
+        switch (key)
+        {
+            case Key.F7: vk = HotkeyKeys.VK_F7; return true;
+            case Key.F8: vk = HotkeyKeys.VK_F8; return true;
+            case Key.F9: vk = HotkeyKeys.VK_F9; return true;
+            case Key.F10: vk = HotkeyKeys.VK_F10; return true;
+            case Key.F11: vk = HotkeyKeys.VK_F11; return true;
+            default: vk = 0; return false;
+        }
+    }
+
+    private void OnResetHotkeysClick(object sender, RoutedEventArgs e)
+    {
+        _hotkeyService.ResetToDefaults(HotkeyDefaults.Map);
+        _holder.Current = _holder.Current with { Hotkeys = HotkeyDefaults.Map };
+        SaveHotkeys();
+        LoadHotkeyList(_holder.Current.Hotkeys);
+    }
+
+    private void SaveHotkeys()
+    {
+        try { SettingsStore.Save(_holder.Current, _settingsPath); }
+        catch (Exception ex)
+        {
+            _log.Log($"[settings] 保存热键失败: {ex.Message}");
+            MessageBox.Show(this, $"保存热键失败：{ex.Message}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
 
     private void OnSensitivityChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -348,7 +461,8 @@ public partial class SettingsWindow : Window
             ShowOriginalAndTranslation = BothRadio.IsChecked == true,
         };
 
-        // Hotkeys：本页只读展示，录制/重绑留待 M4——原样透传，不在此处改动。
+        // Hotkeys：录制/重绑走 OnRecordKeyDown/OnResetHotkeysClick 各自即时 Rebind+Save+写回 Holder，
+        // 不经由本页应用/确定/取消——with 未显式覆盖 Hotkeys，故沿用 original(=当前 Holder，天然包含最新重绑结果)。
         return original with { General = general, Translation = translation, Ocr = ocr, Appearance = appearance };
     }
 

@@ -26,6 +26,7 @@ public sealed class Phase1Probe : IDisposable
     private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
     private readonly bool _roiAvailable; // 构造时算一次：Scene 是否存在且 bucket 非空，避免每帧重复判断/抛异常
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
+    private bool _paused; // F11 暂停/继续：暂停时跳过 OnFrame 处理，不动 CaptureService（与 F9 的 Start/Stop 互不干扰）
 
     public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay,
         string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary)
@@ -62,6 +63,18 @@ public sealed class Phase1Probe : IDisposable
     /// <summary>复位变化检测：切引擎/登录成功后调用，让静止画面也立即用新引擎/新登录态重译上屏。</summary>
     public void ResetChangeDetection() => _lastJoined = "";
 
+    /// <summary>F11 暂停/继续：暂停时清空悬浮显示且后续帧直接跳过处理（不停止捕获，不与 F9 冲突）；
+    /// 继续时复位变化检测，让当前静止画面立即重译。返回切换后的暂停状态。</summary>
+    public bool TogglePause()
+    {
+        _paused = !_paused;
+        if (_paused)
+            _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+        else
+            _lastJoined = "";
+        return _paused;
+    }
+
     public void Stop()
     {
         _capture.Stop();
@@ -72,6 +85,7 @@ public sealed class Phase1Probe : IDisposable
 
     private async void OnFrame(SKBitmap frame)
     {
+        if (_paused) { frame.Dispose(); return; }
         if ((DateTime.Now - _lastShot).TotalMilliseconds < 400
             || Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
         {
