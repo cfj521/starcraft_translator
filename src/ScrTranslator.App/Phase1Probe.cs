@@ -16,15 +16,16 @@ public sealed class Phase1Probe : IDisposable
     private readonly IOcrEngine _ocr;
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
-    private readonly RoiConfig _cfg;
+    private RoiConfig _cfg;
     private readonly TieredTranslator _tiered;
     private readonly SettingsHolder _settings;
     private readonly string _glossaryHint;
+    private readonly string _roisJsonPath;
     private const string Scene = "custom_games_listing";
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
     private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
-    private readonly bool _roiAvailable; // 构造时算一次：Scene 是否存在且 bucket 非空，避免每帧重复判断/抛异常
+    private bool _roiAvailable; // Scene 是否存在且 bucket 非空，避免每帧重复判断/抛异常；构造时算一次，ReloadRois 可刷新
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
     private bool _paused; // F11 暂停/继续：暂停时跳过 OnFrame 处理，不动 CaptureService（与 F9 的 Start/Stop 互不干扰）
 
@@ -32,11 +33,23 @@ public sealed class Phase1Probe : IDisposable
         string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary)
     {
         _capture = capture; _ocr = ocr; _log = log; _overlay = overlay;
+        _roisJsonPath = roisJsonPath;
         _cfg = RoiStore.Load(roisJsonPath);
         _roiAvailable = _cfg.Scenes.TryGetValue(Scene, out var buckets) && buckets.Count > 0;
         _tiered = tiered; _settings = settings;
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
+    }
+
+    /// <summary>重新从磁盘加载 rois.json：校准窗口保存后由 App.xaml.cs 调用，使运行中的探测无需重启即可用上新/首次校准的 ROI。
+    /// 单飞探测（每帧同步处理，OnFrame 靠 _busy 互斥），故直接整体重赋值 _cfg/_roiAvailable 已足够安全，无需加锁。</summary>
+    public void ReloadRois()
+    {
+        _cfg = RoiStore.Load(_roisJsonPath);
+        _roiAvailable = _cfg.Scenes.TryGetValue(Scene, out var buckets) && buckets.Count > 0;
+        _roiMissingLogged = false;
+        ResetChangeDetection();
+        _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable}");
     }
 
     public bool Start()
@@ -46,9 +59,11 @@ public sealed class Phase1Probe : IDisposable
             _log.Log("[probe] Start 被调用");
             bool supported = GraphicsCaptureSession.IsSupported();
             _log.Log($"[probe] GraphicsCapture.IsSupported={supported}");
-            var hwnd = WindowFinder.FindByProcess("StarCraft");
-            _log.Log($"[probe] FindByProcess(StarCraft) hwnd={hwnd}");
-            if (hwnd == IntPtr.Zero) { _log.Log("[probe] 未找到 StarCraft 窗口"); return false; }
+            string proc = string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
+                ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
+            var hwnd = WindowFinder.FindByProcess(proc);
+            _log.Log($"[probe] FindByProcess({proc}) hwnd={hwnd}");
+            if (hwnd == IntPtr.Zero) { _log.Log($"[probe] 未找到 {proc} 窗口"); return false; }
             if (!_capture.Start(hwnd)) { _log.Log("[probe] 捕获启动失败"); return false; }
             _log.Log("[probe] 已开始捕获");
             return true;

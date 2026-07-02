@@ -148,7 +148,7 @@ public partial class App : Application
         void OpenCalibration()
         {
             if (calibrationWindow is not null) { calibrationWindow.Activate(); return; }
-            calibrationWindow = new Calibration.CalibrationWindow(Path.Combine(baseDir, "rois.json"), log);
+            calibrationWindow = new Calibration.CalibrationWindow(Path.Combine(baseDir, "rois.json"), log, probe.ReloadRois);
             calibrationWindow.Closed += (_, _) => calibrationWindow = null;
             calibrationWindow.Show();
             calibrationWindow.Activate();

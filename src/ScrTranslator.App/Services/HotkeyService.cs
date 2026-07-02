@@ -147,6 +147,10 @@ public sealed class HotkeyService : IDisposable
     public HotkeyBinding? CurrentBinding(string func) =>
         _funcToBinding.TryGetValue(func, out var b) ? b : null;
 
+    /// <summary>某功能当前是否有生效中的 OS 级热键注册（区别于 CurrentBinding：后者只要记录过意图就非 null，
+    /// 即使因启动时被占用而从未注册成功；本方法反映的是"此刻按下这个组合键是否真的会触发"）。</summary>
+    public bool IsRegistered(string func) => _funcToId.ContainsKey(func);
+
     /// <summary>仅注销某功能"当前生效"的 OS 级注册（若有），不触碰 _funcToAction/_funcToBinding 记录的意图。
     /// 调用方负责在需要时另行更新意图表。</summary>
     private void UnregisterLive(string func)

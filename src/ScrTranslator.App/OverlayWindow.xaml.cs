@@ -6,6 +6,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using ScrTranslator.App.Interop;
+using ScrTranslator.Core.Translation;
 
 namespace ScrTranslator.App;
 
@@ -14,9 +15,12 @@ public record OverlayItem(string Text, double ScreenLeft, double ScreenTop, bool
 
 public partial class OverlayWindow : Window
 {
-    public OverlayWindow()
+    private readonly SettingsHolder _settings;
+
+    public OverlayWindow(SettingsHolder settings)
     {
         InitializeComponent();
+        _settings = settings;
         Left = 0;
         Top = 0;
         Width = SystemParameters.PrimaryScreenWidth;   // DIP
@@ -30,21 +34,23 @@ public partial class OverlayWindow : Window
         NativeMethods.EnableClickThrough(hwnd);
     }
 
-    /// <summary>清屏并按物理屏幕坐标（内部换算为 DIP）摆放文本。必须在 UI 线程调用。</summary>
+    /// <summary>清屏并按物理屏幕坐标（内部换算为 DIP）摆放文本。必须在 UI 线程调用。
+    /// 字号/不透明度读自 Appearance（配置页热改，靠 App.xaml.cs 在应用设置后调用 ResetChangeDetection 触发重译上屏）。</summary>
     public void ShowLines(IReadOnlyList<OverlayItem> items)
     {
         RootCanvas.Children.Clear();
         var dpi = VisualTreeHelper.GetDpi(this);
+        var appearance = _settings.Current.Appearance;
         foreach (var it in items)
         {
             var tb = new TextBlock
             {
                 Text = it.Text,
-                FontSize = 20,
+                FontSize = appearance.FontSize,
                 FontWeight = FontWeights.Bold,
                 Foreground = it.Provisional ? new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD)) : Brushes.White,
                 FontStyle = it.Provisional ? FontStyles.Italic : FontStyles.Normal,
-                Opacity = it.Provisional ? 0.65 : 1.0,
+                Opacity = it.Provisional ? appearance.Opacity * 0.65 : appearance.Opacity,
                 Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 6, ShadowDepth = 0, Opacity = 1 },
             };
             Canvas.SetLeft(tb, it.ScreenLeft / dpi.DpiScaleX);

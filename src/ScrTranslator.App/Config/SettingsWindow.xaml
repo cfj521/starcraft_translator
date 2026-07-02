@@ -51,9 +51,9 @@
                         </GroupBox>
                         <GroupBox Header="启动">
                             <StackPanel>
-                                <CheckBox x:Name="AutoStartCheck" Content="开机自启（仅存开关，注册表接线留待打包阶段）" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="StartMinimizedCheck" Content="启动后最小化到托盘" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="AutoTranslateCheck" Content="启动游戏时自动开启翻译" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="AutoStartCheck" Content="开机自启（仅存开关，注册表接线留待打包阶段）（后续生效）" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="StartMinimizedCheck" Content="启动后最小化到托盘（后续生效）" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="AutoTranslateCheck" Content="启动游戏时自动开启翻译（后续生效）" Margin="0,2,0,2"/>
                             </StackPanel>
                         </GroupBox>
                         <GroupBox Header="语言">
@@ -133,7 +133,7 @@
                         <GroupBox Header="识别引擎">
                             <TextBlock Text="PaddleOCR（韩文 mobile 模型，随包分发，无需系统语言包）" Margin="4"/>
                         </GroupBox>
-                        <GroupBox Header="轮询频率">
+                        <GroupBox Header="轮询频率（后续生效）">
                             <StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="聊天区" Style="{StaticResource RowLabel}"/>
@@ -149,14 +149,14 @@
                                 </StackPanel>
                             </StackPanel>
                         </GroupBox>
-                        <GroupBox Header="图像预处理">
+                        <GroupBox Header="图像预处理（后续生效）">
                             <StackPanel Orientation="Horizontal">
                                 <CheckBox x:Name="UpscaleCheck" Content="放大" Margin="0,0,16,0"/>
                                 <CheckBox x:Name="GrayscaleCheck" Content="灰度" Margin="0,0,16,0"/>
                                 <CheckBox x:Name="BinarizeCheck" Content="二值化"/>
                             </StackPanel>
                         </GroupBox>
-                        <GroupBox Header="变化检测灵敏度（0=最不敏感，10=最敏感）">
+                        <GroupBox Header="变化检测灵敏度（0=最不敏感，10=最敏感）（后续生效）">
                             <StackPanel Orientation="Horizontal">
                                 <Slider x:Name="SensitivitySlider" Width="240" Minimum="0" Maximum="10"
                                         TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnSensitivityChanged"/>
@@ -234,7 +234,7 @@
                         <GroupBox Header="悬浮层">
                             <StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="字体" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="字体（后续生效）" Style="{StaticResource RowLabel}"/>
                                     <ComboBox x:Name="FontFamilyBox" Width="160" IsEditable="True">
                                         <ComboBoxItem Content="Microsoft YaHei"/>
                                         <ComboBoxItem Content="Microsoft YaHei UI"/>
@@ -252,7 +252,7 @@
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="显示模式" Style="{StaticResource RowLabel}"/>
                                     <RadioButton x:Name="OnlyTranslationRadio" GroupName="DisplayMode" Content="仅译文" Margin="0,0,16,0" VerticalAlignment="Center"/>
-                                    <RadioButton x:Name="BothRadio" GroupName="DisplayMode" Content="原文+译文双行" VerticalAlignment="Center"/>
+                                    <RadioButton x:Name="BothRadio" GroupName="DisplayMode" Content="原文+译文双行（后续生效）" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="临时态(快引擎)样式" Style="{StaticResource RowLabel}" Width="140"/>

@@ -79,7 +79,11 @@ public partial class SettingsWindow : Window
         VersionText.Text = $"版本 {Assembly.GetExecutingAssembly().GetName().Version}";
 
         LoadFromSettings(_holder.Current);
-        Activated += (_, _) => LoadRoiList(); // 从校准窗口返回时刷新区域页
+        Activated += (_, _) =>
+        {
+            LoadRoiList(); // 从校准窗口返回时刷新区域页
+            ReloadOutOfBandTranslationControls(); // F7/托盘可能在本窗口打开期间改了这三项，重新前台时同步，避免"应用"用陈旧值覆盖
+        };
         Closed += OnWindowClosed;
     }
 
@@ -198,6 +202,17 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>只重载 F7(TogglePlayerId)/托盘 SetEngine/ToggleTwoLevel 这三个可在本窗口打开期间"带外"改变的字段，
+    /// 不重载其它控件——避免打断用户正在本窗口内编辑但尚未应用的其它字段。</summary>
+    private void ReloadOutOfBandTranslationControls()
+    {
+        var t = _holder.Current.Translation;
+        DashScopeEngineRadio.IsChecked = t.Active == TranslationEngine.DashScope;
+        ChatGptEngineRadio.IsChecked = t.Active == TranslationEngine.ChatGpt;
+        TwoLevelCheck.IsChecked = t.TwoLevel;
+        TranslatePlayerIdCheck.IsChecked = t.TranslatePlayerId;
+    }
+
     private static string ColumnKindLabel(ColumnKind k) => k switch
     {
         ColumnKind.RoomName => "房间名",
@@ -210,7 +225,11 @@ public partial class SettingsWindow : Window
     {
         var rows = new List<HotkeyRow>();
         foreach (var (key, label) in HotkeyOrder)
-            rows.Add(new HotkeyRow(key, label, hotkeys.TryGetValue(key, out var b) ? FormatHotkey(b) : "未绑定"));
+        {
+            string current = hotkeys.TryGetValue(key, out var b) ? FormatHotkey(b) : "未绑定";
+            if (!_hotkeyService.IsRegistered(key)) current += "（未生效）"; // 例如启动时该组合键已被其它程序占用
+            rows.Add(new HotkeyRow(key, label, current));
+        }
         HotkeyListView.ItemsSource = rows;
     }
 

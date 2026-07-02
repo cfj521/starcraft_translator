@@ -23,6 +23,7 @@ public partial class CalibrationWindow : Window
 
     private readonly string _roisJsonPath;
     private readonly FileLogger? _log;
+    private readonly Action? _onSaved;
 
     private readonly List<CalibBox> _boxes = new();
     private CalibBox? _selected;
@@ -67,11 +68,14 @@ public partial class CalibrationWindow : Window
         public Border? ColumnPanel;
     }
 
-    public CalibrationWindow(string roisJsonPath, FileLogger? log = null)
+    /// <param name="onSaved">保存成功（Enter 触发 SaveAndClose 走完写盘且未抛异常）后调用；
+    /// 供 App.xaml.cs 接线让运行中的 Phase1Probe.ReloadRois()，使首次校准/改动无需重启即可生效。</param>
+    public CalibrationWindow(string roisJsonPath, FileLogger? log = null, Action? onSaved = null)
     {
         InitializeComponent();
         _roisJsonPath = roisJsonPath;
         _log = log;
+        _onSaved = onSaved;
         Left = 0;
         Top = 0;
         Width = SystemParameters.PrimaryScreenWidth;
@@ -689,6 +693,7 @@ public partial class CalibrationWindow : Window
 
             RoiStore.Save(new RoiConfig(scenes), _roisJsonPath);
             _log?.Log($"[calibration] 保存 {rois.Count} 个区域到 {_roisJsonPath}（{resKey}）");
+            _onSaved?.Invoke();
         }
         catch (Exception ex)
         {
