@@ -6,5 +6,8 @@ public sealed record TranslationSettings
     public string DashScopeModel { get; init; } = "qwen-flash";
     public string ChatGptModel { get; init; } = "gpt-5";
     public int TimeoutSeconds { get; init; } = 10;
+    public bool TwoLevel { get; init; } = false;
+    public TranslationEngine FastEngine { get; init; } = TranslationEngine.DashScope;
+    public string FastModel { get; init; } = "qwen-flash";
     public static TranslationSettings Default => new();
 }
