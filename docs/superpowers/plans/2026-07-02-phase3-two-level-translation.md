@@ -270,6 +270,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 改 `ProvidersTests.cs`：文件顶部类内加一个共享 ctx 字段，并把所有 `TranslateAsync(x, CancellationToken.None)` 改成带 ctx；再加一条断言 ctx 注入。完整替换 `ProvidersTests` 类体为：
 
 ```csharp
+using System.Text.Json;
 using ScrTranslator.Core.Translation;
 using ScrTranslator.Core.Translation.Providers;
 namespace ScrTranslator.Core.Tests.Translation;
@@ -295,8 +296,12 @@ public class ProvidersTests
         var stub = new StubHttpMessageHandler("{\"choices\":[{\"message\":{\"content\":\"[1] 甲\"}}]}");
         var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://x/v1", () => "K");
         await new DashScopeProvider(client, () => "m").TranslateAsync(new[]{"가"}, Ctx, CancellationToken.None);
-        Assert.Contains("저그=虫族", stub.LastBody);       // 术语提示进了请求体
-        Assert.Contains("自定义游戏房间列表", stub.LastBody); // 场景也进了
+        // System.Text.Json 默认把非 ASCII 转义成 \uXXXX,原始 body 无字面中韩文;
+        // 必须解析 JSON 取 system 段(解码转义)再断言。system = messages[0].content。
+        var sys = JsonDocument.Parse(stub.LastBody!).RootElement
+            .GetProperty("messages")[0].GetProperty("content").GetString();
+        Assert.Contains("저그=虫族", sys);        // 术语提示进了 system prompt
+        Assert.Contains("自定义游戏房间列表", sys); // 场景也进了
     }
 
     [Fact]
@@ -346,7 +351,10 @@ public class ProvidersTests
         var client = new CodexResponsesClient(new HttpClient(stub));
         var p = new ChatGptSubscriptionProvider(client, new FakeTokens(), () => "gpt-5");
         await p.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None);
-        Assert.Contains("저그=虫族", stub.LastBody);
+        // 同理解析:Codex 请求体的 system 段 = instructions 字段。
+        var instructions = JsonDocument.Parse(stub.LastBody!).RootElement
+            .GetProperty("instructions").GetString();
+        Assert.Contains("저그=虫族", instructions);
     }
 }
 ```
@@ -822,15 +830,14 @@ public record OverlayItem(string Text, double ScreenLeft, double ScreenTop, bool
 
 改 using（增 `System.Linq` 已隐含；确保 `using ScrTranslator.Core.Translation;` 在）。
 
-改字段与构造函数（把 `TranslationService _translator` 换成 `TieredTranslator _tiered`，新增 `Glossary` 注入与 `_glossaryHint`）：
+改字段：**只把** `private readonly TranslationService _translator;` **替换为** `private readonly TieredTranslator _tiered;`，并**新增** `private readonly string _glossaryHint;`。字段 `private readonly SettingsHolder _settings;` 与 `private const string Scene = "custom_games_listing";` **已存在于原文件，切勿重复声明**（否则 CS0102）。最终这三/四个成员并存：
 
 ```csharp
-    private readonly TieredTranslator _tiered;
-    private readonly SettingsHolder _settings;
-    private readonly string _glossaryHint;
-    private const string Scene = "custom_games_listing";
+    private readonly TieredTranslator _tiered;      // 替换掉 _translator
+    private readonly SettingsHolder _settings;      // 已存在,勿重复声明
+    private readonly string _glossaryHint;          // 新增
+    private const string Scene = "custom_games_listing"; // 已存在,勿重复声明
 ```
-（删除原 `private readonly TranslationService _translator;`）
 
 构造函数签名与体：
 
