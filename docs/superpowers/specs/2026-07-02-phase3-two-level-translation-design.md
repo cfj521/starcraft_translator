@@ -94,19 +94,23 @@ public sealed class TieredTranslator
 **编排算法**：
 1. 逐行判定来源：`Glossary.TryGet` → `Direct`（Final 文本）；否则 `cache.TryGet` → `Direct`；否则记为 miss。
 2. **组装基线快照** `snap[]`：命中行填其中文+`Direct`；miss 行暂填**原文韩文**+（两级时 `Provisional`占位 / 单级时不先发）。
+**"真实译文"判定（贯穿全文，关键）**：provider **不靠抛异常**表示批量失败——`BatchProtocol.Parse(...) ?? lines` 在解析失败(缺/重/行数不符)时**原样返回传入的 `missText` 列表引用**；本编排器调用 provider 的 try/catch 在异常/超时时也把该行置回 `missText` 元素。因此对第 j 个 miss 行，**"真实译文" ⟺ `!ReferenceEquals(zh[j], missText[j])`**。凡引用相等即视为该行降级（无论异常还是静默解析失败），**一律不入缓存**。此判定与 Phase 2 单级(`TranslationService.cs:28-29`)一致。
+
 3. **单级**（`settings.TwoLevel == false`）：
    - 若有 miss：`quality = qualityProvider(); zh = await quality.TranslateAsync(missText, ctx, ct)`（异常/超时 → catch → `zh = missText` 降级）。
-   - 把 miss 行填最终中文、Stage=`Final`（降级回原文的行 Stage 也记 `Final`，视觉上不再"临时"）。
-   - 合法译文(非引用相等原文)写 `cache`。
+   - 把 miss 行填 `zh`、Stage=`Final`（降级回原文的行 Stage 也记 `Final`，视觉上不再"临时"）。
+   - 逐行：**真实译文**（`!ReferenceEquals(zh[j], missText[j])`）→ 写 `cache`；否则不写且该行计入 `AllResolved=false`。
    - **回调一次**（全量快照）。
 4. **两级**（`TwoLevel == true`）且有 miss：
-   - **快态**：`fast = fastProvider(); fastZh = await fast.TranslateAsync(missText, ctx, ct)`（异常/超时 → `fastZh = missText`）。把 miss 行填 `fastZh`、Stage=`Provisional`（`Direct` 命中行保持 Final 样式）。**回调第 1 次**（临时态快照）。快态结果**不入缓存**。
-     - 若快态整体失败（回原文），miss 行临时态即显示韩文（Provisional 样式）；仍照常进质量态。
-   - **质量态**：`quality = qualityProvider(); qualZh = await quality.TranslateAsync(missText, ctx, ct)`。
-     - 成功：miss 行填 `qualZh`、Stage=`Final`，写 `cache`。**回调第 2 次**（最终态快照）。
-     - 失败（异常/超时）：把 miss 行的**快态结果**提升为 `Final` 样式（`qualZh = fastZh`），**并把快态结果写缓存**（有个译文好过反复请求；记质量态失败日志）。**回调第 2 次**。
-     - 若快态也失败过（当时回的是原文）→ 质量态也失败 → miss 行最终填**原文韩文**、Stage=`Final`，**不写缓存**（下次仍可重试，配合调用方"总失败不提交变化检测"）。
-5. **全部命中**（无 miss）：直接回调一次全量 `Direct` 快照（单/两级同）。
+   - **快态**：`fast = fastProvider(); fastZh = await fast.TranslateAsync(missText, ctx, ct)`（异常/超时 → `fastZh = missText`）。把 miss 行填 `fastZh`、Stage=`Provisional`（`Direct` 命中行保持 Final 样式）。**回调第 1 次**（临时态快照）。快态结果**一律不入缓存**（临时、可能不准）。
+     - 若某行快态非真实译文（引用相等原文），该行临时态即显示韩文（Provisional 样式）；仍照常进质量态。
+   - **质量态**：`quality = qualityProvider(); qualZh = await quality.TranslateAsync(missText, ctx, ct)`。逐 miss 行 j 按下述**统一规则**定最终值与缓存（Stage 一律 `Final`）：
+     - **质量态真实**（`!ReferenceEquals(qualZh[j], missText[j])`）→ `final=qualZh[j]`，**写 cache**。
+     - 否则**回落快态**：快态真实（`!ReferenceEquals(fastZh[j], missText[j])`）→ `final=fastZh[j]`（提升为 Final 样式），**写 cache**（有译文好过反复请求；记"质量态该行降级、用快态兜底"日志）。
+     - 否则（质量、快态均非真实）→ `final=missText[j]`（原文韩文，Final 样式），**不写 cache**，该行计入 `AllResolved=false`。
+   - **回调第 2 次**（最终态快照）。
+     > 注：**"质量态成功"绝不等于"未抛异常"**——静默批量降级(返回原 list)必须靠引用相等识别，否则会把原文韩文当最终译文缓存并误判 `AllResolved=true`，致该内容永不重译（违反验收 5）。
+5. **全部命中**（无 miss）：直接回调一次全量 `Direct` 快照（单/两级同），`AllResolved=true`。
 
 **返回值语义**：`TranslateAsync` 的 `Task` 完成 == 编排结束（最后一次回调已发出）。调用方据"最后一次快照是否含 miss 行降级回原文（即出现原文韩文 & 未缓存）"决定是否提交变化检测（见 §4）。为此 `TieredTranslator` 额外通过 `Task<TranslateOutcome>` 返回一个轻量结果：
 ```csharp
@@ -124,7 +128,7 @@ public static class PromptBuilder
     public const int GlossaryHintMaxChars = 1200;  // 术语提示上界，超出截断并省略
 }
 ```
-- `GlossaryHint` 由 App 侧从 `Glossary.Entries` 构造（`ko=zh` 用 `; ` 连接，截到 `GlossaryHintMaxChars`），放进 `TranslationContext` 传入。截断时结尾加 `…`，并可日志记"术语表超上界已截断 N 条"。
+- `GlossaryHint` 由 **App 侧**从 `Glossary.Entries` 构造（`ko=zh` 用 `; ` 连接，截到 `GlossaryHintMaxChars`），放进 `TranslationContext` 传入。截断时结尾加 `…`，并可日志记"术语表超上界已截断 N 条"。**`PromptBuilder` 视传入 `GlossaryHint` 为已定界字符串、不再二次截断**（截断责任单一在 App 侧，避免双实现）；`GlossaryHintMaxChars` 常量放 `PromptBuilder` 仅作共享上界来源。
 - Scene → 人类可读中文（如 `custom_games_listing` → "自定义游戏房间列表"）。未知 scene 用原样字符串。
 
 ## 4. Phase1Probe.OnFrame 新流程（替换 Phase 2 单次上屏）
@@ -155,13 +159,15 @@ public static class PromptBuilder
 
 ## 6. 错误处理与降级（在 Phase 2 基础上补两级分支）
 
+> "失败/非真实"在下表统一指**异常、超时、或静默批量降级（provider 返回原 list，引用相等原文）**——三者按 §3.2"真实译文"判定一视同仁。
+
 | 场景 | 行为 |
 |---|---|
-| 快态失败(异常/超时) | 临时态显示原文韩文(Provisional 样式)，继续走质量态；不入缓存 |
-| 质量态失败但快态成功 | 快态结果提升为 Final 样式 + 写缓存 + 记质量失败日志 |
-| 快态与质量态都失败 | 最终显示原文韩文(Final 样式)，不写缓存，`AllResolved=false`(不提交变化检测,下帧重试) |
-| 质量引擎=ChatGPT 且未登录 | `qualityProvider().TranslateAsync` 抛"未登录" → 走"质量态失败"分支；托盘可提示登录(沿用 Phase 2) |
-| 快态引擎未配置(如 DashScope 无 key) | 快态抛错 → 走"快态失败"分支（临时态显示韩文） |
+| 快态该行非真实(异常/超时/静默降级) | 临时态显示原文韩文(Provisional 样式)，继续走质量态；快态一律不入缓存 |
+| 质量态该行非真实、快态真实 | 快态结果提升为 Final 样式 + 写缓存 + 记"质量态降级、快态兜底"日志 |
+| 快态与质量态该行均非真实 | 最终显示原文韩文(Final 样式)，不写缓存，`AllResolved=false`(不提交变化检测,下帧重试) |
+| 质量引擎=ChatGPT 且未登录 | `qualityProvider().TranslateAsync` 抛"未登录" → 该行走"质量态非真实"分支；托盘可提示登录(沿用 Phase 2) |
+| 快态引擎未配置(如 DashScope 无 key) | 快态抛错 → 走"快态非真实"分支（临时态显示韩文） |
 | 单级(TwoLevel=false) | 完全等同 Phase 2：一次质量态请求，失败回原文 |
 | 术语表/缓存命中 | 不走网络，`Direct` Final 直出（两级也无临时态闪烁） |
 
@@ -169,12 +175,14 @@ public static class PromptBuilder
 
 ## 7. 测试策略
 
-**Core 单测（无网络，TDD，用假 `ITranslationProvider`——可控延迟/失败/记录收到的 ctx）**：
-- `TieredTranslator` 单级：术语>缓存>质量 provider 优先级；只请求未命中行；provider 调用次数；行数对应；provider 抛错→降级回原文且 `AllResolved=false`；合法译文入缓存；回调恰好 1 次。
-- `TieredTranslator` 两级：回调恰好 2 次(有 miss 时)；第 1 次含 `Provisional`(miss)+`Direct`(命中)、第 2 次全 `Final`；快态结果**不入缓存**、质量态结果入缓存；快态失败→临时态原文；质量失败→快态提升 Final+入缓存+`AllResolved=true`；快&质量双失败→原文 Final+不入缓存+`AllResolved=false`；全命中→回调 1 次全 `Direct`。
-- `PromptBuilder`：输出含场景中文说明；含术语提示且不超 `GlossaryHintMaxChars`(超长截断+`…`)；空/ null `GlossaryHint` 不崩、不加术语段。
+**假 provider 约定**：假 `ITranslationProvider` 必须能模拟三种返回——(a) 真实译文(新列表)、(b) 抛异常/超时、(c) **静默降级**(把传入的 `missText` 列表**原引用**返回，复刻 `Parse(...) ?? lines`)。(c) 是防回归的关键，不能只用 (a)/(b)。
+
+**Core 单测（无网络，TDD）**：
+- `TieredTranslator` 单级：术语>缓存>质量 provider 优先级；只请求未命中行；provider 调用次数；行数对应；provider 抛错→降级回原文且 `AllResolved=false`；**静默降级(c)→同样不入缓存且 `AllResolved=false`**；真实译文入缓存；回调恰好 1 次。
+- `TieredTranslator` 两级：回调恰好 2 次(有 miss 时)；第 1 次含 `Provisional`(miss)+`Direct`(命中)、第 2 次全 `Final`；快态结果**不入缓存**、质量态真实译文入缓存；快态非真实→临时态原文；质量态非真实(异常)但快态真实→快态提升 Final+入缓存+`AllResolved=true`；**质量态静默降级(c)但快态真实→同样回落快态+入缓存+`AllResolved=true`（严禁把原文当译文缓存/严禁 `AllResolved` 误判 true）**；快&质量双非真实→原文 Final+不入缓存+`AllResolved=false`；全命中→回调 1 次全 `Direct`+`AllResolved=true`。
+- `PromptBuilder`：输出含场景中文说明；含术语提示；空/ null `GlossaryHint` 不崩、不加术语段；**对已超界的 hint 不再二次截断**(截断责任在 App 侧，见 §3.3)。
 - `Glossary.Entries`：枚举去重后条目；空术语表返回空集合。
-- provider 携带 ctx：用假 `HttpMessageHandler` 断言 DashScope 请求 body 的 system 段包含 `PromptBuilder` 术语提示片段（证明 ctx 已注入）。
+- provider 携带 ctx：用假 `HttpMessageHandler` 断言 **DashScope** 请求 body 的 system 段包含 `PromptBuilder` 术语提示片段（证明 ctx 已注入）；`ChatGptSubscriptionProvider` 同样改用 `PromptBuilder.BuildSystemPrompt(ctx)`，用假 `CodexResponsesClient`/handler 断言其 instructions/system 段同样包含该片段（两 provider 对称覆盖）。
 - `TranslationSettings` 默认值：`TwoLevel==false`、`FastEngine==DashScope`、`FastModel=="qwen-flash"`（回归保护，防误改默认导致意外双请求）。
 
 **手动验收（无法自动化，用户实机，暂缓）**：真实两 provider 往返、临时→最终原地替换观感、托盘开关两级、术语一致性。
