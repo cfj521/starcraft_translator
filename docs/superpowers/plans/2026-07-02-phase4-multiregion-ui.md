@@ -183,7 +183,7 @@ public record Roi(string Name, string Type, RelRect Rect, IReadOnlyList<RoiColum
             new JsonSerializerOptions { WriteIndented = true }));
     }
 ```
-（`Save` 需 `using System.Linq;`——文件已 `using System.Text.Json;`。）
+（`Save` 用了 LINQ `.Select`——在 `RoiStore.cs` 顶部**显式加** `using System.Linq;`；文件已有 `using System.Drawing; using System.Text.Json;`。）
 
 - [ ] **Step 4: Run tests → pass**
 
@@ -698,7 +698,12 @@ public sealed class SettingsHolder
 
 - [ ] **Step 2: 适配所有调用点（`Current.Xxx` → `Current.Translation.Xxx`）**
 
-搜索 `grep -rn "\.Current\." src/ScrTranslator.App` 找到全部用法（Phase 2/3 接线：`TrayService.SetEngine`/`RefreshEngineChecks`/`ToggleTwoLevel`、`Phase1Probe.OnFrame` 的 `_settings.Current.Active/TimeoutSeconds/TwoLevel`、`App.xaml.cs` DI 里 `settings.Current.DashScopeModel/FastModel/Active` 等）。逐处把 `Current.<field>` 改为 `Current.Translation.<field>`；写回处 `Current = Current with {…}` 改为 `Current = Current with { Translation = Current.Translation with {…} }`。
+搜索 `grep -rn "Current" src/ScrTranslator.App`（**用宽 `Current` 而非 `\.Current\.`**——后者会漏掉把 `Current` 整体当对象传的站点）。已知需改站点：
+- `TrayService.SetEngine`/`RefreshEngineChecks`/`ToggleTwoLevel`：`Current.<field>` → `Current.Translation.<field>`；写回 `Current = Current with {…}` → `Current = Current with { Translation = Current.Translation with {…} }`。
+- `Phase1Probe.OnFrame`：`_settings.Current.Active/TimeoutSeconds/TwoLevel` → `_settings.Current.Translation.*`。
+- `App.xaml.cs` DI：`settings.Current.DashScopeModel/FastModel/Active` → `settings.Current.Translation.*`。
+- **`App.xaml.cs` 传给 `TieredTranslator` 构造的最后一个实参 `() => settings.Current`**（是 `Func<TranslationSettings>`，`Current` 现变 `AppSettings` 会类型不匹配编译错，grep `\.Current\.` 抓不到它）→ 改 `() => settings.Current.Translation`。
+> 通则：凡把 `settings.Current`/`_settings.Current` **整体**当 `TranslationSettings` 用的地方（不止 `.Current.<field>`）都要补 `.Translation`。
 
 - [ ] **Step 3: HotkeyService 用 Core 常量**
 
