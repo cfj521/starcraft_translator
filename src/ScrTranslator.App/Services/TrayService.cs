@@ -6,6 +6,7 @@ using H.NotifyIcon;
 using ScrTranslator.App.Auth;
 using ScrTranslator.App.Logging;
 using ScrTranslator.App.Secrets;
+using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
 
 namespace ScrTranslator.App.Services;
@@ -18,15 +19,16 @@ public sealed class TrayService : IDisposable
     private readonly SettingsHolder _settings;
     private readonly SecretStore _store;
     private readonly FileLogger _log;
+    private readonly string _settingsPath;
     private TaskbarIcon? _trayIcon;
     private MenuItem? _loginItem;
     private MenuItem? _engineDashScopeItem;
     private MenuItem? _engineChatGptItem;
     private MenuItem? _twoLevelItem;
 
-    public TrayService(OverlayWindow overlay, OpenAiOAuth oauth, SettingsHolder settings, SecretStore store, FileLogger log)
+    public TrayService(OverlayWindow overlay, OpenAiOAuth oauth, SettingsHolder settings, SecretStore store, FileLogger log, string settingsPath)
     {
-        _overlay = overlay; _oauth = oauth; _settings = settings; _store = store; _log = log;
+        _overlay = overlay; _oauth = oauth; _settings = settings; _store = store; _log = log; _settingsPath = settingsPath;
     }
 
     public Action? ToggleProbe { get; set; }
@@ -132,29 +134,41 @@ public sealed class TrayService : IDisposable
 
     private void SetEngine(TranslationEngine engine)
     {
-        _settings.Current = _settings.Current with { Active = engine };
+        _settings.Current = _settings.Current with { Translation = _settings.Current.Translation with { Active = engine } };
         RefreshEngineChecks();
+        SaveSettings();
         OnTranslationStateChanged?.Invoke(); // 切引擎后让静止画面立即用新引擎重译
     }
 
     private void RefreshEngineChecks()
     {
         if (_engineDashScopeItem is null || _engineChatGptItem is null) return;
-        var active = _settings.Current.Active;
+        var active = _settings.Current.Translation.Active;
         _engineDashScopeItem.IsChecked = active == TranslationEngine.DashScope;
         _engineChatGptItem.IsChecked = active == TranslationEngine.ChatGpt;
     }
 
     private void ToggleTwoLevel()
     {
-        _settings.Current = _settings.Current with { TwoLevel = !_settings.Current.TwoLevel };
+        _settings.Current = _settings.Current with
+        {
+            Translation = _settings.Current.Translation with { TwoLevel = !_settings.Current.Translation.TwoLevel }
+        };
         RefreshTwoLevelCheck();
+        SaveSettings();
         OnTranslationStateChanged?.Invoke(); // 切换后让静止画面按新模式立即重译
     }
 
     private void RefreshTwoLevelCheck()
     {
-        if (_twoLevelItem is not null) _twoLevelItem.IsChecked = _settings.Current.TwoLevel;
+        if (_twoLevelItem is not null) _twoLevelItem.IsChecked = _settings.Current.Translation.TwoLevel;
+    }
+
+    /// <summary>托盘改设置后立即落盘（防 Save-without-Load / 下次启动丢失）。</summary>
+    private void SaveSettings()
+    {
+        try { SettingsStore.Save(_settings.Current, _settingsPath); }
+        catch (Exception ex) { _log.Log($"[tray] 保存 settings.json 失败: {ex.Message}"); }
     }
 
     private void ToggleOverlay()

@@ -116,11 +116,11 @@ public sealed class Phase1Probe : IDisposable
             var joined = string.Join("\n", koLines);
             if (joined == _lastJoined) return; // finally 仍会 Dispose(frame) 并复位 _busy
 
-            var engine = _settings.Current.Active;
+            var engine = _settings.Current.Translation.Active;
             var ctx = new TranslationContext(Scene, _glossaryHint);
             // 两级共用这一个超时预算(非每级各一份)：快态+质量态合计不超过 TimeoutSeconds。
             // 快态本就很快,故实际质量态仍有充裕时间；超时被 TieredTranslator 视作降级并回落,不会卡死取帧。
-            int timeout = Math.Max(1, _settings.Current.TimeoutSeconds);
+            int timeout = Math.Max(1, _settings.Current.Translation.TimeoutSeconds);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
 
             void Render(IReadOnlyList<LineTranslation> snap)
@@ -139,7 +139,7 @@ public sealed class Phase1Probe : IDisposable
             var outcome = await _tiered.TranslateAsync(koLines, ctx, Render, cts.Token);
             sw.Stop();
             for (int k = 0; k < koLines.Count; k++)
-                _log.Log($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" engine={engine} 两级={_settings.Current.TwoLevel} {sw.ElapsedMilliseconds}ms");
+                _log.Log($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" engine={engine} 两级={_settings.Current.Translation.TwoLevel} {sw.ElapsedMilliseconds}ms");
 
             // 仅当无“总失败”行(AllResolved)才提交变化检测,否则下一帧同内容重试。
             if (outcome.AllResolved) _lastJoined = joined;

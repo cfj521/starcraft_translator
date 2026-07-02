@@ -11,11 +11,6 @@ public sealed class HotkeyService : IDisposable
 {
     private const int WM_HOTKEY = 0x0312;
 
-    // 常用虚拟键码
-    public const uint VK_F7 = 0x76, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 = 0x79, VK_F11 = 0x7A;
-    // 修饰键
-    public const uint MOD_NONE = 0x0, MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4;
-
     private readonly IntPtr _hwnd;
     private readonly HwndSource _source;
     private readonly Dictionary<int, Action> _actions = new();

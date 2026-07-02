@@ -9,6 +9,7 @@ using ScrTranslator.App.Logging;
 using ScrTranslator.App.Secrets;
 using ScrTranslator.App.Services;
 using ScrTranslator.Core.Ocr;
+using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
 using ScrTranslator.Core.Translation.Providers;
 
@@ -52,11 +53,17 @@ public partial class App : Application
         builder.Services.AddSingleton<CaptureService>();
 
         // --- 翻译管线 DI（B3）---
+        string settingsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "ScrTranslator", "settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+
         builder.Services.AddSingleton<SecretStore>();
         builder.Services.AddSingleton(new HttpClient());
         builder.Services.AddSingleton<OpenAiOAuth>();
         builder.Services.AddSingleton<ITokenSource>(sp => sp.GetRequiredService<OpenAiOAuth>());
-        builder.Services.AddSingleton<SettingsHolder>(); // 可变，托盘切引擎改 .Current
+        // 可变，托盘切引擎改 .Current；启动时从磁盘加载，防 Save-without-Load。
+        builder.Services.AddSingleton(new SettingsHolder { Current = SettingsStore.Load(settingsPath) });
         builder.Services.AddSingleton(_ => Glossary.LoadFromMarkdown(Path.Combine(baseDir, "GLOSSARY.md")));
         builder.Services.AddSingleton<TranslationCache>();
         builder.Services.AddSingleton(sp => new OpenAiCompatibleChatClient(
@@ -66,32 +73,38 @@ public partial class App : Application
         builder.Services.AddSingleton(sp => new CodexResponsesClient(sp.GetRequiredService<HttpClient>()));
         builder.Services.AddSingleton(sp => new DashScopeProvider(
             sp.GetRequiredService<OpenAiCompatibleChatClient>(),
-            () => sp.GetRequiredService<SettingsHolder>().Current.DashScopeModel));
+            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.DashScopeModel));
         builder.Services.AddSingleton(sp => new ChatGptSubscriptionProvider(
             sp.GetRequiredService<CodexResponsesClient>(),
             sp.GetRequiredService<ITokenSource>(),
-            () => sp.GetRequiredService<SettingsHolder>().Current.ChatGptModel));
+            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.ChatGptModel));
         builder.Services.AddSingleton(sp =>
         {
             var settings = sp.GetRequiredService<SettingsHolder>();
             var dashClient = sp.GetRequiredService<OpenAiCompatibleChatClient>();
             var chatGpt = sp.GetRequiredService<ChatGptSubscriptionProvider>();
-            var dashQuality = sp.GetRequiredService<DashScopeProvider>();               // 绑 Current.DashScopeModel
-            var dashFast = new DashScopeProvider(dashClient, () => settings.Current.FastModel);
+            var dashQuality = sp.GetRequiredService<DashScopeProvider>();               // 绑 Current.Translation.DashScopeModel
+            var dashFast = new DashScopeProvider(dashClient, () => settings.Current.Translation.FastModel);
 
             ITranslationProvider Quality() =>
-                settings.Current.Active == TranslationEngine.DashScope ? dashQuality : chatGpt;
+                settings.Current.Translation.Active == TranslationEngine.DashScope ? dashQuality : chatGpt;
             ITranslationProvider Fast() =>
-                settings.Current.FastEngine == TranslationEngine.DashScope ? dashFast : chatGpt;
+                settings.Current.Translation.FastEngine == TranslationEngine.DashScope ? dashFast : chatGpt;
 
             return new TieredTranslator(
                 sp.GetRequiredService<Glossary>(),
                 sp.GetRequiredService<TranslationCache>(),
                 Fast, Quality,
-                () => settings.Current);
+                () => settings.Current.Translation);
         });
 
-        builder.Services.AddSingleton<TrayService>();
+        builder.Services.AddSingleton(sp => new TrayService(
+            sp.GetRequiredService<OverlayWindow>(),
+            sp.GetRequiredService<OpenAiOAuth>(),
+            sp.GetRequiredService<SettingsHolder>(),
+            sp.GetRequiredService<SecretStore>(),
+            sp.GetRequiredService<FileLogger>(),
+            settingsPath));
         builder.Services.AddSingleton(sp => new Phase1Probe(
             sp.GetRequiredService<CaptureService>(),
             sp.GetRequiredService<IOcrEngine>(),
@@ -127,8 +140,8 @@ public partial class App : Application
         // 全局热键：F9 开关探测、F10 显隐悬浮窗（游戏有焦点时也生效）
         var log = _host.Services.GetRequiredService<FileLogger>();
         _hotkeys = new HotkeyService(overlay);
-        bool f9 = _hotkeys.Register(HotkeyService.MOD_NONE, HotkeyService.VK_F9, ToggleProbe);
-        bool f10 = _hotkeys.Register(HotkeyService.MOD_NONE, HotkeyService.VK_F10, ToggleOverlay);
+        bool f9 = _hotkeys.Register(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9, ToggleProbe);
+        bool f10 = _hotkeys.Register(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10, ToggleOverlay);
         log.Log($"[hotkey] 注册 F9(开关探测)={f9} F10(显隐悬浮)={f10}");
     }
 
