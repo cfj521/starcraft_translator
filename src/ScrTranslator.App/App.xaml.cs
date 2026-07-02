@@ -71,12 +71,25 @@ public partial class App : Application
             sp.GetRequiredService<CodexResponsesClient>(),
             sp.GetRequiredService<ITokenSource>(),
             () => sp.GetRequiredService<SettingsHolder>().Current.ChatGptModel));
-        builder.Services.AddSingleton(sp => new TranslationService(
-            sp.GetRequiredService<Glossary>(),
-            sp.GetRequiredService<TranslationCache>(),
-            () => sp.GetRequiredService<SettingsHolder>().Current.Active == TranslationEngine.DashScope
-                ? (ITranslationProvider)sp.GetRequiredService<DashScopeProvider>()
-                : sp.GetRequiredService<ChatGptSubscriptionProvider>()));
+        builder.Services.AddSingleton(sp =>
+        {
+            var settings = sp.GetRequiredService<SettingsHolder>();
+            var dashClient = sp.GetRequiredService<OpenAiCompatibleChatClient>();
+            var chatGpt = sp.GetRequiredService<ChatGptSubscriptionProvider>();
+            var dashQuality = sp.GetRequiredService<DashScopeProvider>();               // 绑 Current.DashScopeModel
+            var dashFast = new DashScopeProvider(dashClient, () => settings.Current.FastModel);
+
+            ITranslationProvider Quality() =>
+                settings.Current.Active == TranslationEngine.DashScope ? dashQuality : chatGpt;
+            ITranslationProvider Fast() =>
+                settings.Current.FastEngine == TranslationEngine.DashScope ? dashFast : chatGpt;
+
+            return new TieredTranslator(
+                sp.GetRequiredService<Glossary>(),
+                sp.GetRequiredService<TranslationCache>(),
+                Fast, Quality,
+                () => settings.Current);
+        });
 
         builder.Services.AddSingleton<TrayService>();
         builder.Services.AddSingleton(sp => new Phase1Probe(
@@ -85,8 +98,9 @@ public partial class App : Application
             sp.GetRequiredService<FileLogger>(),
             sp.GetRequiredService<OverlayWindow>(),
             Path.Combine(baseDir, "rois.json"),
-            sp.GetRequiredService<TranslationService>(),
-            sp.GetRequiredService<SettingsHolder>()));
+            sp.GetRequiredService<TieredTranslator>(),
+            sp.GetRequiredService<SettingsHolder>(),
+            sp.GetRequiredService<Glossary>()));
 
         _host = builder.Build();
 

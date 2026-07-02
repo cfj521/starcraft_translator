@@ -10,7 +10,7 @@ using ScrTranslator.App.Interop;
 namespace ScrTranslator.App;
 
 /// <summary>一条上屏文本：物理屏幕像素坐标（左上角）。</summary>
-public record OverlayItem(string Text, double ScreenLeft, double ScreenTop);
+public record OverlayItem(string Text, double ScreenLeft, double ScreenTop, bool Provisional = false);
 
 public partial class OverlayWindow : Window
 {
@@ -42,7 +42,9 @@ public partial class OverlayWindow : Window
                 Text = it.Text,
                 FontSize = 20,
                 FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
+                Foreground = it.Provisional ? new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD)) : Brushes.White,
+                FontStyle = it.Provisional ? FontStyles.Italic : FontStyles.Normal,
+                Opacity = it.Provisional ? 0.65 : 1.0,
                 Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 6, ShadowDepth = 0, Opacity = 1 },
             };
             Canvas.SetLeft(tb, it.ScreenLeft / dpi.DpiScaleX);

@@ -17,19 +17,21 @@ public sealed class Phase1Probe : IDisposable
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
     private readonly RoiConfig _cfg;
-    private readonly TranslationService _translator;
+    private readonly TieredTranslator _tiered;
     private readonly SettingsHolder _settings;
+    private readonly string _glossaryHint;
     private const string Scene = "custom_games_listing";
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
     private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
 
     public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay,
-        string roisJsonPath, TranslationService translator, SettingsHolder settings)
+        string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary)
     {
         _capture = capture; _ocr = ocr; _log = log; _overlay = overlay;
         _cfg = RoiStore.Load(roisJsonPath);
-        _translator = translator; _settings = settings;
+        _tiered = tiered; _settings = settings;
+        _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
     }
 
@@ -115,31 +117,31 @@ public sealed class Phase1Probe : IDisposable
             if (joined == _lastJoined) return; // finally 仍会 Dispose(frame) 并复位 _busy
 
             var engine = _settings.Current.Active;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            IReadOnlyList<string> zh;
-            if (koLines.Count > 0)
-            {
-                // 超时保护(spec §6)：超时/失败 → TranslationService 降级回原文，避免网络挂起时 overlay 冻结。
-                int timeout = Math.Max(1, _settings.Current.TimeoutSeconds);
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-                zh = await _translator.TranslateAsync(koLines, cts.Token);
-            }
-            else zh = Array.Empty<string>();
-            sw.Stop();
+            var ctx = new TranslationContext(Scene, _glossaryHint);
+            int timeout = Math.Max(1, _settings.Current.TimeoutSeconds);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
 
-            var items = new List<OverlayItem>();
-            for (int k = 0; k < koLines.Count; k++)
+            void Render(IReadOnlyList<LineTranslation> snap)
             {
-                var (frameBounds, roiName) = metas[k];
-                var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
-                items.Add(new OverlayItem(zh[k], scr.X, scr.Y));
-                _log.Log($"[{roiName}][{k}] \"{koLines[k]}\" -> \"{zh[k]}\" engine={engine} {sw.ElapsedMilliseconds}ms");
+                var items = new List<OverlayItem>(snap.Count);
+                foreach (var ln in snap)
+                {
+                    var (frameBounds, _) = metas[ln.Index];
+                    var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
+                    items.Add(new OverlayItem(ln.Text, scr.X, scr.Y, ln.Stage == TranslationStage.Provisional));
+                }
+                _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
             }
-            // 翻译与映射均成功后才提交"已展示"状态：若上面任一步抛出(被外层 catch)，
-            // 本帧不标记为已展示，下一帧同内容仍会重试，避免误判"未变"导致永不上屏。
-            _lastJoined = joined;
-            _log.Log($"[probe] 上屏 {items.Count} 行");
-            _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var outcome = await _tiered.TranslateAsync(koLines, ctx, Render, cts.Token);
+            sw.Stop();
+            for (int k = 0; k < koLines.Count; k++)
+                _log.Log($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" engine={engine} 两级={_settings.Current.TwoLevel} {sw.ElapsedMilliseconds}ms");
+
+            // 仅当无“总失败”行(AllResolved)才提交变化检测,否则下一帧同内容重试。
+            if (outcome.AllResolved) _lastJoined = joined;
+            _log.Log($"[probe] 上屏完成 AllResolved={outcome.AllResolved}");
         }
         catch (Exception ex) { _log.Log($"[probe] 异常: {ex.Message}"); }
         finally { frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }

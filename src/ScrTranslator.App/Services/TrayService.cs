@@ -22,6 +22,7 @@ public sealed class TrayService : IDisposable
     private MenuItem? _loginItem;
     private MenuItem? _engineDashScopeItem;
     private MenuItem? _engineChatGptItem;
+    private MenuItem? _twoLevelItem;
 
     public TrayService(OverlayWindow overlay, OpenAiOAuth oauth, SettingsHolder settings, SecretStore store, FileLogger log)
     {
@@ -57,6 +58,10 @@ public sealed class TrayService : IDisposable
         engineMenu.Items.Add(_engineDashScopeItem);
         engineMenu.Items.Add(_engineChatGptItem);
 
+        _twoLevelItem = new MenuItem { Header = "两级翻译（快译临时→精译定稿）", IsCheckable = true };
+        _twoLevelItem.Click += (_, _) => ToggleTwoLevel();
+        RefreshTwoLevelCheck();
+
         var exitItem = new MenuItem { Header = "退出" };
         exitItem.Click += (_, _) => Application.Current.Shutdown();
 
@@ -67,6 +72,7 @@ public sealed class TrayService : IDisposable
         menu.Items.Add(_loginItem);
         menu.Items.Add(keyItem);
         menu.Items.Add(engineMenu);
+        menu.Items.Add(_twoLevelItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(exitItem);
 
@@ -137,6 +143,18 @@ public sealed class TrayService : IDisposable
         var active = _settings.Current.Active;
         _engineDashScopeItem.IsChecked = active == TranslationEngine.DashScope;
         _engineChatGptItem.IsChecked = active == TranslationEngine.ChatGpt;
+    }
+
+    private void ToggleTwoLevel()
+    {
+        _settings.Current = _settings.Current with { TwoLevel = !_settings.Current.TwoLevel };
+        RefreshTwoLevelCheck();
+        OnTranslationStateChanged?.Invoke(); // 切换后让静止画面按新模式立即重译
+    }
+
+    private void RefreshTwoLevelCheck()
+    {
+        if (_twoLevelItem is not null) _twoLevelItem.IsChecked = _settings.Current.TwoLevel;
     }
 
     private void ToggleOverlay()
