@@ -88,6 +88,8 @@ public sealed class Phase1Probe : IDisposable
             var bucket = RoiStore.SelectBucket(_cfg, Scene, frame.Width, frame.Height);
             var koLines = new List<string>();
             var metas = new List<(RectangleF frameBounds, string roiName)>();
+            var t = _settings.Current.Translation;
+            var scope = new ContentScopeSettings(t.TranslateChat, t.TranslateRoomName, t.TranslateMapInfo, t.TranslatePlayerId);
             foreach (var roi in bucket.Rois)
             {
                 Rectangle px = RoiStore.ToPixels(roi.Rect, frame.Width, frame.Height);
@@ -98,10 +100,17 @@ public sealed class Phase1Probe : IDisposable
                     _log.Log($"[{roi.Name}] 裁剪失败 rect={px}");
                     continue;
                 }
+                var roiType = RoiTypes.Parse(roi.Type);
                 var res = await _ocr.RecognizeAsync(sub);
                 foreach (var line in res.Lines)
                 {
                     _log.Log($"[{roi.Name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
+                    double relX = (line.Bounds.X + line.Bounds.Width / 2.0) / Math.Max(1, px.Width);
+                    ColumnKind? col = roi.Columns is null
+                        ? (roiType == RoiType.RoomList ? ColumnKind.RoomName : (ColumnKind?)null)
+                        : TranslationScope.HitColumn(roi.Columns, relX);
+                    bool translate = TranslationScope.ShouldTranslate(roiType, col, scope);
+                    if (!translate) continue;
                     var frameBounds = new RectangleF(
                         line.Bounds.X + px.Left, line.Bounds.Y + px.Top,
                         line.Bounds.Width, line.Bounds.Height);
