@@ -20,6 +20,10 @@ public partial class App : Application
     private IHost? _host;
     private TrayService? _trayService;
     private HotkeyService? _hotkeys;
+    private Action? _openSettingsAction;
+
+    /// <summary>公开给外部（M4：Ctrl+F9 全局热键接线）打开配置窗口。</summary>
+    public void OpenSettingsWindow() => _openSettingsAction?.Invoke();
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -150,6 +154,30 @@ public partial class App : Application
             calibrationWindow.Activate();
         }
         _trayService.OpenCalibration = OpenCalibration;
+
+        // 配置窗口：单例（已开则激活），托盘"配置…"/双击托盘图标打开；窗口关闭后置空以便下次可重新 new。
+        var settingsHolder = _host.Services.GetRequiredService<SettingsHolder>();
+        var secretStoreForSettings = _host.Services.GetRequiredService<SecretStore>();
+        var oauthForSettings = _host.Services.GetRequiredService<OpenAiOAuth>();
+        Config.SettingsWindow? settingsWindow = null;
+        void OpenSettings()
+        {
+            if (settingsWindow is not null) { settingsWindow.Activate(); return; }
+            settingsWindow = new Config.SettingsWindow(
+                settingsHolder,
+                settingsPath,
+                Path.Combine(baseDir, "rois.json"),
+                secretStoreForSettings,
+                oauthForSettings,
+                log,
+                OpenCalibration,
+                probe.ResetChangeDetection);
+            settingsWindow.Closed += (_, _) => settingsWindow = null;
+            settingsWindow.Show();
+            settingsWindow.Activate();
+        }
+        _trayService.OpenSettings = OpenSettings;
+        _openSettingsAction = OpenSettings;
 
         // 全局热键：F9 开关探测、F10 显隐悬浮窗、F8 进入校准（游戏有焦点时也生效）
         _hotkeys = new HotkeyService(overlay);

@@ -36,6 +36,8 @@ public sealed class TrayService : IDisposable
     public Action? OnTranslationStateChanged { get; set; }
     /// <summary>托盘"进入校准…"菜单项触发（打开 CalibrationWindow，由 App.xaml.cs 提供实现）。</summary>
     public Action? OpenCalibration { get; set; }
+    /// <summary>托盘"配置…"菜单项 + 双击托盘图标触发（打开 SettingsWindow，由 App.xaml.cs 提供实现）。</summary>
+    public Action? OpenSettings { get; set; }
 
     public void Initialize()
     {
@@ -47,6 +49,9 @@ public sealed class TrayService : IDisposable
 
         var calibrateItem = new MenuItem { Header = "进入校准…" };
         calibrateItem.Click += (_, _) => OpenCalibration?.Invoke();
+
+        var settingsItem = new MenuItem { Header = "配置…" };
+        settingsItem.Click += (_, _) => OpenSettings?.Invoke();
 
         _loginItem = new MenuItem { Header = "登录 ChatGPT（订阅）" };
         _loginItem.Click += async (_, _) => await OnLoginChatGptAsync();
@@ -77,6 +82,7 @@ public sealed class TrayService : IDisposable
         menu.Items.Add(probeItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(calibrateItem);
+        menu.Items.Add(settingsItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(_loginItem);
         menu.Items.Add(keyItem);
@@ -95,6 +101,7 @@ public sealed class TrayService : IDisposable
             },
             ContextMenu = menu,
         };
+        _trayIcon.TrayLeftMouseDoubleClick += (_, _) => OpenSettings?.Invoke(); // 双击托盘图标 = 打开配置窗口
         _trayIcon.ForceCreate();
     }
 
