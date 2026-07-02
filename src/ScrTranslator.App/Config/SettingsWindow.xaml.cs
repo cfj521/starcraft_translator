@@ -80,6 +80,16 @@ public partial class SettingsWindow : Window
 
         LoadFromSettings(_holder.Current);
         Activated += (_, _) => LoadRoiList(); // 从校准窗口返回时刷新区域页
+        Closed += OnWindowClosed;
+    }
+
+    // 若用户在"录制中"（已点修改、尚未按键/Esc）关闭本窗口，PreviewKeyDown 订阅本会一直挂着；
+    // 这里兜底注销，避免 handler 残留、_recordingFunc 悬空。
+    private void OnWindowClosed(object? sender, EventArgs e)
+    {
+        if (_recordingFunc is null) return;
+        PreviewKeyDown -= OnRecordKeyDown;
+        _recordingFunc = null;
     }
 
     // ── 加载 ─────────────────────────────────────────────────────────────

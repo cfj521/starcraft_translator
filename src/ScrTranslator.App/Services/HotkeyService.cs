@@ -18,10 +18,12 @@ public sealed class HotkeyService : IDisposable
     private readonly IntPtr _hwnd;
     private readonly HwndSource _source;
 
-    // 派发用：Win32 热键 id → 动作。
+    // 派发用：Win32 热键 id → 动作。仅含"当前生效中"的 OS 级注册。
     private readonly Dictionary<int, Action> _idToAction = new();
-    // 管理用：功能名 → 当前 id / 当前绑定 / 动作（后两者跨重绑保留，供 Rebind/ResetToDefaults 复用）。
+    // 管理用：功能名 → 当前生效 id。只有 RegisterHotKey 成功时才有条目；失败（如启动时被占用）则该 func 不在此表中。
     private readonly Dictionary<string, int> _funcToId = new();
+    // 意图表：功能名 → 绑定 / 动作。只要调用过 Register(func, ...) 就会记录，且不随 RegisterHotKey 成败而消失，
+    // 供 Rebind/ResetToDefaults 在此前注册失败时仍能找到动作并重新尝试。
     private readonly Dictionary<string, HotkeyBinding> _funcToBinding = new();
     private readonly Dictionary<string, Action> _funcToAction = new();
     private int _nextId = 1;
@@ -45,17 +47,20 @@ public sealed class HotkeyService : IDisposable
     }
 
     /// <summary>按功能名注册（若该功能名此前已注册，先注销旧绑定再注册新绑定）。
-    /// 成功返回 true 并记录 func→binding→action；失败返回 false（该功能名不会残留旧注册）。</summary>
+    /// 无论 RegisterHotKey 是否成功，都会记录 func→binding→action 的"意图"（供 Rebind/ResetToDefaults 后续复用）；
+    /// 只有 RegisterHotKey 成功时才会记录 func→id 的"当前生效"注册。
+    /// 成功返回 true；失败返回 false（例如启动时被其它程序占用），但该功能名不会因此从管理表中消失。</summary>
     public bool Register(string func, HotkeyBinding binding, Action action)
     {
-        UnregisterFunc(func, keepAction: false);
+        UnregisterLive(func);
+        _funcToAction[func] = action;
+        _funcToBinding[func] = binding;
+
         int id = _nextId++;
         if (!NativeMethods.RegisterHotKey(_hwnd, id, binding.Modifiers, binding.Vk))
             return false;
         _idToAction[id] = action;
         _funcToId[func] = id;
-        _funcToBinding[func] = binding;
-        _funcToAction[func] = action;
         return true;
     }
 
@@ -74,16 +79,19 @@ public sealed class HotkeyService : IDisposable
         return results;
     }
 
-    /// <summary>把某功能重绑到新组合键：注销旧绑定 → 注册新绑定；若新绑定注册失败（如被其它程序占用），
-    /// 自动回滚到重绑前的绑定并返回 false（该功能不会变成"无热键可用"状态）。
-    /// 该功能须此前已通过 Register/RegisterAll 注册过（否则找不到关联动作，直接返回 false）。</summary>
+    /// <summary>把某功能重绑到新组合键：注销旧绑定（若有生效中的）→ 注册新绑定；若新绑定注册失败（如被其它程序占用），
+    /// 在此前确有生效绑定时自动回滚到重绑前的绑定，使该功能不会变成"无热键可用"状态。
+    /// 即使该功能此前因启动时被占用而从未注册成功（无生效 id），只要曾通过 Register/RegisterAll 记录过意图
+    /// （_funcToAction 中存在），本方法仍会尝试注册 newBinding——这正是"修改"能让此前失败的功能恢复的关键。
+    /// 该功能须此前已通过 Register/RegisterAll 注册过意图（否则找不到关联动作，直接返回 false）。</summary>
     public bool Rebind(string func, HotkeyBinding newBinding)
     {
         if (!_funcToAction.TryGetValue(func, out var action))
             return false;
         _funcToBinding.TryGetValue(func, out var oldBinding);
+        bool hadLive = _funcToId.ContainsKey(func);
 
-        UnregisterFunc(func, keepAction: true);
+        UnregisterLive(func);
 
         int id = _nextId++;
         if (NativeMethods.RegisterHotKey(_hwnd, id, newBinding.Modifiers, newBinding.Vk))
@@ -94,8 +102,8 @@ public sealed class HotkeyService : IDisposable
             return true;
         }
 
-        // 回滚：重新注册重绑前的绑定，使该功能仍可用。
-        if (oldBinding is not null)
+        // 新绑定注册失败：仅当重绑前确有生效绑定时，才尝试恢复它（否则该功能本就无生效 id，无需也无从恢复）。
+        if (hadLive && oldBinding is not null)
         {
             int rollbackId = _nextId++;
             if (NativeMethods.RegisterHotKey(_hwnd, rollbackId, oldBinding.Modifiers, oldBinding.Vk))
@@ -104,17 +112,22 @@ public sealed class HotkeyService : IDisposable
                 _funcToId[func] = rollbackId;
                 _funcToBinding[func] = oldBinding;
             }
+            // 连旧绑定都无法恢复（理论上罕见）：_funcToBinding 保留 oldBinding 作为意图，_funcToId 无该 func 条目，
+            // 不留下指向未注册 id 的残留映射。
         }
+        // 重绑前本就无生效绑定：_funcToBinding 保持不变（仍是此前记录的意图，若从未记录过则维持缺省/null），
+        // 不会残留孤立 id。
         return false;
     }
 
-    /// <summary>恢复为给定默认绑定表：先注销所有当前已注册功能（但保留其动作），再按默认表逐一重新注册。
+    /// <summary>恢复为给定默认绑定表：先注销所有当前生效中的功能，再按默认表逐一重新注册。
     /// 先全注销再全注册，避免"重绑到 A 的默认键时，B 尚未让出该键"导致的假性冲突失败。
-    /// 只对此前已注册过（有关联动作）的功能名生效，其余默认项跳过。</summary>
+    /// 只对此前记录过意图（_funcToAction 中存在，含启动时注册失败、当前无生效 id 的功能）的功能名生效，
+    /// 其余默认项跳过——因此此前失败的功能也能在这里获得重新注册的机会。</summary>
     public void ResetToDefaults(IReadOnlyDictionary<string, HotkeyBinding> defaults)
     {
         foreach (var func in _funcToId.Keys.ToList())
-            UnregisterFunc(func, keepAction: true);
+            UnregisterLive(func);
 
         foreach (var (func, binding) in defaults)
         {
@@ -129,21 +142,21 @@ public sealed class HotkeyService : IDisposable
         }
     }
 
-    /// <summary>查询某功能当前生效的绑定；未注册过返回 null。</summary>
+    /// <summary>查询某功能记录的绑定意图（即使该绑定因启动时被占用等原因当前并未生效也会返回）；
+    /// 从未 Register 过该功能名返回 null。</summary>
     public HotkeyBinding? CurrentBinding(string func) =>
         _funcToBinding.TryGetValue(func, out var b) ? b : null;
 
-    private void UnregisterFunc(string func, bool keepAction)
+    /// <summary>仅注销某功能"当前生效"的 OS 级注册（若有），不触碰 _funcToAction/_funcToBinding 记录的意图。
+    /// 调用方负责在需要时另行更新意图表。</summary>
+    private void UnregisterLive(string func)
     {
         if (_funcToId.TryGetValue(func, out var id))
         {
             NativeMethods.UnregisterHotKey(_hwnd, id);
             _idToAction.Remove(id);
             _funcToId.Remove(func);
-            _funcToBinding.Remove(func);
         }
-        if (!keepAction)
-            _funcToAction.Remove(func);
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
