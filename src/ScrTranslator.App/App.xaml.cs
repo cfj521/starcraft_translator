@@ -137,12 +137,26 @@ public partial class App : Application
         _trayService.ToggleProbe = ToggleProbe;
         _trayService.OnTranslationStateChanged = probe.ResetChangeDetection; // 切引擎/登录成功后立即重译静止画面
 
-        // 全局热键：F9 开关探测、F10 显隐悬浮窗（游戏有焦点时也生效）
         var log = _host.Services.GetRequiredService<FileLogger>();
+
+        // 校准窗口：单例（已开则激活），F8/托盘"进入校准…"打开。窗口关闭后置空以便下次可重新 new（WPF Window 一次性）。
+        Calibration.CalibrationWindow? calibrationWindow = null;
+        void OpenCalibration()
+        {
+            if (calibrationWindow is not null) { calibrationWindow.Activate(); return; }
+            calibrationWindow = new Calibration.CalibrationWindow(Path.Combine(baseDir, "rois.json"), log);
+            calibrationWindow.Closed += (_, _) => calibrationWindow = null;
+            calibrationWindow.Show();
+            calibrationWindow.Activate();
+        }
+        _trayService.OpenCalibration = OpenCalibration;
+
+        // 全局热键：F9 开关探测、F10 显隐悬浮窗、F8 进入校准（游戏有焦点时也生效）
         _hotkeys = new HotkeyService(overlay);
         bool f9 = _hotkeys.Register(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9, ToggleProbe);
         bool f10 = _hotkeys.Register(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10, ToggleOverlay);
-        log.Log($"[hotkey] 注册 F9(开关探测)={f9} F10(显隐悬浮)={f10}");
+        bool f8 = _hotkeys.Register(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8, OpenCalibration);
+        log.Log($"[hotkey] 注册 F9(开关探测)={f9} F10(显隐悬浮)={f10} F8(进入校准)={f8}");
     }
 
     protected override void OnExit(ExitEventArgs e)

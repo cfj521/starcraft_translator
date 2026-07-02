@@ -119,4 +119,35 @@ public class RoiStoreTests
         Assert.Equal(ColumnKind.RoomName, back.Columns[1].Kind);
         Assert.Equal(1.0, back.Columns[1].RelEnd);
     }
+
+    [Fact]
+    public void Load_MissingFile_ReturnsEmptyConfig_NotThrow()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "definitely_missing_" + Guid.NewGuid() + ".json");
+        var cfg = RoiStore.Load(path);
+        Assert.Empty(cfg.Scenes);
+    }
+
+    [Fact]
+    public void Load_CorruptJson_ReturnsEmptyConfig_NotThrow()
+    {
+        var path = Path.GetTempFileName();
+        File.WriteAllText(path, "{ scenes: { this is not valid json ");
+        var cfg = RoiStore.Load(path);
+        Assert.Empty(cfg.Scenes);
+    }
+
+    [Fact]
+    public void Save_WritesAtomically_NoLeftoverTempFile()
+    {
+        var roi = new Roi("x", "Chat", new RelRect(0, 0, 1, 1));
+        var cfg = new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>
+            { ["s"] = new[] { new SceneBucket("1x1", new[] { roi }) } });
+        var path = Path.GetTempFileName();
+        RoiStore.Save(cfg, path);
+        Assert.True(File.Exists(path));
+        string dir = Path.GetDirectoryName(path)!;
+        var leftoverTemps = Directory.GetFiles(dir, Path.GetFileName(path) + ".tmp*");
+        Assert.Empty(leftoverTemps);
+    }
 }

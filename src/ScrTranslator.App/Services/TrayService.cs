@@ -34,6 +34,8 @@ public sealed class TrayService : IDisposable
     public Action? ToggleProbe { get; set; }
     /// <summary>切引擎/登录成功后触发（用于复位管线变化检测，让静止画面立即重译）。</summary>
     public Action? OnTranslationStateChanged { get; set; }
+    /// <summary>托盘"进入校准…"菜单项触发（打开 CalibrationWindow，由 App.xaml.cs 提供实现）。</summary>
+    public Action? OpenCalibration { get; set; }
 
     public void Initialize()
     {
@@ -42,6 +44,9 @@ public sealed class TrayService : IDisposable
 
         var probeItem = new MenuItem { Header = "开始/停止 Phase1 探测" };
         probeItem.Click += (_, _) => ToggleProbe?.Invoke();
+
+        var calibrateItem = new MenuItem { Header = "进入校准…" };
+        calibrateItem.Click += (_, _) => OpenCalibration?.Invoke();
 
         _loginItem = new MenuItem { Header = "登录 ChatGPT（订阅）" };
         _loginItem.Click += async (_, _) => await OnLoginChatGptAsync();
@@ -70,6 +75,8 @@ public sealed class TrayService : IDisposable
         var menu = new ContextMenu();
         menu.Items.Add(toggleItem);
         menu.Items.Add(probeItem);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(calibrateItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(_loginItem);
         menu.Items.Add(keyItem);

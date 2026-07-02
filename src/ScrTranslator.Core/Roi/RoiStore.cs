@@ -42,45 +42,57 @@ public static class RoiStore
         return best ?? buckets[0];
     }
 
+    /// <summary>读取 rois.json；文件缺失/损坏(截断/非法 JSON)一律**不抛异常**，返回空-但-合法的 RoiConfig
+    /// (Scenes 为空字典)，避免校准/探测因一份坏文件而崩溃启动。</summary>
     public static RoiConfig Load(string jsonPath)
     {
-        using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
-        var scenes = new Dictionary<string, IReadOnlyList<SceneBucket>>();
-        foreach (var sceneProp in doc.RootElement.GetProperty("scenes").EnumerateObject())
+        try
         {
-            var bucketList = new List<SceneBucket>();
-            foreach (var bucketEl in sceneProp.Value.GetProperty("buckets").EnumerateArray())
+            using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+            var scenes = new Dictionary<string, IReadOnlyList<SceneBucket>>();
+            foreach (var sceneProp in doc.RootElement.GetProperty("scenes").EnumerateObject())
             {
-                string res = bucketEl.GetProperty("resolution").GetString()!;
-                var rois = new List<Roi>();
-                foreach (var roiEl in bucketEl.GetProperty("rois").EnumerateArray())
+                var bucketList = new List<SceneBucket>();
+                foreach (var bucketEl in sceneProp.Value.GetProperty("buckets").EnumerateArray())
                 {
-                    var r = roiEl.GetProperty("rect");
-                    var rect = new RelRect(
-                        r[0].GetDouble(), r[1].GetDouble(), r[2].GetDouble(), r[3].GetDouble());
-                    IReadOnlyList<RoiColumn>? columns = null;
-                    if (roiEl.TryGetProperty("columns", out var colsEl) && colsEl.ValueKind == JsonValueKind.Array)
+                    string res = bucketEl.GetProperty("resolution").GetString()!;
+                    var rois = new List<Roi>();
+                    foreach (var roiEl in bucketEl.GetProperty("rois").EnumerateArray())
                     {
-                        var list = new List<RoiColumn>();
-                        foreach (var c in colsEl.EnumerateArray())
-                            list.Add(new RoiColumn(
-                                c.GetProperty("start").GetDouble(),
-                                c.GetProperty("end").GetDouble(),
-                                ColumnKinds.Parse(c.GetProperty("kind").GetString() ?? "Other")));
-                        columns = list;
+                        var r = roiEl.GetProperty("rect");
+                        var rect = new RelRect(
+                            r[0].GetDouble(), r[1].GetDouble(), r[2].GetDouble(), r[3].GetDouble());
+                        IReadOnlyList<RoiColumn>? columns = null;
+                        if (roiEl.TryGetProperty("columns", out var colsEl) && colsEl.ValueKind == JsonValueKind.Array)
+                        {
+                            var list = new List<RoiColumn>();
+                            foreach (var c in colsEl.EnumerateArray())
+                                list.Add(new RoiColumn(
+                                    c.GetProperty("start").GetDouble(),
+                                    c.GetProperty("end").GetDouble(),
+                                    ColumnKinds.Parse(c.GetProperty("kind").GetString() ?? "Other")));
+                            columns = list;
+                        }
+                        rois.Add(new Roi(
+                            roiEl.GetProperty("name").GetString()!,
+                            roiEl.GetProperty("type").GetString()!,
+                            rect, columns));
                     }
-                    rois.Add(new Roi(
-                        roiEl.GetProperty("name").GetString()!,
-                        roiEl.GetProperty("type").GetString()!,
-                        rect, columns));
+                    bucketList.Add(new SceneBucket(res, rois));
                 }
-                bucketList.Add(new SceneBucket(res, rois));
+                scenes[sceneProp.Name] = bucketList;
             }
-            scenes[sceneProp.Name] = bucketList;
+            return new RoiConfig(scenes);
         }
-        return new RoiConfig(scenes);
+        catch
+        {
+            // 文件不存在 / 权限问题 / JSON 截断或非法 / schema 缺字段 —— 一律兜底为空配置，不崩调用方。
+            return new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>());
+        }
     }
 
+    /// <summary>写 rois.json：先写临时文件再 <see cref="File.Move(string,string,bool)"/> 原子替换，
+    /// 避免写到一半被中断（崩溃/断电）导致目标文件截断损坏。</summary>
     public static void Save(RoiConfig cfg, string jsonPath)
     {
         var scenes = new Dictionary<string, object>();
@@ -99,7 +111,13 @@ public static class RoiStore
             };
         }
         var root = new { scenes };
-        File.WriteAllText(jsonPath, JsonSerializer.Serialize(root,
-            new JsonSerializerOptions { WriteIndented = true }));
+        string json = JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true });
+
+        string? dir = Path.GetDirectoryName(jsonPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        string tmp = jsonPath + ".tmp" + Guid.NewGuid().ToString("N");
+        File.WriteAllText(tmp, json);
+        File.Move(tmp, jsonPath, overwrite: true);
     }
 }
