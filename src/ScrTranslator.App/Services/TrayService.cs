@@ -210,10 +210,7 @@ public sealed class TrayService : IDisposable
 
     private void ToggleOverlay()
     {
-        if (_overlay.IsVisible)
-            _overlay.Hide();
-        else
-            _overlay.Show();
+        _overlay.EnabledByUser = !_overlay.EnabledByUser; // 意图开关；实际显隐由探测按"游戏前台"叠加计算
     }
 
     /// <summary>M4：热键切换类动作触发后的短提示（如"玩家ID翻译: 开"）。用系统气泡通知，托盘未初始化时静默忽略。</summary>

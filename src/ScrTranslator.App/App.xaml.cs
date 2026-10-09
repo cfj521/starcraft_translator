@@ -21,6 +21,7 @@ public partial class App : Application
     private TrayService? _trayService;
     private HotkeyService? _hotkeys;
     private Action? _openSettingsAction;
+    private System.Threading.Mutex? _instanceMutex; // 单实例守护：托盘应用重复启动会多悬浮层/抢热键
 
     /// <summary>公开给外部（M4：Ctrl+F9 全局热键接线）打开配置窗口。</summary>
     public void OpenSettingsWindow() => _openSettingsAction?.Invoke();
@@ -28,6 +29,17 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // 单实例：命名 Mutex 持有整个进程生命周期。第二个实例提示后强制退出，避免重复悬浮窗/热键/捕获。
+        // 进程崩溃时 OS 自动释放(abandoned mutex)，不会留死锁。
+        _instanceMutex = new System.Threading.Mutex(initiallyOwned: true, name: "ScrTranslator_SingleInstance", createdNew: out bool isFirst);
+        if (!isFirst)
+        {
+            MessageBox.Show("SC:R 翻译器已在运行（请查看系统托盘图标）。", "已在运行",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            Environment.Exit(0); // 强制终止，不依赖 OnStartup 阶段 Shutdown 的边界行为
+            return;
+        }
 
         // 全局异常兜底：写 crash.log，且 UI 线程异常不再静默杀进程（诊断用）。
         string crashLog = Path.Combine(AppContext.BaseDirectory, "logs", "crash.log");
@@ -51,6 +63,7 @@ public partial class App : Application
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<OverlayWindow>();
+        builder.Services.AddSingleton<DebugWindow>();
 
         string baseDir = AppContext.BaseDirectory;
         builder.Services.AddSingleton<FileLogger>(_ =>
@@ -126,12 +139,18 @@ public partial class App : Application
             roisPath,
             sp.GetRequiredService<TieredTranslator>(),
             sp.GetRequiredService<SettingsHolder>(),
-            sp.GetRequiredService<Glossary>()));
+            sp.GetRequiredService<Glossary>(),
+            sp.GetRequiredService<DebugWindow>()));
 
         _host = builder.Build();
 
         var overlay = _host.Services.GetRequiredService<OverlayWindow>();
         overlay.Show();
+
+        // 调试窗口：先 Show() 建句柄再置 Hidden（ShowActivated=False 不抢焦点）。之后由探测定时器按前台+DebugMode 切 Visibility。
+        var debug = _host.Services.GetRequiredService<DebugWindow>();
+        debug.Show();
+        debug.Visibility = Visibility.Hidden;
 
         _trayService = _host.Services.GetRequiredService<TrayService>();
         _trayService.Initialize();
@@ -163,7 +182,7 @@ public partial class App : Application
         }
         void ToggleOverlay()
         {
-            if (overlay.IsVisible) overlay.Hide(); else overlay.Show();
+            overlay.EnabledByUser = !overlay.EnabledByUser; // 意图开关；实际显隐由探测按"游戏前台"叠加计算
         }
         _trayService.ToggleProbe = ToggleProbe;
         _trayService.OnTranslationStateChanged = probe.ResetChangeDetection; // 切引擎/登录成功后立即重译静止画面
@@ -286,6 +305,8 @@ public partial class App : Application
         _hotkeys?.Dispose();
         _trayService?.Dispose();
         _host?.Dispose();
+        _instanceMutex?.ReleaseMutex();
+        _instanceMutex?.Dispose();
         base.OnExit(e);
     }
 }

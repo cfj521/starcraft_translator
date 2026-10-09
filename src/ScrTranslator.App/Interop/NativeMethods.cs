@@ -46,6 +46,11 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsIconic(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindowInternal();
+    /// <summary>当前前台窗口句柄（用于游戏非活动时隐藏悬浮/调试窗口）。</summary>
+    public static IntPtr GetForegroundWindow() => GetForegroundWindowInternal();
+
     // ── 全局热键 ──────────────────────────────────────────────────────────────
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

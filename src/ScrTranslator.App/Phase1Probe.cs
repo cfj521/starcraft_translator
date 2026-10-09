@@ -63,7 +63,8 @@ public sealed class Phase1Probe : IDisposable
     private long _lastFrameCount; private int _zeroFrameTicks; private bool _noFrameNotified;
     private int _processed; private int _lastProcessed; private int _stallTicks; private bool _stallNotified;
 
-    // ── DEBUG 面板状态（F6/常规页开关驱动，500ms 刷新）──
+    // ── DEBUG 面板 + 窗口显隐（F6/常规页开关 + 游戏前台门控，250ms 刷新）──
+    private readonly DebugWindow _debug;
     private DispatcherTimer? _debugTimer;
     private int _glossaryCount;
     private string _lastFrameWH = "—";
@@ -75,9 +76,9 @@ public sealed class Phase1Probe : IDisposable
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
     public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay,
-        string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary)
+        string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary, DebugWindow debug)
     {
-        _capture = capture; _ocr = ocr; _log = log; _overlay = overlay;
+        _capture = capture; _ocr = ocr; _log = log; _overlay = overlay; _debug = debug;
         _roisJsonPath = roisJsonPath;
         _cfg = RoiStore.Load(roisJsonPath);
         RefreshRoiDerivedFlags();
@@ -86,9 +87,9 @@ public sealed class Phase1Probe : IDisposable
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
         _capture.Log = msg => _log.Log(msg); // 帧转换异常进文件日志（诊断）
-        // DEBUG 面板：500ms 刷新，读 General.DebugMode 决定显隐（F6/常规页开关即时生效，无需重启）。
-        _debugTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _debugTimer.Tick += (_, _) => RefreshDebug();
+        // 窗口显隐：250ms 刷新。游戏非前台→隐藏悬浮层+调试窗口；前台→按用户意图(overlay.EnabledByUser / General.DebugMode)显示。
+        _debugTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _debugTimer.Tick += (_, _) => ApplyWindowVisibility();
         _debugTimer.Start();
     }
 
@@ -259,12 +260,25 @@ public sealed class Phase1Probe : IDisposable
     private void ClearOverlay() =>
         _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
 
-    /// <summary>DEBUG 面板刷新（DispatcherTimer 500ms，UI 线程）：读 General.DebugMode 决定显隐，开则重建文本。</summary>
-    private void RefreshDebug()
+    /// <summary>按"游戏是否前台"叠加用户意图，计算悬浮层与调试窗口的可见性（用 Visibility，不 Show/Hide 以免抢焦点）。
+    /// 调试窗口显示时顺带刷新文本。</summary>
+    private void ApplyWindowVisibility()
     {
-        bool on = _settings.Current.General.DebugMode;
-        _overlay.SetDebugVisible(on);
-        if (on) _overlay.UpdateDebug(BuildDebugText());
+        bool gameActive = IsGameForeground();
+        var overlayTarget = gameActive && _overlay.EnabledByUser ? System.Windows.Visibility.Visible : System.Windows.Visibility.Hidden;
+        if (_overlay.Visibility != overlayTarget) _overlay.Visibility = overlayTarget;
+
+        bool debugOn = gameActive && _settings.Current.General.DebugMode;
+        var debugTarget = debugOn ? System.Windows.Visibility.Visible : System.Windows.Visibility.Hidden;
+        if (_debug.Visibility != debugTarget) _debug.Visibility = debugTarget;
+        if (debugOn) _debug.SetText(BuildDebugText());
+    }
+
+    /// <summary>游戏窗口是否为当前前台窗口。未 Start 时按进程名现查句柄。</summary>
+    private bool IsGameForeground()
+    {
+        IntPtr game = _capture.Hwnd != IntPtr.Zero ? _capture.Hwnd : WindowFinder.FindByProcess(TargetProcess());
+        return game != IntPtr.Zero && NativeMethods.GetForegroundWindow() == game;
     }
 
     private string BuildDebugText()
