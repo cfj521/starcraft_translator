@@ -24,6 +24,22 @@ internal static class NativeMethods
         SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(newStyle));
     }
 
+    /// <summary>开/关点击穿透。开=加 TRANSPARENT|LAYERED；关=仅去 TRANSPARENT（保留 LAYERED，WPF 透明窗需要它）。</summary>
+    public static void SetClickThrough(IntPtr hwnd, bool on)
+    {
+        int ex = (int)GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        if (on) ex = WindowStyles.ApplyClickThrough(ex);
+        else ex &= ~WindowStyles.WS_EX_TRANSPARENT;
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(ex));
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X, Y; }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetCursorPos(out POINT lpPoint);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; }
 

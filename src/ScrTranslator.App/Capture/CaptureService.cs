@@ -27,12 +27,6 @@ public sealed class CaptureService : IDisposable
     /// <summary>帧转换节流(毫秒)。由 Phase1Probe 每帧按设置(Ocr.ChatPollMs/OtherPollMs→PollInterval)刷新；volatile 保证捕获线程读到最新值。默认 400 保持旧行为。</summary>
     public int MinIntervalMs { get => _minIntervalMs; set => _minIntervalMs = value; }
 
-    // ── COM 互操作接口 ──────────────────────────────────────────────────────
-
-    [ComImport, Guid("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IMemoryBufferByteAccess { unsafe void GetBuffer(out byte* buffer, out uint capacity); }
-
     // ── D3D11 / WinRT 原生函数 ───────────────────────────────────────────────
 
     [DllImport("d3d11.dll", EntryPoint = "CreateDirect3D11DeviceFromDXGIDevice",
@@ -122,19 +116,22 @@ public sealed class CaptureService : IDisposable
         var desc = buf.GetPlaneDescription(0);
         int stride = desc.Stride;
 
-        // CsWinRT 把 reference 包成 WinRT.IInspectable，直接 (IMemoryBufferByteAccess)reference 强转会抛
-        // InvalidCastException。必须显式对底层 IUnknown 做 QueryInterface 拿到该 COM 接口的 RCW。
+        // 直接按 COM vtable 调 IMemoryBufferByteAccess::GetBuffer，绕开 CsWinRT 的 RCW 强转坑
+        // （直接强转抛 Invalid cast；GetTypedObjectForIUnknown 再强转抛 Specified cast is not valid）。
+        // vtable 槽位: [0]QueryInterface [1]AddRef [2]Release [3]GetBuffer。同 CreateItemForWindow 的做法。
+        Guid iid = new("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D");
         byte* src; uint cap;
         IntPtr unk = Marshal.GetIUnknownForObject(reference);
         try
         {
-            Guid iid = typeof(IMemoryBufferByteAccess).GUID;
             int hr = Marshal.QueryInterface(unk, ref iid, out IntPtr byteAccess);
             if (hr != 0) Marshal.ThrowExceptionForHR(hr);
             try
             {
-                var acc = (IMemoryBufferByteAccess)Marshal.GetTypedObjectForIUnknown(byteAccess, typeof(IMemoryBufferByteAccess));
-                acc.GetBuffer(out src, out cap);
+                void** vtbl = *(void***)byteAccess;
+                var getBuffer = (delegate* unmanaged[Stdcall]<IntPtr, byte**, uint*, int>)vtbl[3];
+                int hr2 = getBuffer(byteAccess, &src, &cap);
+                if (hr2 != 0) Marshal.ThrowExceptionForHR(hr2);
             }
             finally { Marshal.Release(byteAccess); }
         }

@@ -10,8 +10,8 @@
         ShowActivated="False"
         ResizeMode="NoResize"
         WindowStartupLocation="Manual"
-        Left="10" Top="10">
-    <Border Background="#CC000000" CornerRadius="6" BorderBrush="#60FFFFFF" BorderThickness="1" Padding="8,6">
+        Left="0" Top="0">
+    <Border Background="#CC000000" CornerRadius="0" BorderBrush="#60FFFFFF" BorderThickness="1" Padding="6,4">
         <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,4">
                 <TextBlock Text="DEBUG" Foreground="#FF8FC7FF" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"/>
