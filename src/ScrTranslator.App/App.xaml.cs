@@ -158,6 +158,21 @@ public partial class App : Application
         _trayService.ToggleProbe = ToggleProbe;
         _trayService.OnTranslationStateChanged = probe.ResetChangeDetection; // 切引擎/登录成功后立即重译静止画面
 
+        // Phase 5 异常恢复：看门狗(线程池)事件 → marshal UI 线程 → 托盘气泡。
+        probe.Notice += (kind, msg) => Dispatcher.InvokeAsync(() =>
+        {
+            string title = kind switch
+            {
+                ProbeNotice.WindowLost => "翻译已暂停",
+                ProbeNotice.Reconnected => "翻译已恢复",
+                ProbeNotice.Minimized => "翻译已暂停",
+                ProbeNotice.Restored => "翻译已恢复",
+                ProbeNotice.ResolutionChanged => "需要重新校准",
+                _ => "翻译",
+            };
+            _trayService.ShowToast(title, msg);
+        });
+
         var log = _host.Services.GetRequiredService<FileLogger>();
 
         // 校准窗口：单例（已开则激活），F8/托盘"进入校准…"打开。窗口关闭后置空以便下次可重新 new（WPF Window 一次性）。

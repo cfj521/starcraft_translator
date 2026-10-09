@@ -37,6 +37,15 @@ internal static class NativeMethods
             ? System.Drawing.Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom)
             : System.Drawing.Rectangle.Empty;
 
+    // ── 窗口状态探测（Phase 5 异常恢复看门狗用） ─────────────────────────────
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsIconic(IntPtr hWnd);
+
     // ── 全局热键 ──────────────────────────────────────────────────────────────
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -14,6 +14,9 @@ namespace ScrTranslator.App;
 public sealed record ProbeStartInfo(ProbeStart Status, string ProcessName);
 public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed }
 
+/// <summary>Phase 5 异常恢复事件：看门狗检测到的状态转移，App 订阅后转托盘气泡。</summary>
+public enum ProbeNotice { WindowLost, Reconnected, Minimized, Restored, ResolutionChanged }
+
 public sealed class Phase1Probe : IDisposable
 {
     private readonly CaptureService _capture;
@@ -33,6 +36,17 @@ public sealed class Phase1Probe : IDisposable
     private bool _hasChatRoi;   // 场景级"含 Chat ROI"，决定轮询用 ChatPollMs 还是 OtherPollMs；构造/ReloadRois 时算
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
     private bool _paused; // F11 暂停/继续：暂停时跳过 OnFrame 处理，不动 CaptureService（与 F9 的 Start/Stop 互不干扰）
+
+    // ── Phase 5 异常恢复：看门狗(2s) 检测窗口丢失/最小化/分辨率切换 ──
+    public event Action<ProbeNotice, string>? Notice;
+    private System.Threading.Timer? _watchdog;
+    private bool _windowLost;   // 已就"窗口丢失"通知过（重连成功后复位）
+    private bool _wasIconic;    // 上一轮询周期是否最小化（转移时才通知）
+    private bool _resNotified;  // 当前分辨率与 bucket 不匹配的提示只发一次（换回/重校准后复位）
+
+    /// <summary>目标进程名（设置驱动，默认 StarCraft）。Start 与看门狗重连共用。</summary>
+    private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
+        ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
     public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay,
         string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary)
@@ -62,6 +76,7 @@ public sealed class Phase1Probe : IDisposable
         _cfg = RoiStore.Load(_roisJsonPath);
         RefreshRoiDerivedFlags();
         _roiMissingLogged = false;
+        _resNotified = false; // 校准保存=新 ROI 集，重校准提示允许再发一次
         ResetChangeDetection();
         _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable} _hasChatRoi={_hasChatRoi}");
     }
@@ -69,8 +84,7 @@ public sealed class Phase1Probe : IDisposable
     /// <summary>启动探测。返回具体失败原因供 UI 提示（首次引导：F9 后没反应要知道为什么）。</summary>
     public ProbeStartInfo Start()
     {
-        string proc = string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
-            ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
+        string proc = TargetProcess();
         try
         {
             _log.Log("[probe] Start 被调用");
@@ -96,7 +110,12 @@ public sealed class Phase1Probe : IDisposable
                 _log.Log("[probe] 捕获启动失败");
                 return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
             }
-            _log.Log("[probe] 已开始捕获");
+            // 异常恢复看门狗：2s 周期检查窗口存活/最小化；丢失后自动重试重连（游戏重开/换窗口无需手动 F9）。
+            _windowLost = false; _wasIconic = false; _resNotified = false;
+            _watchdog ??= new System.Threading.Timer(WatchdogTick, null,
+                System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            _watchdog.Change(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+            _log.Log("[probe] 已开始捕获（看门狗已启动）");
             return new ProbeStartInfo(ProbeStart.Ok, proc);
         }
         catch (Exception ex)
@@ -105,6 +124,59 @@ public sealed class Phase1Probe : IDisposable
             return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
         }
     }
+
+    /// <summary>看门狗（线程池执行）：窗口无效→释放旧捕获并尝试重连新句柄；最小化⇄还原→清屏/重译；均发事件给 UI。</summary>
+    private void WatchdogTick(object? state)
+    {
+        if (_paused) return; // F11 暂停期间不做恢复动作（继续时若窗口已丢，由下一轮看门狗处理）
+        try
+        {
+            var hwnd = _capture.Hwnd;
+            bool alive = hwnd != IntPtr.Zero && NativeMethods.IsWindow(hwnd);
+            if (!alive)
+            {
+                _capture.Stop(); // 幂等：释放挂在死句柄上的会话，避免 COM 悬挂
+                if (!_windowLost)
+                {
+                    _windowLost = true; _wasIconic = false;
+                    _log.Log("[probe] 看门狗：游戏窗口已丢失");
+                    Notice?.Invoke(ProbeNotice.WindowLost,
+                        $"游戏窗口已消失，翻译已暂停。检测到 {TargetProcess()} 重新开窗后将自动续译。");
+                }
+                var fresh = WindowFinder.FindByProcess(TargetProcess());
+                if (fresh != IntPtr.Zero && _capture.Start(fresh))
+                {
+                    _windowLost = false;
+                    ResetChangeDetection(); // 新窗口内容需重新 OCR/上屏
+                    _log.Log($"[probe] 看门狗：已重连新窗口 hwnd={fresh}");
+                    Notice?.Invoke(ProbeNotice.Reconnected, "已重新连接游戏窗口，翻译继续");
+                }
+                return;
+            }
+            bool iconic = NativeMethods.IsIconic(hwnd);
+            if (iconic != _wasIconic)
+            {
+                _wasIconic = iconic;
+                if (iconic)
+                {
+                    // 修复：最小化时旧译文会滞留悬浮在桌面上——立即清空；还原后 ResetChangeDetection 重译新位置。
+                    ClearOverlay();
+                    _log.Log("[probe] 看门狗：游戏最小化，悬浮已清空");
+                    Notice?.Invoke(ProbeNotice.Minimized, "游戏已最小化，翻译暂停（还原后自动继续）");
+                }
+                else
+                {
+                    ResetChangeDetection();
+                    _log.Log("[probe] 看门狗：游戏已还原，触发重译");
+                    Notice?.Invoke(ProbeNotice.Restored, "游戏已还原，翻译继续");
+                }
+            }
+        }
+        catch (Exception ex) { _log.Log($"[probe] 看门狗异常: {ex.Message}"); }
+    }
+
+    private void ClearOverlay() =>
+        _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
 
     /// <summary>复位变化检测：切引擎/登录成功后调用，让静止画面也立即用新引擎/新登录态重译上屏。</summary>
     public void ResetChangeDetection() => _lastJoined = "";
@@ -123,8 +195,10 @@ public sealed class Phase1Probe : IDisposable
 
     public void Stop()
     {
+        _watchdog?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
         _capture.Stop();
         _lastJoined = ""; // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
+        _windowLost = false; _wasIconic = false; _resNotified = false;
         _log.Log("[probe] 已停止");
         _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
     }
@@ -162,6 +236,16 @@ public sealed class Phase1Probe : IDisposable
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
             var bucket = RoiStore.SelectBucket(_cfg, Scene, frame.Width, frame.Height);
+            // 分辨率切换检测：命中的 bucket 与当前捕获尺寸不一致=靠等比映射兜底，位置可能偏差，提示重校准（每个不匹配期只发一次）。
+            bool resMismatch = bucket.Resolution != $"{frame.Width}x{frame.Height}";
+            if (resMismatch && !_resNotified)
+            {
+                _resNotified = true;
+                _log.Log($"[probe] 分辨率不匹配：bucket={bucket.Resolution} 当前={frame.Width}x{frame.Height}");
+                Notice?.Invoke(ProbeNotice.ResolutionChanged,
+                    $"游戏分辨率已变化({frame.Width}x{frame.Height})，正按旧 ROI 等比映射，建议按 F8 重新校准");
+            }
+            else if (!resMismatch) _resNotified = false;
             var koLines = new List<string>();
             var metas = new List<(RectangleF frameBounds, string roiName)>();
             var t = _settings.Current.Translation;
@@ -234,5 +318,10 @@ public sealed class Phase1Probe : IDisposable
         finally { frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }
     }
 
-    public void Dispose() { _capture.FrameArrived -= OnFrame; }
+    public void Dispose()
+    {
+        _capture.FrameArrived -= OnFrame;
+        _watchdog?.Dispose();
+        _watchdog = null;
+    }
 }
