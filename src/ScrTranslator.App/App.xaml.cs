@@ -282,6 +282,13 @@ public partial class App : Application
             _trayService.ShowToast("DEBUG 面板", newVal ? "已开启" : "已关闭");
         }
 
+        // 复制诊断快照（Ctrl+F6）：把面板同源文本拷到剪贴板，无需面板可点/不抢焦点。
+        void CopyDebug()
+        {
+            try { Clipboard.SetText(probe.GetDebugSnapshot()); _trayService.ShowToast("诊断信息", "已复制到剪贴板"); }
+            catch (Exception ex) { log.Warn($"[hotkey] 复制诊断失败: {ex.Message}"); _trayService.ShowToast("诊断信息", "复制失败"); }
+        }
+
         // 全局热键：从 SettingsHolder.Current.Hotkeys 驱动注册全部七功能（游戏有焦点时也生效）。
         _hotkeys = new HotkeyService(overlay);
         var hotkeyActions = new Dictionary<string, Action>
@@ -293,6 +300,7 @@ public partial class App : Application
             ["TogglePlayerId"] = TogglePlayerId,
             ["TogglePause"] = TogglePause,
             ["ToggleDebug"] = ToggleDebug,
+            ["CopyDebug"] = CopyDebug,
         };
         var hotkeyResults = _hotkeys.RegisterAll(settingsHolder.Current.Hotkeys, hotkeyActions);
         foreach (var (func, ok) in hotkeyResults)

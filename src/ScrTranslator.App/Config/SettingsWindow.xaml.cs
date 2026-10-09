@@ -54,6 +54,7 @@ public partial class SettingsWindow : Window
         ("TogglePlayerId", "切换“翻译玩家 ID”"),
         ("TogglePause", "暂停/继续"),
         ("ToggleDebug", "切换 DEBUG 面板"),
+        ("CopyDebug", "复制诊断信息"),
     };
 
     /// <param name="openCalibration">复用 App.xaml.cs 里管理的单例 CalibrationWindow 打开方法（不在本窗口另建实例）。</param>

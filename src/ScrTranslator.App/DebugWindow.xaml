@@ -9,16 +9,12 @@
         ShowInTaskbar="False"
         ShowActivated="False"
         ResizeMode="NoResize"
+        Focusable="False"
+        IsHitTestVisible="False"
         WindowStartupLocation="Manual"
         Left="0" Top="0">
     <Border Background="#CC000000" CornerRadius="0" BorderBrush="#60FFFFFF" BorderThickness="1" Padding="6,4">
-        <DockPanel>
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,4">
-                <TextBlock Text="DEBUG" Foreground="#FF8FC7FF" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <Button x:Name="CopyButton" Content="复制" Padding="10,1" Click="OnCopyClick"/>
-            </StackPanel>
-            <TextBlock x:Name="DebugText" Foreground="#FF7CFF9B" FontFamily="Consolas, Cascadia Mono, Microsoft YaHei"
-                       FontSize="15" LineHeight="19" TextWrapping="Wrap" Text="调试面板"/>
-        </DockPanel>
+        <TextBlock x:Name="DebugText" Foreground="#FF7CFF9B" FontFamily="Consolas, Cascadia Mono, Microsoft YaHei"
+                   FontSize="15" LineHeight="19" TextWrapping="Wrap" Text="调试面板（Ctrl+F6 复制）"/>
     </Border>
 </Window>

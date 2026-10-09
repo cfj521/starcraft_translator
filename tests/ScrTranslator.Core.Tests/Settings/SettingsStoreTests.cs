@@ -16,7 +16,7 @@ public class SettingsStoreTests
         Assert.True(back.Translation.TwoLevel);
         Assert.True(back.Translation.TranslatePlayerId);
         Assert.Equal(250, back.Ocr.ChatPollMs);
-        Assert.Equal(7, back.Hotkeys.Count);
+        Assert.Equal(8, back.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk);
         Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["OpenConfig"].Modifiers);
     }
@@ -45,9 +45,10 @@ public class SettingsStoreTests
         """;
         var path = Path.GetTempFileName(); File.WriteAllText(path, json);
         var back = SettingsStore.Load(path);
-        // 缺失的 ToggleDebug 用默认(F6)补上 → 共 7 项
-        Assert.Equal(7, back.Hotkeys.Count);
+        // 缺失的 ToggleDebug/CopyDebug 用默认补上 → 共 8 项
+        Assert.Equal(8, back.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F6, back.Hotkeys["ToggleDebug"].Vk);
+        Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["CopyDebug"].Modifiers);
         // 用户自定义的绑定不被默认覆盖
         Assert.Equal(123u, back.Hotkeys["ToggleTranslate"].Vk);
         Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["ToggleTranslate"].Modifiers);

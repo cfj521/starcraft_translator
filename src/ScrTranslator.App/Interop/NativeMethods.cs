@@ -33,6 +33,15 @@ internal static class NativeMethods
         SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(ex));
     }
 
+    public const int WS_EX_NOACTIVATE = unchecked((int)0x08000000);
+    /// <summary>置 WS_EX_NOACTIVATE：点击窗口也不激活/不抢前台焦点（配合 WM_MOUSEACTIVATE 钩子）。</summary>
+    public static void EnsureNoActivate(IntPtr hwnd)
+    {
+        int ex = (int)GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        if ((ex & WS_EX_NOACTIVATE) == 0)
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(ex | WS_EX_NOACTIVATE));
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT { public int X, Y; }
 

@@ -284,6 +284,9 @@ public sealed class Phase1Probe : IDisposable
         return game != IntPtr.Zero && NativeMethods.GetForegroundWindow() == game;
     }
 
+    /// <summary>当前诊断快照文本（供 Ctrl+F6 复制到剪贴板；与面板同源）。</summary>
+    public string GetDebugSnapshot() => BuildDebugText();
+
     private string BuildDebugText()
     {
         int pollMs = PollInterval.Resolve(_settings.Current.Ocr, _hasChatRoi);

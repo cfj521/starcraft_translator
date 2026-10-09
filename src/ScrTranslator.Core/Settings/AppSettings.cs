@@ -44,6 +44,7 @@ public static class HotkeyDefaults
             ["TogglePlayerId"]  = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F7),
             ["TogglePause"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F11),
             ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F6),
+            ["CopyDebug"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F6),
         };
 }
 
