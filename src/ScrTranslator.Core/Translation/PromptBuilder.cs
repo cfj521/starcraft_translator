@@ -33,7 +33,9 @@ public static class PromptBuilder
 
     private static string SceneText(string scene) => scene switch
     {
-        "custom_games_listing" => "自定义游戏房间列表",
+        "custom_games_listing" => "自定义游戏房间列表（每行是 房间名/地图名，多为对战设置与黑话）",
+        "waiting_room" => "房间内等待大厅（玩家列表/队伍/种族/地图设置）",
+        "in_game" => "游戏对局内（聊天/系统消息，玩家即时口语）",
         _ => scene,
     };
 }

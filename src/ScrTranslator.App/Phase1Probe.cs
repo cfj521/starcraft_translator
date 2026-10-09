@@ -4,6 +4,7 @@ using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
 using ScrTranslator.Core;
 using ScrTranslator.Core.Ocr;
+using ScrTranslator.Core.Scene;
 using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
 using SkiaSharp;
@@ -15,7 +16,7 @@ public sealed record ProbeStartInfo(ProbeStart Status, string ProcessName);
 public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed, WaitingForWindow }
 
 /// <summary>Phase 5 异常恢复事件：看门狗检测到的状态转移，App 订阅后转托盘气泡。</summary>
-public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled }
+public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled, SceneChanged }
 
 public sealed class Phase1Probe : IDisposable
 {
@@ -28,11 +29,23 @@ public sealed class Phase1Probe : IDisposable
     private readonly SettingsHolder _settings;
     private readonly string _glossaryHint;
     private readonly string _roisJsonPath;
-    private const string Scene = "custom_games_listing";
+    private GameScene _activeScene = GameScene.RoomBrowser; // OCR 自动识别的当前场景（初值=房间列表，兼容老校准）
+    private string SceneId => _activeScene.ToId();
+    public string CurrentSceneLabel => _activeScene.Label();
+    public string CurrentSceneId => SceneId;
+    private DateTime _lastDetect = DateTime.MinValue;
+    private GameScene _pendingScene = GameScene.Unknown; private int _pendingCount; // 迟滞：连续 N 次同判才切换
+    private const int DetectIntervalMs = 2500, Hysteresis = 2;
+    // 场景识别的"特征区"（相对 16:9 画面）：D1 左侧 UI（浏览器按钮/表头 + 大厅队伍/Select Race），
+    // D2 右侧信息面板（大厅 Unit Limits/Turn Rate…），D3 右下 HUD（游戏内 MENU），D4 右上资源栏（supply/计时）。
+    private static readonly (double X, double Y, double W, double H)[] DetectCrops =
+    {
+        (0.15, 0.06, 0.35, 0.50), (0.62, 0.30, 0.22, 0.32), (0.72, 0.79, 0.12, 0.08), (0.73, 0.00, 0.25, 0.05),
+    };
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
     private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
-    private bool _roiAvailable; // Scene 是否存在且 bucket 非空，避免每帧重复判断/抛异常；构造时算一次，ReloadRois 可刷新
+    private bool _roiAvailable; // 当前活动场景是否存在且 bucket 非空；活动场景/ReloadRois 变化时重算
     private bool _hasChatRoi;   // 场景级"含 Chat ROI"，决定轮询用 ChatPollMs 还是 OtherPollMs；构造/ReloadRois 时算
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
     private bool _paused; // F11 暂停/继续：暂停时跳过 OnFrame 处理，不动 CaptureService（与 F9 的 Start/Stop 互不干扰）
@@ -66,13 +79,49 @@ public sealed class Phase1Probe : IDisposable
         _capture.Log = msg => _log.Log(msg); // 帧转换异常进文件日志（诊断）
     }
 
-    /// <summary>从 _cfg 计算场景级派生标志（ROI 可用性 / 是否含 Chat ROI）。ctor 与 ReloadRois 共用。</summary>
+    /// <summary>从 _cfg 按当前活动场景计算派生标志（ROI 可用性 / 是否含 Chat ROI）。ctor/ReloadRois/场景切换时调用。</summary>
     private void RefreshRoiDerivedFlags()
     {
-        _roiAvailable = _cfg.Scenes.TryGetValue(Scene, out var buckets) && buckets.Count > 0;
+        _roiAvailable = _cfg.Scenes.TryGetValue(SceneId, out var buckets) && buckets.Count > 0;
         // 场景级（跨该场景所有分辨率 bucket）判定：只要可能出现聊天区就用聊天轮询值。
-        _hasChatRoi = _cfg.Scenes.TryGetValue(Scene, out var bs)
+        _hasChatRoi = _cfg.Scenes.TryGetValue(SceneId, out var bs)
             && bs.Any(b => b.Rois.Any(r => RoiTypes.Parse(r.Type) == RoiType.Chat));
+    }
+
+    /// <summary>对若干"特征区"做 OCR，喂给 <see cref="SceneDetector"/>，带迟滞地更新活动场景。
+    /// 返回本帧是否发生了场景切换。识别输入文本与命中线索写日志，便于对着实机画面调特征区。</summary>
+    private async Task<bool> DetectSceneAsync(SKBitmap frame, CancellationToken ct)
+    {
+        var texts = new List<string>();
+        foreach (var c in DetectCrops)
+        {
+            Rectangle px = RoiStore.ToPixels(new RelRect(c.X, c.Y, c.W, c.H), frame.Width, frame.Height);
+            if (px.Width <= 0 || px.Height <= 0) continue;
+            using var sub = new SKBitmap(px.Width, px.Height);
+            if (!frame.ExtractSubset(sub, new SKRectI(px.Left, px.Top, px.Right, px.Bottom))) continue;
+            var res = await _ocr.RecognizeAsync(sub);
+            foreach (var line in res.Lines) texts.Add(line.Text);
+            ct.ThrowIfCancellationRequested();
+        }
+        var d = SceneDetector.Detect(texts);
+        _log.Log($"[scene] 判定={d.Scene.Label()}({_activeScene.Label()}) score={d.Score} margin={d.Margin} 线索=[{string.Join(",", d.Hits)}] 文本数={texts.Count}");
+
+        if (d.Scene == _activeScene) { _pendingScene = GameScene.Unknown; _pendingCount = 0; return false; }
+        if (d.Scene == GameScene.Unknown) return false; // 证据不足：保持当前场景
+
+        // 迟滞：候选新场景需连续 Hysteresis 次命中才切换，防单帧误判抖动。
+        if (d.Scene == _pendingScene) _pendingCount++;
+        else { _pendingScene = d.Scene; _pendingCount = 1; }
+        if (_pendingCount < Hysteresis) return false;
+
+        var from = _activeScene;
+        _activeScene = d.Scene;
+        _pendingScene = GameScene.Unknown; _pendingCount = 0;
+        RefreshRoiDerivedFlags();
+        _lastJoined = ""; _roiMissingLogged = false; // 换场景=换 ROI，重新判定上屏
+        _log.Log($"[scene] 切换 {from.Label()} → {_activeScene.Label()}");
+        Notice?.Invoke(ProbeNotice.SceneChanged, $"当前场景：{_activeScene.Label()}");
+        return true;
     }
 
     /// <summary>重新从磁盘加载 rois.json：校准窗口保存后由 App.xaml.cs 调用，使运行中的探测无需重启即可用上新/首次校准的 ROI。
@@ -284,7 +333,7 @@ public sealed class Phase1Probe : IDisposable
             {
                 if (!_roiMissingLogged)
                 {
-                    _log.Log("[probe] rois.json 缺失/为空，未加载任何 ROI——请先校准（F8）");
+                    _log.Log($"[probe] 当前场景[{_activeScene.Label()}]无 ROI 校准——请按 F8 校准该场景");
                     _roiMissingLogged = true;
                 }
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
@@ -296,7 +345,13 @@ public sealed class Phase1Probe : IDisposable
                 _log.Log("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
-            var bucket = RoiStore.SelectBucket(_cfg, Scene, frame.Width, frame.Height);
+            // 场景自动识别（每 DetectIntervalMs 一次）：识别到别的场景就切 ROI 集，本帧跳过翻译下一帧再来。
+            if ((DateTime.Now - _lastDetect).TotalMilliseconds >= DetectIntervalMs)
+            {
+                _lastDetect = DateTime.Now;
+                if (await DetectSceneAsync(frame, CancellationToken.None)) return;
+            }
+            var bucket = RoiStore.SelectBucket(_cfg, SceneId, frame.Width, frame.Height);
             // 分辨率切换检测：命中的 bucket 与当前捕获尺寸不一致=靠等比映射兜底，位置可能偏差，提示重校准（每个不匹配期只发一次）。
             bool resMismatch = bucket.Resolution != $"{frame.Width}x{frame.Height}";
             if (resMismatch && !_resNotified)
@@ -347,7 +402,7 @@ public sealed class Phase1Probe : IDisposable
             if (joined == _lastJoined) return; // finally 仍会 Dispose(frame) 并复位 _busy
 
             var engine = _settings.Current.Translation.Active;
-            var ctx = new TranslationContext(Scene, _glossaryHint);
+            var ctx = new TranslationContext(SceneId, _glossaryHint);
             // 两级共用这一个超时预算(非每级各一份)：快态+质量态合计不超过 TimeoutSeconds。
             // 快态本就很快,故实际质量态仍有充裕时间；超时被 TieredTranslator 视作降级并回落,不会卡死取帧。
             int timeout = Math.Max(1, _settings.Current.Translation.TimeoutSeconds);

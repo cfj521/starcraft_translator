@@ -13,6 +13,7 @@ using ScrTranslator.App.Logging;
 using ScrTranslator.App.Secrets;
 using ScrTranslator.App.Services;
 using ScrTranslator.Core;
+using ScrTranslator.Core.Scene;
 using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
 
@@ -23,7 +24,9 @@ namespace ScrTranslator.App.Config;
 /// 「取消」直接关闭窗口，不触碰 Holder，天然等价于丢弃副本。单例由 App.xaml.cs 管理（已开则 Activate）。</summary>
 public partial class SettingsWindow : Window
 {
-    private const string Scene = "custom_games_listing";
+    private readonly Func<string> _sceneIdProvider; // 区域页展示/校准当前识别到的场景
+
+    private string Scene => _sceneIdProvider();
 
     private readonly SettingsHolder _holder;
     private readonly string _settingsPath;
@@ -63,9 +66,11 @@ public partial class SettingsWindow : Window
         FileLogger log,
         Action openCalibration,
         Action? onStateChanged,
-        HotkeyService hotkeyService)
+        HotkeyService hotkeyService,
+        Func<string>? sceneIdProvider = null)
     {
         InitializeComponent();
+        _sceneIdProvider = sceneIdProvider ?? new Func<string>(() => ScrTranslator.Core.Scene.GameSceneIds.RoomBrowser);
         _holder = holder;
         _settingsPath = settingsPath;
         _roisJsonPath = roisJsonPath;
@@ -183,11 +188,11 @@ public partial class SettingsWindow : Window
                         foreach (var c in roi.Columns)
                             colRows.Add(new ColumnRow(roi.Name, $"{c.RelStart:P0}–{c.RelEnd:P0}", ColumnKindLabel(c.Kind)));
                 }
-                RegionHintText.Text = $"当前分辨率({resLabel})共 {roiRows.Count} 个区域";
+                RegionHintText.Text = $"场景[{ScrTranslator.Core.Scene.GameSceneIds.FromId(Scene).Label()}] · 当前分辨率({resLabel})共 {roiRows.Count} 个区域";
             }
             else
             {
-                RegionHintText.Text = $"未找到 {resLabel} 分辨率的校准数据，请点击“进入校准”新建";
+                RegionHintText.Text = $"场景[{ScrTranslator.Core.Scene.GameSceneIds.FromId(Scene).Label()}] · 未找到 {resLabel} 分辨率的校准数据，请点击“进入校准”新建";
             }
             RoiListView.ItemsSource = roiRows;
             ColumnsListView.ItemsSource = colRows;

@@ -181,6 +181,7 @@ public partial class App : Application
                 ProbeNotice.ResolutionChanged => "需要重新校准",
                 ProbeNotice.NoFrames => "收不到画面",
                 ProbeNotice.Stalled => "翻译卡住",
+                ProbeNotice.SceneChanged => "场景",
                 _ => "翻译",
             };
             _trayService.ShowToast(title, msg);
@@ -193,7 +194,7 @@ public partial class App : Application
         void OpenCalibration()
         {
             if (calibrationWindow is not null) { calibrationWindow.Activate(); return; }
-            calibrationWindow = new Calibration.CalibrationWindow(roisPath, log, probe.ReloadRois);
+            calibrationWindow = new Calibration.CalibrationWindow(roisPath, log, probe.ReloadRois, probe.CurrentSceneId);
             calibrationWindow.Closed += (_, _) => calibrationWindow = null;
             calibrationWindow.Show();
             calibrationWindow.Activate();
@@ -217,7 +218,8 @@ public partial class App : Application
                 log,
                 OpenCalibration,
                 probe.ResetChangeDetection,
-                _hotkeys!); // 此时尚未 new，但 OpenSettings 只会在其后被调用（字段，非局部变量捕获）
+                _hotkeys!, // 此时尚未 new，但 OpenSettings 只会在其后被调用（字段，非局部变量捕获）
+                () => probe.CurrentSceneId);
             settingsWindow.Closed += (_, _) => settingsWindow = null;
             settingsWindow.Show();
             settingsWindow.Activate();

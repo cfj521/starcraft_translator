@@ -10,6 +10,7 @@ using ScrTranslator.App.Capture;
 using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
 using ScrTranslator.Core;
+using ScrTranslator.Core.Scene;
 
 namespace ScrTranslator.App.Calibration;
 
@@ -17,7 +18,7 @@ namespace ScrTranslator.App.Calibration;
 /// F8 打开（App.xaml.cs）；Esc 取消不存、Enter 归一化写 rois.json（RoiStore.Save）。</summary>
 public partial class CalibrationWindow : Window
 {
-    private const string Scene = "custom_games_listing";
+    private readonly string _sceneId; // 本次校准写入的场景键（由打开方按当前识别场景传入）
     private const double HandleSize = 8;
     private const double MinBoxSize = 10; // DIP
 
@@ -70,12 +71,13 @@ public partial class CalibrationWindow : Window
 
     /// <param name="onSaved">保存成功（Enter 触发 SaveAndClose 走完写盘且未抛异常）后调用；
     /// 供 App.xaml.cs 接线让运行中的 Phase1Probe.ReloadRois()，使首次校准/改动无需重启即可生效。</param>
-    public CalibrationWindow(string roisJsonPath, FileLogger? log = null, Action? onSaved = null)
+    public CalibrationWindow(string roisJsonPath, FileLogger? log = null, Action? onSaved = null, string? sceneId = null)
     {
         InitializeComponent();
         _roisJsonPath = roisJsonPath;
         _log = log;
         _onSaved = onSaved;
+        _sceneId = sceneId ?? GameSceneIds.RoomBrowser;
         Left = 0;
         Top = 0;
         Width = SystemParameters.PrimaryScreenWidth;
@@ -140,7 +142,7 @@ public partial class CalibrationWindow : Window
 
         string resKey = $"{_gameRect.Width}x{_gameRect.Height}";
         SceneBucket? bucket = null;
-        if (cfg.Scenes.TryGetValue(Scene, out var buckets))
+        if (cfg.Scenes.TryGetValue(_sceneId, out var buckets))
             bucket = buckets.FirstOrDefault(b => b.Resolution == resKey);
 
         if (bucket is null)
@@ -685,14 +687,14 @@ public partial class CalibrationWindow : Window
             catch { existing = new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>()); }
 
             var scenes = new Dictionary<string, IReadOnlyList<SceneBucket>>(existing.Scenes);
-            var buckets = scenes.TryGetValue(Scene, out var existingBuckets)
+            var buckets = scenes.TryGetValue(_sceneId, out var existingBuckets)
                 ? existingBuckets.Where(b => b.Resolution != resKey).ToList()
                 : new List<SceneBucket>();
             buckets.Add(newBucket);
-            scenes[Scene] = buckets;
+            scenes[_sceneId] = buckets;
 
             RoiStore.Save(new RoiConfig(scenes), _roisJsonPath);
-            _log?.Log($"[calibration] 保存 {rois.Count} 个区域到 {_roisJsonPath}（{resKey}）");
+            _log?.Log($"[calibration] 保存 {rois.Count} 个区域到场景[{GameSceneIds.FromId(_sceneId).Label()}]（{resKey}）@ {_roisJsonPath}");
             _onSaved?.Invoke();
         }
         catch (Exception ex)
