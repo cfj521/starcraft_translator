@@ -67,7 +67,7 @@ public partial class App : Application
 
         string baseDir = AppContext.BaseDirectory;
         builder.Services.AddSingleton<FileLogger>(_ =>
-            new FileLogger(Path.Combine(baseDir, "logs", "phase1-ocr.log")));
+            new FileLogger(Path.Combine(baseDir, "logs", "app.log")));
         builder.Services.AddSingleton<IOcrEngine>(_ => new PaddleOcrEngine(Path.Combine(baseDir, "models")));
         builder.Services.AddSingleton<CaptureService>();
 
@@ -175,7 +175,7 @@ public partial class App : Application
                 ProbeStart.CaptureUnsupported => "无法开启：系统不支持窗口捕获（需 Win10 1803+，且非 WSL）",
                 ProbeStart.NoRoi => "尚未校准区域：按 F8 框选游戏聊天/房间区域后再按 F9",
                 ProbeStart.WindowNotFound => $"{info.ProcessName} 窗口查找异常：请确认游戏已以窗口化/无边框模式启动",
-                ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见 logs/phase1-ocr.log",
+                ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见 logs/app.log",
                 _ => "无法开启",
             };
             _trayService.ShowToast("翻译", msg);

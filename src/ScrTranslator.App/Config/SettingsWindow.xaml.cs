@@ -278,7 +278,7 @@ public partial class SettingsWindow : Window
             _log.Log($"[settings] ChatGPT 登录 {(ok ? "成功" : "失败/未完成")}");
             if (ok) _onStateChanged?.Invoke(); // 登录成功后让静止画面立即用登录态重译
             if (!ok)
-                MessageBox.Show(this, "ChatGPT 登录未完成或失败（可能：端口 1455 被占用、超时、网络问题或未在浏览器完成授权）。请重试；详情见 logs/phase1-ocr.log。",
+                MessageBox.Show(this, "ChatGPT 登录未完成或失败（可能：端口 1455 被占用、超时、网络问题或未在浏览器完成授权）。请重试；详情见 logs/app.log。",
                     "登录失败", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex)
