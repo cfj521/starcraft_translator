@@ -151,7 +151,8 @@
 悬浮层
   字体            [ 微软雅黑 ▼ ]   字号 [ 18 ]
   文字颜色        [■ 白]   描边/底色 [■ 半透明黑]
-  不透明度        [──────●──]  80%
+  不透明度        [──────●──]  80%      ← 整条（文字+底衬）的统一透明度
+  文字底衬        [──────●──]  80%      ← 每条译文一块圆角黑底的 alpha，0=不画；纯白字压不住浅色游戏画面（已实现）
   显示模式        ( ) 仅译文   (•) 原文+译文双行
   临时态(快引擎)样式  [ 灰色/半透明 ]  最终态(LLM) [ 正常色 ]
 聊天悬浮
@@ -221,7 +222,7 @@ class AppSettings {
     GeneralSettings General;      // TargetProcess / AutoStart / StartMinimized / AutoTranslateOnLaunch
     TranslationSettings Translation;
     OcrSettings Ocr;              // SceneDetectPollMs=200 / TranslatePollMs=500（两个正交节拍；旧 ChatPollMs/OtherPollMs 与预处理/灵敏度字段均已移除，见 §3.3 注）
-    AppearanceSettings Appearance;// FontFamily / FontSize / Opacity / ShowOriginalAndTranslation
+    AppearanceSettings Appearance;// FontFamily / FontSize / Opacity / BackplateOpacity(文字底衬 0.8) / ShowOriginalAndTranslation
     Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F7–F11/Ctrl+F9
     // ROI 配置单独存 rois.json（RoiStore），按分辨率 bucket 分组，RoomList 可含列定义
 }

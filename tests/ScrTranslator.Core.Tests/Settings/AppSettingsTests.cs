@@ -11,8 +11,18 @@ public class AppSettingsTests
         Assert.Equal(200, a.Ocr.SceneDetectPollMs);
         Assert.Equal(500, a.Ocr.TranslatePollMs);
         Assert.InRange(a.Appearance.Opacity, 0.0, 1.0);
+        Assert.Equal(0.8, a.Appearance.BackplateAlpha(), 3); // 文字底衬默认 80% 黑底
         Assert.Equal(TranslationEngine.DashScope, a.Translation.Active); // 复用 TranslationSettings 默认
     }
+
+    [Theory]
+    [InlineData(0.0, 0.0)]    // 0 = 不画底衬（旧观感）
+    [InlineData(0.8, 0.8)]
+    [InlineData(1.0, 1.0)]
+    [InlineData(-0.5, 0.0)]   // 越界钳制，渲染层可直接 (byte)(a*255) 不再各自 clamp
+    [InlineData(3.0, 1.0)]
+    public void BackplateAlpha_Clamps(double set, double expected)
+        => Assert.Equal(expected, new AppearanceSettings { BackplateOpacity = set }.BackplateAlpha(), 6);
 
     [Fact] public void HotkeyDefaults_HasAllEightFunctions_WithExactBindings()
     {

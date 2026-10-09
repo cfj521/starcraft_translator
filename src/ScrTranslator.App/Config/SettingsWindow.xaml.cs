@@ -132,6 +132,7 @@ public partial class SettingsWindow : Window
         FontFamilyBox.Text = s.Appearance.FontFamily;
         FontSizeBox.Text = s.Appearance.FontSize.ToString();
         OpacitySlider.Value = s.Appearance.Opacity;
+        BackplateSlider.Value = s.Appearance.BackplateOpacity;
         OnlyTranslationRadio.IsChecked = !s.Appearance.ShowOriginalAndTranslation;
         BothRadio.IsChecked = s.Appearance.ShowOriginalAndTranslation;
 
@@ -417,6 +418,14 @@ public partial class SettingsWindow : Window
             OpacityValueText.Text = e.NewValue.ToString("P0");
     }
 
+    /// <summary>与 OnOpacityChanged 同形：滑块的 Value 在 InitializeComponent 期间就被赋值
+    /// （LoadSettings 里），那时 TextBlock 还没好，所以只能判 null 后再写。</summary>
+    private void OnBackplateChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (BackplateValueText is not null)
+            BackplateValueText.Text = e.NewValue.ToString("P0");
+    }
+
     // ── 应用/确定/取消 ───────────────────────────────────────────────────
 
     private void OnApplyClick(object sender, RoutedEventArgs e) => ApplyChanges();
@@ -488,6 +497,7 @@ public partial class SettingsWindow : Window
             FontFamily = OrDefault(FontFamilyBox.Text, original.Appearance.FontFamily),
             FontSize = ParseIntOr(FontSizeBox.Text, original.Appearance.FontSize),
             Opacity = OpacitySlider.Value,
+            BackplateOpacity = BackplateSlider.Value,
             ShowOriginalAndTranslation = BothRadio.IsChecked == true,
         };
 

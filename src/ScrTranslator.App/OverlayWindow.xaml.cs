@@ -37,16 +37,20 @@ public partial class OverlayWindow : Window
     }
 
     /// <summary>清屏并按物理屏幕坐标（内部换算为 DIP）摆放文本。必须在 UI 线程调用。
-    /// 字号/字体/不透明度/显示模式读自 Appearance（配置页热改，靠 App.xaml.cs 在应用设置后调用 ResetChangeDetection 触发重译上屏）。
-    /// ShowOriginalAndTranslation=true 时每行=原文(小字灰)在上、译文在下的双行块。</summary>
+    /// 字号/字体/不透明度/底衬/显示模式读自 Appearance（配置页热改，靠 App.xaml.cs 在应用设置后调用
+    /// ResetChangeDetection 触发重译上屏）。ShowOriginalAndTranslation=true 时每行=原文(小字灰)在上、译文在下的双行块。
+    /// 每条译文带一块圆角黑底（<see cref="AppearanceSettings.BackplateAlpha"/>），否则白字压在浅色游戏画面上读不出来。</summary>
     public void ShowLines(IReadOnlyList<OverlayItem> items)
     {
         RootCanvas.Children.Clear();
         var dpi = VisualTreeHelper.GetDpi(this);
         var appearance = _settings.Current.Appearance;
         FontFamily family = ResolveFontFamily(appearance.FontFamily);
+        double plateAlpha = appearance.BackplateAlpha();
         foreach (var it in items)
         {
+            // 文字自身的 Opacity 只表示"相对整条的深浅"（临时态更淡），
+            // 用户设的整体不透明度统一加在外层底衬上，避免两者叠乘把文字压得过淡。
             var tb = new TextBlock
             {
                 Text = it.Text,
@@ -55,7 +59,7 @@ public partial class OverlayWindow : Window
                 FontWeight = FontWeights.Bold,
                 Foreground = it.Provisional ? new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD)) : Brushes.White,
                 FontStyle = it.Provisional ? FontStyles.Italic : FontStyles.Normal,
-                Opacity = it.Provisional ? appearance.Opacity * 0.65 : appearance.Opacity,
+                Opacity = it.Provisional ? 0.65 : 1.0,
                 Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 6, ShadowDepth = 0, Opacity = 1 },
             };
             UIElement visual = tb;
@@ -68,11 +72,22 @@ public partial class OverlayWindow : Window
                     FontFamily = family,
                     FontSize = appearance.FontSize * 0.72,
                     Foreground = new SolidColorBrush(Color.FromRgb(0xB8, 0xB8, 0xB8)),
-                    Opacity = appearance.Opacity * 0.8,
+                    Opacity = 0.8,
                     Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 6, ShadowDepth = 0, Opacity = 1 },
                 };
                 visual = new StackPanel { Children = { source, tb } };
             }
+            // 底衬**逐条**一块，而不是整窗铺一层：整窗铺会把游戏画面糊掉一大片，
+            // 而翻译文本只占屏幕上的几个小点——只给有字的地方垫底，其余保持完全透明。
+            if (plateAlpha > 0)
+                visual = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb((byte)(plateAlpha * 255), 0, 0, 0)),
+                    CornerRadius = new CornerRadius(3),
+                    Padding = new Thickness(5, 2, 5, 3),
+                    Child = visual,
+                };
+            visual.Opacity = appearance.Opacity;
             Canvas.SetLeft(visual, it.ScreenLeft / dpi.DpiScaleX);
             Canvas.SetTop(visual, it.ScreenTop / dpi.DpiScaleY);
             RootCanvas.Children.Add(visual);

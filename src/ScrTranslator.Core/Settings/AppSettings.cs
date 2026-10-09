@@ -30,7 +30,16 @@ public sealed record AppearanceSettings
     public string FontFamily { get; init; } = "Microsoft YaHei";
     public int FontSize { get; init; } = 18;
     public double Opacity { get; init; } = 0.8;
+
+    /// <summary>文字底衬（每条译文一块圆角黑底）的不透明度。默认 0.8。
+    /// 为什么需要：游戏画面明暗复杂，纯白字+投影在浅色/高亮背景上几乎读不出来。
+    /// 设 0 = 不画底衬（回到旧观感）。整体"不透明度"仍统一作用在整条（文字+底衬）上。</summary>
+    public double BackplateOpacity { get; init; } = 0.8;
+
     public bool ShowOriginalAndTranslation { get; init; } = false;
+
+    /// <summary>底衬实际 alpha（0–1 钳制）。渲染层用它决定画不画、画多浓，避免各处各自 clamp。</summary>
+    public double BackplateAlpha() => Math.Clamp(BackplateOpacity, 0d, 1d);
 }
 public sealed record HotkeyBinding(uint Modifiers, uint Vk);
 

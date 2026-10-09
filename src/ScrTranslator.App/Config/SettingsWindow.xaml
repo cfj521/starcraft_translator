@@ -243,6 +243,12 @@
                                     <TextBlock x:Name="OpacityValueText" Text="80%" Margin="8,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
+                                    <TextBlock Text="文字底衬" Style="{StaticResource RowLabel}"/>
+                                    <Slider x:Name="BackplateSlider" Width="200" Minimum="0" Maximum="1" ValueChanged="OnBackplateChanged"/>
+                                    <TextBlock x:Name="BackplateValueText" Text="80%" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="（黑底不透明度，0=不显示底衬；压不住浅色画面时调高）" Foreground="Gray" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="显示模式" Style="{StaticResource RowLabel}"/>
                                     <RadioButton x:Name="OnlyTranslationRadio" GroupName="DisplayMode" Content="仅译文" Margin="0,0,16,0" VerticalAlignment="Center"/>
                                     <RadioButton x:Name="BothRadio" GroupName="DisplayMode" Content="原文+译文双行" VerticalAlignment="Center"/>
