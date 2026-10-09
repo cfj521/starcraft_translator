@@ -170,6 +170,8 @@ public partial class App : Application
                 ProbeNotice.Minimized => "翻译已暂停",
                 ProbeNotice.Restored => "翻译已恢复",
                 ProbeNotice.ResolutionChanged => "需要重新校准",
+                ProbeNotice.NoFrames => "收不到画面",
+                ProbeNotice.Stalled => "翻译卡住",
                 _ => "翻译",
             };
             _trayService.ShowToast(title, msg);

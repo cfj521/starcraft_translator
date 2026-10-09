@@ -11,6 +11,11 @@ namespace ScrTranslator.App.Capture;
 public sealed class CaptureService : IDisposable
 {
     public event Action<SKBitmap>? FrameArrived;
+    /// <summary>诊断接线：帧转换异常写进文件日志（此前只有 Debug.WriteLine，实机排障不可见）。由宿主注入。</summary>
+    public Action<string>? Log;
+    private long _frameCount;
+    /// <summary>累计投递帧数（看门狗用它判断"捕获活着但零帧"=独占全屏/静止画面）。</summary>
+    public long FrameCount => Interlocked.Read(ref _frameCount);
 
     private IDirect3DDevice? _device;
     private Direct3D11CaptureFramePool? _framePool;
@@ -77,10 +82,12 @@ public sealed class CaptureService : IDisposable
 
     private async void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
     {
+        int errNo = 0;
         try
         {
             using var frame = sender.TryGetNextFrame();
             if (frame is null) return;
+            Interlocked.Increment(ref _frameCount);
 
             var now = DateTime.Now;
             if ((now - _lastFrame).TotalMilliseconds < _minIntervalMs) return;   // 节流：取帧已释放(using),跳过转换
@@ -91,8 +98,15 @@ public sealed class CaptureService : IDisposable
             var sk = ToSkBitmap(sbmp);
             FrameArrived?.Invoke(sk);
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[CaptureService] frame error: {ex}"); }
+        catch (Exception ex)
+        {
+            // 每 100 次报一条，防 4K 高频刷屏；首条必报——"零帧到达"多半死在这里。
+            errNo = (int)Interlocked.Increment(ref _convErrors);
+            if (errNo <= 3 || errNo % 100 == 0)
+                Log?.Invoke($"[capture] 帧转换异常 #{errNo}: {ex.Message}");
+        }
     }
+    private long _convErrors;
 
     private static unsafe SKBitmap ToSkBitmap(SoftwareBitmap sbmp)
     {

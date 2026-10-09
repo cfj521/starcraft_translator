@@ -15,7 +15,7 @@ public sealed record ProbeStartInfo(ProbeStart Status, string ProcessName);
 public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed, WaitingForWindow }
 
 /// <summary>Phase 5 异常恢复事件：看门狗检测到的状态转移，App 订阅后转托盘气泡。</summary>
-public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged }
+public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled }
 
 public sealed class Phase1Probe : IDisposable
 {
@@ -44,6 +44,10 @@ public sealed class Phase1Probe : IDisposable
     private bool _waitingForWindow; // Start 时未找到窗口→看门狗等待首连（不报"丢失"，连上报"自动开始"）
     private bool _wasIconic;    // 上一轮询周期是否最小化（转移时才通知）
     private bool _resNotified;  // 当前分辨率与 bucket 不匹配的提示只发一次（换回/重校准后复位）
+    // 零帧/停滞诊断（实机排障：捕获会话活着但一帧不来 = 多半独占全屏；帧在来但处理不动 = _busy 卡死）
+    private bool _firstFrameLogged;
+    private long _lastFrameCount; private int _zeroFrameTicks; private bool _noFrameNotified;
+    private int _processed; private int _lastProcessed; private int _stallTicks; private bool _stallNotified;
 
     /// <summary>目标进程名（设置驱动，默认 StarCraft）。Start 与看门狗重连共用。</summary>
     private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
@@ -59,6 +63,7 @@ public sealed class Phase1Probe : IDisposable
         _tiered = tiered; _settings = settings;
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
+        _capture.Log = msg => _log.Log(msg); // 帧转换异常进文件日志（诊断）
     }
 
     /// <summary>从 _cfg 计算场景级派生标志（ROI 可用性 / 是否含 Chat ROI）。ctor 与 ReloadRois 共用。</summary>
@@ -104,6 +109,9 @@ public sealed class Phase1Probe : IDisposable
             // 看门狗：窗口丢失重连/最小化恢复(5-3)，以及"等待游戏窗口"模式——F9 时游戏没开不再算失败，
             // 挂 2s 轮询，窗口一出现自动开始捕获翻译（也承载 General.AutoTranslateOnLaunch 的启动自动开）。
             _windowLost = false; _wasIconic = false; _resNotified = false;
+            _firstFrameLogged = false; _lastFrameCount = _capture.FrameCount;
+            _zeroFrameTicks = 0; _noFrameNotified = false;
+            _lastProcessed = _processed; _stallTicks = 0; _stallNotified = false;
             _waitingForWindow = hwnd == IntPtr.Zero;
             _watchdog ??= new System.Threading.Timer(WatchdogTick, null,
                 System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
@@ -180,12 +188,50 @@ public sealed class Phase1Probe : IDisposable
                     Notice?.Invoke(ProbeNotice.Restored, "游戏已还原，翻译继续");
                 }
             }
+            if (!iconic) WatchdogFrameFlow(hwnd); // 帧流健康：零帧=独占全屏/未渲染；帧在来但处理不动=卡死
         }
         catch (Exception ex) { _log.Log($"[probe] 看门狗异常: {ex.Message}"); }
     }
 
     private void ClearOverlay() =>
         _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+
+    /// <summary>帧流健康检查（每看门狗周期调用）：
+    /// A) 捕获会话在、但 10s 零新帧 → 大概率独占全屏盖住了 WGC，或画面完全静止；
+    /// B) 有新帧但 10s 没走完一次处理 → _busy 卡死（OCR/网络未返回）。各提示一次，恢复后复位。</summary>
+    private void WatchdogFrameFlow(IntPtr hwnd)
+    {
+        long fc = _capture.FrameCount;
+        bool newFrames = fc != _lastFrameCount;
+        _lastFrameCount = fc;
+
+        if (!newFrames)
+        {
+            if (++_zeroFrameTicks == 5 && !_noFrameNotified) // ~10s
+            {
+                _noFrameNotified = true;
+                _log.Log("[probe] 看门狗：10s 无新帧（独占全屏或画面静止）");
+                Notice?.Invoke(ProbeNotice.NoFrames,
+                    "10 秒没收到新画面：若游戏是独占全屏，请改窗口化/无边框；画面静止则动一下鼠标即可。");
+            }
+        }
+        else
+        {
+            _zeroFrameTicks = 0; _noFrameNotified = false;
+            bool progressed = _processed != _lastProcessed;
+            _lastProcessed = _processed;
+            if (!progressed)
+            {
+                if (++_stallTicks == 5 && !_stallNotified)
+                {
+                    _stallNotified = true;
+                    _log.Log("[probe] 看门狗：帧在到达但 10s 未完成处理，疑似 _busy 卡死");
+                    Notice?.Invoke(ProbeNotice.Stalled, "画面在刷新但翻译卡住了（可能 OCR/网络阻塞），稍后自动重试；持续则重启程序。");
+                }
+            }
+            else { _stallTicks = 0; _stallNotified = false; }
+        }
+    }
 
     /// <summary>复位变化检测：切引擎/登录成功后调用，让静止画面也立即用新引擎/新登录态重译上屏。</summary>
     public void ResetChangeDetection() => _lastJoined = "";
@@ -195,6 +241,7 @@ public sealed class Phase1Probe : IDisposable
     public bool TogglePause()
     {
         _paused = !_paused;
+        _log.Log($"[probe] F11 切换：paused={_paused}");
         if (_paused)
             _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
         else
@@ -214,6 +261,11 @@ public sealed class Phase1Probe : IDisposable
 
     private async void OnFrame(SKBitmap frame)
     {
+        if (!_firstFrameLogged)
+        {
+            _firstFrameLogged = true;
+            _log.Log($"[probe] 首帧到达 {frame.Width}x{frame.Height}（捕获→处理链路已通）");
+        }
         if (_paused) { frame.Dispose(); return; }
         // 轮询频率接线（Phase 5）：每帧实时读设置→场景含 Chat ROI 用 ChatPollMs，否则 OtherPollMs（钳制 150–5000ms）。
         // 同时刷新捕获侧节流，保证"帧转换节流 ≤ 处理节流"，改设置即时生效无需重启。
@@ -326,7 +378,7 @@ public sealed class Phase1Probe : IDisposable
             _log.Log($"[probe] 上屏完成 AllResolved={outcome.AllResolved}");
         }
         catch (Exception ex) { _log.Log($"[probe] 异常: {ex.Message}"); }
-        finally { frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }
+        finally { Interlocked.Increment(ref _processed); frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }
     }
 
     public void Dispose()
