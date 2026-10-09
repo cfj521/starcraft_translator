@@ -24,6 +24,7 @@ public sealed class Phase1Probe : IDisposable
     private readonly CaptureService _capture;
     private readonly IOcrEngine _ocr;
     private readonly SceneRecognizer _scene;   // 图像指纹场景识别（读 scene-refs.json）
+    private readonly RoomGridStore _roomGrid;  // 自定义游戏列表的固定网格预设（读 room-grid.json）
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
     private RoiConfig _cfg;
@@ -84,10 +85,10 @@ public sealed class Phase1Probe : IDisposable
     private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
-    public Phase1Probe(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, FileLogger log, OverlayWindow overlay,
+    public Phase1Probe(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, RoomGridStore roomGrid, FileLogger log, OverlayWindow overlay,
         string roisJsonPath, TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug)
     {
-        _capture = capture; _ocr = ocr; _scene = scene; _log = log; _overlay = overlay; _debug = debug;
+        _capture = capture; _ocr = ocr; _scene = scene; _roomGrid = roomGrid; _log = log; _overlay = overlay; _debug = debug;
         _roisJsonPath = roisJsonPath;
         _cfg = RoiStore.Load(roisJsonPath);
         RefreshRoiDerivedFlags();
@@ -105,11 +106,30 @@ public sealed class Phase1Probe : IDisposable
 
     /// <summary>从 _cfg 算派生标志：当前场景有没有 ROI（决定翻不翻）+ 有没有任何一个场景校准过
     /// （决定 F9 能不能启动）。后者必须与"当前场景"解耦——启动瞬间还没识别，当前场景是 Other，
-    /// 若按前者判断就会误报"尚未校准"。</summary>
+    /// 若按前者判断就会误报"尚未校准"。
+    /// 房间列表预设网格也算"有内容可翻"：它不需要校准，所以不能因为 rois.json 里没这条就判场景不可用。</summary>
     private void RefreshRoiDerivedFlags()
     {
-        _roiAvailable = _cfg.Scenes.TryGetValue(SceneId, out var buckets) && buckets.Count > 0;
-        _anySceneCalibrated = _cfg.Scenes.Values.Any(bs => bs.Count > 0 && bs.Any(b => b.Rois.Count > 0));
+        _roiAvailable = (_cfg.Scenes.TryGetValue(SceneId, out var buckets) && buckets.Count > 0)
+            || _roomGrid.Presets.Any(p => p.Scene == SceneId);
+        _anySceneCalibrated = _cfg.Scenes.Values.Any(bs => bs.Count > 0 && bs.Any(b => b.Rois.Count > 0))
+            || _roomGrid.Presets.Count > 0;
+    }
+
+    /// <summary>
+    /// 该 (场景, 分辨率) 本轮实际要跑的 ROI = 校准的 ROI ＋ 房间列表预设网格（若该场景有预设且当前分辨率有值）。
+    ///
+    /// 预设**叠加**而不是顶替校准：用户自己校准的 RoomList 框可能是有意框在别处（例如右侧详情面板的
+    /// Game Name / Map Name 两行），直接吞掉会让已有校准莫名失效。不想要重复的那条，
+    /// 在配置→区域页选中它点"删除"即可——行为可解释，不搞隐式优先级。
+    /// </summary>
+    private IReadOnlyList<Roi> EffectiveRois(SceneBucket bucket, int frameWidth, int frameHeight)
+    {
+        var grid = _roomGrid.Find(SceneId, frameWidth, frameHeight);
+        if (grid is null) return bucket.Rois;
+        var merged = bucket.Rois.ToList();
+        merged.Add(grid.ToRoi());
+        return merged;
     }
 
     /// <summary>
@@ -507,7 +527,7 @@ public sealed class Phase1Probe : IDisposable
             var metas = new List<(RectangleF frameBounds, string roiName)>();
             var t = _settings.Current.Translation;
             var scope = new ContentScopeSettings(t.TranslateChat, t.TranslateRoomName, t.TranslateMapInfo, t.TranslatePlayerId);
-            foreach (var roi in bucket.Rois)
+            foreach (var roi in EffectiveRois(bucket, frame.Width, frame.Height))
             {
                 Rectangle px = RoiStore.ToPixels(roi.Rect, frame.Width, frame.Height);
                 if (px.Width <= 0 || px.Height <= 0) continue;

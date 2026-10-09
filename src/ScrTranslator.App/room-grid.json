@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "note": "自定义游戏列表的固定网格预设。坐标为该分辨率下的整数像素；list=[x,y,宽,高]，columns 的 x 相对 list 左边缘。1080p 由 browsing-1.png 量得；1440p/2160p 目前只是等比推算的占位值，需用各自分辨率截图核实后改写（UI 非严格等比缩放）。",
+  "verified": {
+    "1920x1080": true,
+    "2560x1440": false,
+    "3840x2160": false
+  },
+  "grids": {
+    "browsing": {
+      "1920x1080": {
+        "list": [360, 292, 685, 400],
+        "rowHeight": 50,
+        "columns": [
+          { "kind": "RoomName", "x": 80, "width": 270 },
+          { "kind": "MapName", "x": 510, "width": 90 }
+        ]
+      },
+      "2560x1440": {
+        "list": [480, 389, 913, 533],
+        "rowHeight": 67,
+        "columns": [
+          { "kind": "RoomName", "x": 107, "width": 360 },
+          { "kind": "MapName", "x": 680, "width": 120 }
+        ]
+      },
+      "3840x2160": {
+        "list": [720, 584, 1370, 800],
+        "rowHeight": 100,
+        "columns": [
+          { "kind": "RoomName", "x": 160, "width": 540 },
+          { "kind": "MapName", "x": 1020, "width": 180 }
+        ]
+      }
+    }
+  }
+}

@@ -32,6 +32,9 @@
     <Content Include="..\..\src\ScrTranslator.App\scene-refs.json" Link="scene-refs.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\..\src\ScrTranslator.App\room-grid.json" Link="room-grid.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

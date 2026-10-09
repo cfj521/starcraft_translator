@@ -93,6 +93,10 @@ public partial class App : Application
         builder.Services.AddSingleton(_ => SceneRefStore.Load(sceneRefsPath, sceneOverridesPath));
         builder.Services.AddSingleton<SceneRecognizer>(sp => new SceneRecognizer(sp.GetRequiredService<SceneRefStore>()));
 
+        // 房间列表固定网格预设（出厂层 exe 旁 room-grid.json）：该界面位置与行高按分辨率是死的，
+        // 不必校准；缺当前分辨率或文件损坏时自动回落到"只用校准 ROI"，不影响其它功能。
+        builder.Services.AddSingleton(_ => RoomGridStore.Load(Path.Combine(baseDir, RoomGridStore.DefaultFileName)));
+
         builder.Services.AddSingleton<SecretStore>();
         builder.Services.AddSingleton(new HttpClient());
         builder.Services.AddSingleton<OpenAiOAuth>();
@@ -143,6 +147,7 @@ public partial class App : Application
             sp.GetRequiredService<CaptureService>(),
             sp.GetRequiredService<IOcrEngine>(),
             sp.GetRequiredService<SceneRecognizer>(),
+            sp.GetRequiredService<RoomGridStore>(),
             sp.GetRequiredService<FileLogger>(),
             sp.GetRequiredService<OverlayWindow>(),
             roisPath,
@@ -293,7 +298,8 @@ public partial class App : Application
                 probe.ResetChangeDetection,
                 _hotkeys!, // 此时尚未 new，但 OpenSettings 只会在其后被调用（字段，非局部变量捕获）
                 () => probe.CurrentSceneId,
-                probe.ReloadRois);   // 区域页"编辑/删除"落盘后立即热重载，不必重启探测
+                probe.ReloadRois,
+                _host.Services.GetRequiredService<RoomGridStore>());   // 区域页要展示房间列表网格预设
             settingsWindow.Closed += (_, _) => settingsWindow = null;
             settingsWindow.Show();
             settingsWindow.Activate();
