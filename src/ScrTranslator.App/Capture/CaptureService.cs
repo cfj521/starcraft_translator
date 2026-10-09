@@ -116,26 +116,23 @@ public sealed class CaptureService : IDisposable
         var desc = buf.GetPlaneDescription(0);
         int stride = desc.Stride;
 
-        // 直接按 COM vtable 调 IMemoryBufferByteAccess::GetBuffer，绕开 CsWinRT 的 RCW 强转坑
-        // （直接强转抛 Invalid cast；GetTypedObjectForIUnknown 再强转抛 Specified cast is not valid）。
-        // vtable 槽位: [0]QueryInterface [1]AddRef [2]Release [3]GetBuffer。同 CreateItemForWindow 的做法。
+        // 关键：不能用 Marshal.GetIUnknownForObject(reference)——那是 CsWinRT RCW 包装的 IUnknown，
+        // 对未投影的 IMemoryBufferByteAccess 会返回 E_NOINTERFACE(0x80004002→InvalidCastException)。
+        // 必须取底层原始 COM 指针 IInspectable.ThisPtr 再 QueryInterface，才命中真实对象。
+        // vtable 槽位: [0]QueryInterface [1]AddRef [2]Release [3]GetBuffer。
         Guid iid = new("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D");
         byte* src; uint cap;
-        IntPtr unk = Marshal.GetIUnknownForObject(reference);
+        IntPtr raw = ((WinRT.IInspectable)reference).ThisPtr;
+        int hr = Marshal.QueryInterface(raw, ref iid, out IntPtr byteAccess);
+        if (hr != 0) Marshal.ThrowExceptionForHR(hr);
         try
         {
-            int hr = Marshal.QueryInterface(unk, ref iid, out IntPtr byteAccess);
-            if (hr != 0) Marshal.ThrowExceptionForHR(hr);
-            try
-            {
-                void** vtbl = *(void***)byteAccess;
-                var getBuffer = (delegate* unmanaged[Stdcall]<IntPtr, byte**, uint*, int>)vtbl[3];
-                int hr2 = getBuffer(byteAccess, &src, &cap);
-                if (hr2 != 0) Marshal.ThrowExceptionForHR(hr2);
-            }
-            finally { Marshal.Release(byteAccess); }
+            void** vtbl = *(void***)byteAccess;
+            var getBuffer = (delegate* unmanaged[Stdcall]<IntPtr, byte**, uint*, int>)vtbl[3];
+            int hr2 = getBuffer(byteAccess, &src, &cap);
+            if (hr2 != 0) Marshal.ThrowExceptionForHR(hr2);
         }
-        finally { Marshal.Release(unk); }
+        finally { Marshal.Release(byteAccess); }
 
         byte* dst = (byte*)sk.GetPixels();
         int rowBytes = w * 4;
