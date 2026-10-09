@@ -32,8 +32,10 @@ public partial class App : Application
         // 全局异常兜底：写 crash.log，且 UI 线程异常不再静默杀进程（诊断用）。
         string crashLog = Path.Combine(AppContext.BaseDirectory, "logs", "crash.log");
         Directory.CreateDirectory(Path.GetDirectoryName(crashLog)!);
+        // UTF-8 带 BOM：与 FileLogger 一致，Get-Content/记事本自动识别（新文件写 BOM，追加时 position>0 自动跳过）。
+        var crashEnc = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
         void LogCrash(string src, object? ex) =>
-            File.AppendAllText(crashLog, $"{DateTime.Now:HH:mm:ss.fff} [{src}] {ex}\n");
+            File.AppendAllText(crashLog, $"{DateTime.Now:HH:mm:ss.fff} [{src}] {ex}\n", crashEnc);
 
         DispatcherUnhandledException += (_, args) =>
         {
@@ -61,6 +63,13 @@ public partial class App : Application
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "ScrTranslator", "settings.json");
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+
+        // ROI 校准数据也放 %APPDATA%（此前在 exe 旁，每次重建/发布被 PreserveNewest 覆盖丢失）。
+        // 一次性迁移：APPDATA 无、但旧位置有 → 复制过来，保住既有校准。
+        string roisPath = Path.Combine(Path.GetDirectoryName(settingsPath)!, "rois.json");
+        string legacyRois = Path.Combine(baseDir, "rois.json");
+        if (!File.Exists(roisPath) && File.Exists(legacyRois))
+            try { File.Copy(legacyRois, roisPath); } catch { /* 迁移失败则按无校准处理，F8 重建即可 */ }
 
         builder.Services.AddSingleton<SecretStore>();
         builder.Services.AddSingleton(new HttpClient());
@@ -114,7 +123,7 @@ public partial class App : Application
             sp.GetRequiredService<IOcrEngine>(),
             sp.GetRequiredService<FileLogger>(),
             sp.GetRequiredService<OverlayWindow>(),
-            Path.Combine(baseDir, "rois.json"),
+            roisPath,
             sp.GetRequiredService<TieredTranslator>(),
             sp.GetRequiredService<SettingsHolder>(),
             sp.GetRequiredService<Glossary>()));
@@ -184,7 +193,7 @@ public partial class App : Application
         void OpenCalibration()
         {
             if (calibrationWindow is not null) { calibrationWindow.Activate(); return; }
-            calibrationWindow = new Calibration.CalibrationWindow(Path.Combine(baseDir, "rois.json"), log, probe.ReloadRois);
+            calibrationWindow = new Calibration.CalibrationWindow(roisPath, log, probe.ReloadRois);
             calibrationWindow.Closed += (_, _) => calibrationWindow = null;
             calibrationWindow.Show();
             calibrationWindow.Activate();
@@ -202,7 +211,7 @@ public partial class App : Application
             settingsWindow = new Config.SettingsWindow(
                 settingsHolder,
                 settingsPath,
-                Path.Combine(baseDir, "rois.json"),
+                roisPath,
                 secretStoreForSettings,
                 oauthForSettings,
                 log,
