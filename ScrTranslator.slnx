@@ -8,5 +8,6 @@
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/SceneRefGen/SceneRefGen.csproj" />
+    <Project Path="tools/LayoutCheck/LayoutCheck.csproj" />
   </Folder>
 </Solution>

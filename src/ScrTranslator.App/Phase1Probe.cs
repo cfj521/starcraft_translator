@@ -24,7 +24,7 @@ public sealed class Phase1Probe : IDisposable
     private readonly CaptureService _capture;
     private readonly IOcrEngine _ocr;
     private readonly SceneRecognizer _scene;   // 图像指纹场景识别（读 scene-refs.json）
-    private readonly RoomGridStore _roomGrid;  // 自定义游戏列表的固定网格预设（读 room-grid.json）
+    private readonly LayoutPresetStore _layout;   // 界面布局预设：聊天框与房间列表网格（读 layout-presets.json）
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
     private RoiConfig _cfg;
@@ -85,10 +85,10 @@ public sealed class Phase1Probe : IDisposable
     private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
-    public Phase1Probe(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, RoomGridStore roomGrid, FileLogger log, OverlayWindow overlay,
+    public Phase1Probe(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, LayoutPresetStore layout, FileLogger log, OverlayWindow overlay,
         string roisJsonPath, TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug)
     {
-        _capture = capture; _ocr = ocr; _scene = scene; _roomGrid = roomGrid; _log = log; _overlay = overlay; _debug = debug;
+        _capture = capture; _ocr = ocr; _scene = scene; _layout = layout; _log = log; _overlay = overlay; _debug = debug;
         _roisJsonPath = roisJsonPath;
         _cfg = RoiStore.Load(roisJsonPath);
         RefreshRoiDerivedFlags();
@@ -110,10 +110,12 @@ public sealed class Phase1Probe : IDisposable
     /// 房间列表预设网格也算"有内容可翻"：它不需要校准，所以不能因为 rois.json 里没这条就判场景不可用。</summary>
     private void RefreshRoiDerivedFlags()
     {
-        _roiAvailable = (_cfg.Scenes.TryGetValue(SceneId, out var buckets) && buckets.Count > 0)
-            || _roomGrid.Presets.Any(p => p.Scene == SceneId);
+        // 注意判的是"有没有**区域**"而不是"有没有 bucket"：删空一个场景后可能留下空桶，
+        // 按桶判会误报可用，结果每帧静默什么都不翻。
+        _roiAvailable = (_cfg.Scenes.TryGetValue(SceneId, out var buckets) && buckets.Any(b => b.Rois.Count > 0))
+            || _layout.HasScene(SceneId);
         _anySceneCalibrated = _cfg.Scenes.Values.Any(bs => bs.Count > 0 && bs.Any(b => b.Rois.Count > 0))
-            || _roomGrid.Presets.Count > 0;
+            || _layout.Presets.Count > 0;
     }
 
     /// <summary>
@@ -125,10 +127,10 @@ public sealed class Phase1Probe : IDisposable
     /// </summary>
     private IReadOnlyList<Roi> EffectiveRois(SceneBucket bucket, int frameWidth, int frameHeight)
     {
-        var grid = _roomGrid.Find(SceneId, frameWidth, frameHeight);
-        if (grid is null) return bucket.Rois;
+        var preset = _layout.Find(SceneId, frameWidth, frameHeight);
+        if (preset is null) return bucket.Rois;
         var merged = bucket.Rois.ToList();
-        merged.Add(grid.ToRoi());
+        merged.AddRange(preset.ToRois());
         return merged;
     }
 

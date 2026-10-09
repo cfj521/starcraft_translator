@@ -91,6 +91,51 @@ public class RoiStoreEditTests
     }
 
     [Fact]
+    public void MoveRoi_ChangesSceneAndKeepsTheEntryIntact()
+    {
+        var cfg = Sample();
+        var updated = RoiStore.MoveRoi(cfg, "browsing", "1920x1080", 1, "room");
+
+        Assert.NotNull(updated);
+        Assert.Single(updated!.Scenes["browsing"][0].Rois);                 // 源桶只剩聊天
+        Assert.Equal("房间聊天", updated.Scenes["browsing"][0].Rois[0].Name);
+        var moved = updated.Scenes["room"].First(b => b.Resolution == "1920x1080").Rois;
+        Assert.Equal(2, moved.Count);                                       // 目标桶原有 1 条 + 搬来 1 条
+        Assert.Equal("房间名", moved[^1].Name);
+        Assert.Equal(0.6, moved[^1].Rect.X, 6);                             // 坐标/列定义原样带过去
+        Assert.Single(moved[^1].Columns!);
+    }
+
+    [Fact]
+    public void MoveRoi_CreatesTargetBucketWhenResolutionAbsent()
+    {
+        // 目标场景从没在这个分辨率上校准过 → 建一个同分辨率桶，而不是塞进别的分辨率桶
+        var updated = RoiStore.MoveRoi(Sample(), "browsing", "3840x2160", 0, "ingame");
+
+        Assert.NotNull(updated);
+        Assert.Empty(updated!.Scenes["browsing"].First(b => b.Resolution == "3840x2160").Rois);
+        var target = updated.Scenes["ingame"].Single();
+        Assert.Equal("3840x2160", target.Resolution);
+        Assert.Equal("房间聊天", target.Rois.Single().Name);
+    }
+
+    [Fact]
+    public void MoveRoi_SameScene_IsNoOp()
+    {
+        var cfg = Sample();
+        Assert.Same(cfg, RoiStore.MoveRoi(cfg, "browsing", "1920x1080", 0, "browsing"));
+    }
+
+    [Fact]
+    public void MoveRoi_BadLocator_ReturnsNull()
+    {
+        var cfg = Sample();
+        Assert.Null(RoiStore.MoveRoi(cfg, "nope", "1920x1080", 0, "room"));
+        Assert.Null(RoiStore.MoveRoi(cfg, "browsing", "1024x768", 0, "room"));
+        Assert.Null(RoiStore.MoveRoi(cfg, "browsing", "1920x1080", 99, "room"));
+    }
+
+    [Fact]
     public void EditThen_SaveLoad_RoundTrips()
     {
         var path = Path.Combine(Path.GetTempPath(), "rois-" + Guid.NewGuid() + ".json");

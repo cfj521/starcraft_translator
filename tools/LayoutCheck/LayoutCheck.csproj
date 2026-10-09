@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 布局预设核验器：把 layout-presets.json 的框画到真实截图上，改版/换分辨率后一眼看出哪框歪了。
+       用法：dotnet run 于本目录（或 dotnet run 加 project 参数指向 tools/LayoutCheck），
+       第一个实参传截图路径，可选第二个实参传输出目录。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ScrTranslator.Tools.LayoutCheck</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="3.119.1" />
+  </ItemGroup>
+
+  <!-- 复用 Core 的加载器与换算：核验图和运行时真正用的框必须是同一份代码算出来的，否则核验没意义。 -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ScrTranslator.Core\ScrTranslator.Core.csproj" />
+  </ItemGroup>
+
+</Project>

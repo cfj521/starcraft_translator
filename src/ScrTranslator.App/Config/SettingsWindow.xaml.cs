@@ -40,13 +40,13 @@ public partial class SettingsWindow : Window
     /// <summary>rois.json 被本页"编辑/删除"改动后的回调（= probe.ReloadRois），让正在跑的探测立即用新区域。</summary>
     private readonly Action? _onRoisChanged;
     /// <summary>房间列表固定网格预设（只读展示用；它不参与校准）。</summary>
-    private readonly RoomGridStore _roomGrid = new();
+    private readonly LayoutPresetStore _layout = new();
     private readonly HotkeyService _hotkeyService;
 
     /// <summary>区域列表的一行。SceneId/Resolution/Index 三元组定位 rois.json 里的哪一条
     /// （名字会被改、序号才是稳定坐标，所以编辑与删除都靠这三元组回写）。</summary>
     private sealed record RoiRow(string SceneId, string Scene, string Resolution, int Index,
-                                 string Name, string Type, string TopLeft, string Size);
+                                 string Name, string Type, string TopLeft, string Size, bool Preset);
     private sealed record ColumnRow(string RoiName, string Range, string Kind);
     private sealed record HotkeyRow(string Key, string Function, string Current);
 
@@ -79,7 +79,7 @@ public partial class SettingsWindow : Window
         HotkeyService hotkeyService,
         Func<string>? sceneIdProvider = null,
         Action? onRoisChanged = null,
-        RoomGridStore? roomGrid = null)
+        LayoutPresetStore? layout = null)
     {
         InitializeComponent();
         _sceneIdProvider = sceneIdProvider ?? new Func<string>(() => ScrTranslator.Core.Scene.GameSceneIds.Browsing);
@@ -92,7 +92,7 @@ public partial class SettingsWindow : Window
         _openCalibration = openCalibration;
         _onStateChanged = onStateChanged;
         _onRoisChanged = onRoisChanged;
-        _roomGrid = roomGrid ?? RoomGridStore.Load(Path.Combine(AppContext.BaseDirectory, RoomGridStore.DefaultFileName));
+        _layout = layout ?? LayoutPresetStore.Load(Path.Combine(AppContext.BaseDirectory, LayoutPresetStore.DefaultFileName));
         _hotkeyService = hotkeyService;
 
         VersionText.Text = $"版本 {Assembly.GetExecutingAssembly().GetName().Version}";
@@ -168,34 +168,44 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// 区域页数据源：**全部场景 × 全部分辨率**都列出来，首列是场景。
-    /// 以前只显示"当前场景 + 当前分辨率"那一桶，看不到"我到底校准了哪几套"，
-    /// 也就理解不了"切到房间内怎么什么都不翻"——三场景各一套 ROI 是设计前提，必须摆在明面上。
-    /// 坐标一律显示为该 bucket 自己分辨率下的**整数像素**（相对百分比人读不动）。
+    /// 区域页数据源 = 校准的 ROI ＋ 出厂布局预设，两类条目同表展示、同表核对。
+    ///
+    /// 三条口径：
+    ///  1. **只显示主显示器当前分辨率**的行。同一场景在 1080p/2K/4K 各有一套数值，
+    ///     全列出来既刷屏又容易照着错的分辨率改；被隐藏的数量在提示行里报出来，不玩"悄悄过滤"。
+    ///  2. 坐标一律**整数像素**（该分辨率下），相对百分比人读不动。
+    ///  3. 首列是场景，且**可编辑**（编辑对话框里改场景 = 把这条 ROI 挪到另一个场景的桶）——
+    ///     误在别的界面校准的条目不必删了重画。预设行的场景是它本来的归属，不可改。
     /// </summary>
     private void LoadRoiList()
     {
         try
         {
             var cfg = RoiStore.Load(_roisJsonPath);
-            var roiRows = new List<RoiRow>();
+            var (curW, curH) = PrimaryScreenPixels();
+            string curRes = $"{curW}x{curH}";
+            var rows = new List<RoiRow>();
             var colRows = new List<ColumnRow>();
             var covered = new List<string>();
+            int hidden = 0;
 
+            // --- 校准的 ROI ---
             foreach (var (sceneId, buckets) in cfg.Scenes)
             {
                 string sceneLabel = GameSceneIds.FromId(sceneId).Label();
                 int inScene = 0;
                 foreach (var bucket in buckets)
                 {
+                    bool here = bucket.Resolution == curRes;
                     var (bw, bh) = ParseResolution(bucket.Resolution);
                     for (int idx = 0; idx < bucket.Rois.Count; idx++)
                     {
                         var roi = bucket.Rois[idx];
+                        if (!here) { hidden++; continue; }
                         var t = RoiTypes.Parse(roi.Type);
-                        roiRows.Add(new RoiRow(sceneId, sceneLabel, bucket.Resolution, idx, roi.Name, TypeLabel(t),
+                        rows.Add(new RoiRow(sceneId, sceneLabel, bucket.Resolution, idx, roi.Name, TypeLabel(t),
                             $"{Px(roi.Rect.X, bw)}, {Px(roi.Rect.Y, bh)}",
-                            $"{Px(roi.Rect.W, bw)} × {Px(roi.Rect.H, bh)}"));
+                            $"{Px(roi.Rect.W, bw)} × {Px(roi.Rect.H, bh)}", false));
                         inScene++;
                         if (roi.Columns is { Count: > 0 })
                             foreach (var c in roi.Columns)
@@ -206,26 +216,49 @@ public partial class SettingsWindow : Window
                 if (inScene > 0) covered.Add(sceneLabel);
             }
 
-            RegionHintText.Text = roiRows.Count == 0
-                ? "还没有任何校准区域：进游戏到对应界面后按 F8 框选。三个场景要各校准一次。"
-                : $"共 {roiRows.Count} 个区域 · 已覆盖：{string.Join("、", covered)} · 还缺：{string.Join("、", AllSceneLabels.Except(covered))}" +
-                  $" · 当前识别场景：{GameSceneIds.FromId(Scene).Label()}";
-            // 房间列表预设网格也摆进同一张表（名称带"预设"），否则它运行时在翻、界面上却查不到，
-            // 用户没法核对坐标对不对。预设本身编辑请改 room-grid.json（下一步再做专用编辑器）。
-            foreach (var p in _roomGrid.Presets)
+            // --- 出厂布局预设（聊天框 / 房间列表网格）---
+            foreach (var p in _layout.Presets)
             {
+                if (p.Resolution != curRes) { hidden++; continue; }
                 var (bw, bh) = ParseResolution(p.Resolution);
-                roiRows.Add(new RoiRow(p.Scene, GameSceneIds.FromId(p.Scene).Label(), p.Resolution, -1,
-                    $"{p.Scene}·房间列表(预设)", $"行高 {p.RowHeight}px · {p.Rows} 行",
-                    $"{p.X}, {p.Y}", $"{p.Width} × {p.Height}"));
+                string sceneLabel = GameSceneIds.FromId(p.Scene).Label();
+                if (!covered.Contains(sceneLabel)) covered.Add(sceneLabel);
+                if (p.Chat is { } chat)
+                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, $"{p.Scene}·聊天(预设)", "聊天",
+                        $"{chat.X}, {chat.Y}", $"{chat.Width} × {chat.Height}", true));
+                if (p.RoomList is { } g)
+                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, $"{p.Scene}·房间列表(预设)",
+                        "房间名列表", $"{g.X}, {g.Y}", $"{g.Width} × {g.Height}", true));
+                foreach (var c in p.RoomList?.Columns ?? Array.Empty<ListColumn>())
+                    colRows.Add(new ColumnRow($"{sceneLabel} / 房间列表(预设)",
+                        $"{c.X}px 起、宽 {c.Width}px（占框内像素）", ColumnKindLabel(c.Kind)));
             }
-            RoiListView.ItemsSource = roiRows;
+
+            string missing = string.Join("、", AllSceneLabels.Except(covered));
+            RegionHintText.Text = rows.Count == 0
+                ? $"当前分辨率 {curRes} 下没有任何区域：进游戏到对应界面后按 F8 框选。"
+                : $"当前分辨率 {curRes} · 共 {rows.Count} 项（含出厂预设）· 已覆盖场景：{string.Join("、", covered)}" +
+                  (missing.Length > 0 ? $" · 还缺：{missing}" : " · 三场景齐全") +
+                  (hidden > 0 ? $" · 另有 {hidden} 项属于其它分辨率（已隐藏）" : "");
+            RoiListView.ItemsSource = rows;
             ColumnsListView.ItemsSource = colRows;
         }
         catch (Exception ex)
         {
             RegionHintText.Text = $"读取 rois.json 失败: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// 主显示器的**物理像素**尺寸。SystemParameters.PrimaryScreenWidth 给的是 WPF DIP，
+    /// 150%/200% 缩放下会小于真实分辨率，必须乘回 DPI 缩放，否则跟捕获帧(物理像素)对不上号。
+    /// </summary>
+    private (int W, int H) PrimaryScreenPixels()
+    {
+        var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(this);
+        int w = (int)Math.Round(SystemParameters.PrimaryScreenWidth * dpi.DpiScaleX);
+        int h = (int)Math.Round(SystemParameters.PrimaryScreenHeight * dpi.DpiScaleY);
+        return w > 0 && h > 0 ? (w, h) : (1920, 1080);
     }
 
     /// <summary>三个目标场景的显示名，用来点名"还缺哪几个场景没校准"。</summary>
@@ -254,15 +287,19 @@ public partial class SettingsWindow : Window
     private void OnEditRoiClick(object sender, RoutedEventArgs e)
     {
         if (RoiListView.SelectedItem is not RoiRow row) { MessageBox.Show(this, "请先在列表里选中一个区域。", "编辑区域"); return; }
-        if (row.Index < 0) { MessageBox.Show(this, "这一条是房间列表网格预设，不在 rois.json 里——请改 room-grid.json。", "编辑区域"); return; }
+        if (row.Preset) { MessageBox.Show(this, "这一条是出厂布局预设，不在 rois.json 里——要改请编辑 layout-presets.json。", "编辑区域"); return; }
         var cfg = RoiStore.Load(_roisJsonPath);
         var current = cfg.Scenes[row.SceneId].First(b => b.Resolution == row.Resolution).Rois[row.Index];
         var (bw, bh) = ParseResolution(row.Resolution);
 
-        var dlg = new RoiEditWindow(row.Scene, row.Resolution, bw, bh, current) { Owner = this };
+        var dlg = new RoiEditWindow(row.Resolution, bw, bh, row.SceneId, current) { Owner = this };
         if (dlg.ShowDialog() != true) return;
 
+        // 两步都在这份 cfg 上做，最后一次性落盘：先原地替换内容，再按需换场景
+        // （MoveRoi 搬的是"替换后"的那条，顺序反了会把编辑丢掉）。
         var updated = RoiStore.ReplaceRoi(cfg, row.SceneId, row.Resolution, row.Index, dlg.Result);
+        if (updated is not null && dlg.ResultSceneId != row.SceneId)
+            updated = RoiStore.MoveRoi(updated, row.SceneId, row.Resolution, row.Index, dlg.ResultSceneId);
         if (updated is null) { MessageBox.Show(this, "定位失败：列表可能已过期，请重新打开本页。", "编辑区域"); return; }
         CommitRois(updated, $"区域“{row.Name}”未能写入 rois.json。");
     }
@@ -271,7 +308,7 @@ public partial class SettingsWindow : Window
     private void OnDeleteRoiClick(object sender, RoutedEventArgs e)
     {
         if (RoiListView.SelectedItem is not RoiRow row) { MessageBox.Show(this, "请先在列表里选中一个区域。", "删除区域"); return; }
-        if (row.Index < 0) { MessageBox.Show(this, "这一条是房间列表网格预设，不在 rois.json 里——要停用请改 room-grid.json。", "删除区域"); return; }
+        if (row.Preset) { MessageBox.Show(this, "这一条是出厂布局预设，不在 rois.json 里——要停用请改 layout-presets.json。", "删除区域"); return; }
         if (MessageBox.Show(this,
                 $"确定删除 {row.Scene} / {row.Resolution} 的区域“{row.Name}”？\n（只删这一分辨率这一条，其它场景与分辨率不受影响）",
                 "删除区域", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;

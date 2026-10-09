@@ -118,6 +118,33 @@ public static class RoiStore
         return Rebuild(cfg, scene, buckets, ReplaceAt(buckets, bucket, new SceneBucket(bucket.Resolution, kept)));
     }
 
+    /// <summary>
+    /// 把一条 ROI 从某场景挪到另一个场景（区域页"改场景"用）：从源 (场景,分辨率) 桶删除，
+    /// 追加到目标场景的**同分辨率**桶（没有就新建）。定位失败返回 null，绝不静默复制出第二条。
+    /// 用途：误在别的界面按了 F8，条目落错了场景——改个场景即可，不必删了重画。
+    /// </summary>
+    public static RoiConfig? MoveRoi(RoiConfig cfg, string fromScene, string resolution, int index, string toScene)
+    {
+        if (fromScene == toScene) return cfg;
+        if (!Locate(cfg, fromScene, resolution, index, out var fromBuckets, out var fromBucket, out var rois)) return null;
+
+        var moved = rois[index];
+        var shrunk = rois.ToList();
+        shrunk.RemoveAt(index);
+
+        var map = new Dictionary<string, IReadOnlyList<SceneBucket>>(cfg.Scenes);
+        map[fromScene] = ReplaceAt(fromBuckets, fromBucket, new SceneBucket(fromBucket.Resolution, shrunk));
+
+        map.TryGetValue(toScene, out var toBuckets);
+        toBuckets ??= Array.Empty<SceneBucket>();
+        var target = toBuckets.FirstOrDefault(b => b.Resolution == resolution);
+        map[toScene] = target is null
+            ? toBuckets.Append(new SceneBucket(resolution, new[] { moved })).ToList()
+            : ReplaceAt(toBuckets, target, new SceneBucket(resolution, target.Rois.Append(moved).ToList()));
+
+        return new RoiConfig(map);
+    }
+
     static bool Locate(RoiConfig cfg, string scene, string resolution, int index,
         out IReadOnlyList<SceneBucket> buckets, out SceneBucket bucket, out IReadOnlyList<Roi> rois)
     {
