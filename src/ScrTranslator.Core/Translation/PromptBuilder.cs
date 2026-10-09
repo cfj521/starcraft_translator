@@ -1,4 +1,5 @@
 using System.Text;
+using ScrTranslator.Core.Scene;
 using ScrTranslator.Core.Translation.Providers;
 
 namespace ScrTranslator.Core.Translation;
@@ -31,11 +32,12 @@ public static class PromptBuilder
         return sb.ToString();
     }
 
-    private static string SceneText(string scene) => scene switch
+    /// <summary>场景键 → 提示词里的场景说明。先归一历史键（custom_games_listing 等），老校准/老上下文也能拿到正确提示。</summary>
+    private static string SceneText(string scene) => GameSceneIds.Normalize(scene) switch
     {
-        "custom_games_listing" => "自定义游戏房间列表（每行是 房间名/地图名，多为对战设置与黑话）",
-        "waiting_room" => "房间内等待大厅（玩家列表/队伍/种族/地图设置）",
-        "in_game" => "游戏对局内（聊天/系统消息，玩家即时口语）",
+        GameSceneIds.Browsing => "自定义游戏房间列表（每行是 房间名/地图名，多为对战设置与黑话）",
+        GameSceneIds.Room => "房间内等待大厅（玩家列表/队伍/种族/地图设置）",
+        GameSceneIds.InGame => "游戏对局内（聊天/系统消息，玩家即时口语）",
         _ => scene,
     };
 }

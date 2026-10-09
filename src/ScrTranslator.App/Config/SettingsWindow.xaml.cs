@@ -72,7 +72,7 @@ public partial class SettingsWindow : Window
         Func<string>? sceneIdProvider = null)
     {
         InitializeComponent();
-        _sceneIdProvider = sceneIdProvider ?? new Func<string>(() => ScrTranslator.Core.Scene.GameSceneIds.RoomBrowser);
+        _sceneIdProvider = sceneIdProvider ?? new Func<string>(() => ScrTranslator.Core.Scene.GameSceneIds.Browsing);
         _holder = holder;
         _settingsPath = settingsPath;
         _roisJsonPath = roisJsonPath;

@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <None Update="rois.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></None>
+    <None Update="scene-refs.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></None>
     <Content Include="app.ico"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
   </ItemGroup>
 

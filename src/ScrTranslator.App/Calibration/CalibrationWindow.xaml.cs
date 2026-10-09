@@ -77,7 +77,7 @@ public partial class CalibrationWindow : Window
         _roisJsonPath = roisJsonPath;
         _log = log;
         _onSaved = onSaved;
-        _sceneId = sceneId ?? GameSceneIds.RoomBrowser;
+        _sceneId = sceneId ?? GameSceneIds.Browsing;
         Left = 0;
         Top = 0;
         Width = SystemParameters.PrimaryScreenWidth;

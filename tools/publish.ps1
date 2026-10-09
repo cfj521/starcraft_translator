@@ -1,4 +1,5 @@
-# 发布脚本：win-x64 框架依赖单文件 + 数据文件(models/GLOSSARY/rois.json)随附，产物压成 zip。
+# 发布脚本：win-x64 框架依赖单文件 + 数据文件(models/GLOSSARY/rois.json/scene-refs.json)随附，产物压成 zip。
+# scene-refs.json 是场景识别的出厂参考，由 tools/SceneRefGen 生成——csproj 里已配 CopyToOutputDirectory，随 publish 自动带上。
 # 用法: pwsh -File tools/publish.ps1 [-Version 0.4.0]
 param([string]$Version = "0.4.0")
 $ErrorActionPreference = 'Stop'

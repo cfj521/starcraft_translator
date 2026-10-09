@@ -1,0 +1,7 @@
+# 只声明必要的属性，不设 `* text=auto`——那会让 git 把仓库里已有的 CRLF 文件全部重规范化，
+# 产生一次几千行的无意义 diff。
+
+# 场景识别参考：指纹是 base64 大块，重跑 tools/SceneRefGen 会整片重写。
+# 标 -diff 后 git 只报"改了几行/二进制不同"，不再把十几万字符糊进 status/diff。
+src/ScrTranslator.App/scene-refs.json -diff
+src/ScrTranslator.App/scene-overrides.json -diff

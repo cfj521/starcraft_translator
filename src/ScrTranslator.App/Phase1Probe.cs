@@ -17,12 +17,13 @@ public sealed record ProbeStartInfo(ProbeStart Status, string ProcessName);
 public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed, WaitingForWindow }
 
 /// <summary>Phase 5 异常恢复事件：看门狗检测到的状态转移，App 订阅后转托盘气泡。</summary>
-public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled, SceneChanged }
+public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled, SceneChanged, SceneRefMissing }
 
 public sealed class Phase1Probe : IDisposable
 {
     private readonly CaptureService _capture;
     private readonly IOcrEngine _ocr;
+    private readonly SceneRecognizer _scene;   // 图像指纹场景识别（读 scene-refs.json）
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
     private RoiConfig _cfg;
@@ -30,20 +31,19 @@ public sealed class Phase1Probe : IDisposable
     private readonly SettingsHolder _settings;
     private readonly string _glossaryHint;
     private readonly string _roisJsonPath;
-    private GameScene _activeScene = GameScene.RoomBrowser; // OCR 自动识别的当前场景（初值=房间列表，兼容老校准）
+    private GameScene _activeScene = GameScene.Browsing; // 图像指纹识别出的当前场景（初值=寻找房间，与老校准一致）
+    private GameRace _activeRace = GameRace.Unknown;     // 游戏内识别到的种族（装饰板参考按种族分套，顺带给出）
     private string SceneId => _activeScene.ToId();
     public string CurrentSceneLabel => _activeScene.Label();
     public string CurrentSceneId => SceneId;
+    /// <summary>场景参考是否可用（scene-refs.json 加载成功且非空）。配置页/托盘用它提示"识别不可用"。</summary>
+    public bool SceneRefsAvailable => _scene.Store.IsUsable;
     private DateTime _lastDetect = DateTime.MinValue;
     private GameScene _pendingScene = GameScene.Unknown; private int _pendingCount; // 迟滞：连续 N 次同判才切换
-    private GameScene _unknownScene = GameScene.Unknown; private int _unknownCount; // 连续"无匹配"计数→达到阈值切到"其他界面"
+    private int _unknownCount; // 连续"指纹不达标"计数→达到阈值切到"其他界面"
+    private bool _refMissingLogged; // "参考缺失"只提示一次，避免每帧刷屏
     private const int DetectIntervalMs = 1000, Hysteresis = 2, OtherThreshold = 3;
-    // 场景识别特征区（相对 16:9，精简为 2 个）：C0 左侧 UI（浏览器 Filter/Create/Search + 大厅 Select Race/Observers），
-    // C1 右侧（大厅信息面板 Unit Limits/Turn Rate… + 游戏内右下 MENU）。游戏内以 MENU 为主 cue，不再单列资源栏。
-    private static readonly (double X, double Y, double W, double H)[] DetectCrops =
-    {
-        (0.14, 0.05, 0.42, 0.55), (0.60, 0.30, 0.30, 0.62),
-    };
+    // 场景识别不再做 OCR：改用 scene-refs.json 里的静态区域块均值指纹（区域由参考自带，见 SceneRecognizer）。
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
     private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
@@ -69,18 +69,18 @@ public sealed class Phase1Probe : IDisposable
     private DispatcherTimer? _debugTimer;
     private int _glossaryCount;
     private string _lastFrameWH = "—";
-    private SceneDetection _lastDet = new(GameScene.Unknown, 0, 0, Array.Empty<string>());
+    private SceneRecognition _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
+        GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别");
     private long _lastTranslateMs; private bool _lastAllResolved; private int _lastLineCount;
-    private string _lastDetTexts = "—"; // 诊断：最近一次场景识别的原始 OCR 文本（含来源特征区）
 
     /// <summary>目标进程名（设置驱动，默认 StarCraft）。Start 与看门狗重连共用。</summary>
     private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
-    public Phase1Probe(CaptureService capture, IOcrEngine ocr, FileLogger log, OverlayWindow overlay,
+    public Phase1Probe(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, FileLogger log, OverlayWindow overlay,
         string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary, DebugWindow debug)
     {
-        _capture = capture; _ocr = ocr; _log = log; _overlay = overlay; _debug = debug;
+        _capture = capture; _ocr = ocr; _scene = scene; _log = log; _overlay = overlay; _debug = debug;
         _roisJsonPath = roisJsonPath;
         _cfg = RoiStore.Load(roisJsonPath);
         RefreshRoiDerivedFlags();
@@ -105,64 +105,77 @@ public sealed class Phase1Probe : IDisposable
             && bs.Any(b => b.Rois.Any(r => RoiTypes.Parse(r.Type) == RoiType.Chat));
     }
 
-    /// <summary>对若干"特征区"做 OCR，喂给 <see cref="SceneDetector"/>，带迟滞地更新活动场景。
-    /// 返回本帧是否发生了场景切换。识别输入文本与命中线索写日志，便于对着实机画面调特征区。</summary>
-    private async Task<bool> DetectSceneAsync(SKBitmap frame, CancellationToken ct)
+    /// <summary>
+    /// 图像指纹场景识别（每 DetectIntervalMs 一次），带迟滞地更新活动场景；返回本帧是否发生了切换。
+    ///
+    /// 与旧 OCR 版的区别：识别不再产生文本、不再 await，只读几块静态区域做块均值比对（&lt;1ms），
+    /// 所以整条链路是同步的，也就不会再和翻译请求抢 OCR 线程。
+    ///
+    /// 三种"识别不出来"的处置不同，别混为一谈：
+    ///  - NoReferences / NoReferenceForResolution = **参考缺失**（文件坏了 / 这个分辨率没截过图），
+    ///    保持当前场景不动——此时切到"其他界面"会把一次配置问题放大成"翻译突然停了"；只提示一次。
+    ///  - BelowThreshold = 画面确实是三场景之外的界面（主菜单/加载/街机），连续 OtherThreshold 次才切"其他"，
+    ///    防过场动画、弹窗遮挡这类瞬时干扰误伤。
+    /// </summary>
+    private bool DetectScene(SKBitmap frame)
     {
-        var texts = new List<string>();
-        var dump = new List<string>(); // 诊断：每条文本 + 来源特征区序号
-        for (int ci = 0; ci < DetectCrops.Length; ci++)
-        {
-            var c = DetectCrops[ci];
-            Rectangle px = RoiStore.ToPixels(new RelRect(c.X, c.Y, c.W, c.H), frame.Width, frame.Height);
-            if (px.Width <= 0 || px.Height <= 0) continue;
-            using var sub = new SKBitmap(px.Width, px.Height);
-            if (!frame.ExtractSubset(sub, new SKRectI(px.Left, px.Top, px.Right, px.Bottom))) continue;
-            var res = await _ocr.RecognizeAsync(sub);
-            foreach (var line in res.Lines)
-            {
-                texts.Add(line.Text);
-                if (dump.Count < 16) dump.Add($"c{ci}:{line.Text}");
-            }
-            ct.ThrowIfCancellationRequested();
-        }
-        _lastDetTexts = dump.Count == 0 ? "（无文本）" : string.Join(" | ", dump);
-        var d = SceneDetector.Detect(texts);
-        _lastDet = d;
-        _log.Debug($"[scene] 判定={d.Scene.Label()}({_activeScene.Label()}) score={d.Score} margin={d.Margin} 线索=[{string.Join(",", d.Hits)}] 文本数={texts.Count}");
-        _log.Debug($"[scene] 原文: {_lastDetTexts}");
+        var rec = _scene.Recognize(frame.AsFramePixels());
+        _lastRec = rec;
+        _log.Debug($"[scene] {rec.Summary}  帧={frame.Width}x{frame.Height}  " +
+                   $"候选=[{string.Join(" ", rec.Scores.Select(s => $"{s.RefId}:{s.HitRatio:P0}"))}]");
 
-        if (d.Scene != GameScene.Unknown)
+        switch (rec.Status)
         {
-            _unknownScene = GameScene.Unknown; _unknownCount = 0; // 有明确匹配→清"其他"计数
-            if (d.Scene == _activeScene) { _pendingScene = GameScene.Unknown; _pendingCount = 0; return false; }
-            // 迟滞：候选新场景需连续 Hysteresis 次命中才切换，防单帧误判抖动。
-            if (d.Scene == _pendingScene) _pendingCount++;
-            else { _pendingScene = d.Scene; _pendingCount = 1; }
-            if (_pendingCount < Hysteresis) return false;
-            SwitchScene(d.Scene);
-            return true;
-        }
+            case SceneMatchStatus.NoReferences:
+            case SceneMatchStatus.NoReferenceForResolution:
+                if (_refMissingLogged) return false; // 每帧都缺参考，只报一次
+                _refMissingLogged = true;
+                _log.Warn($"[scene] 参考不可用：{rec.Detail ?? rec.Status.ToString()}——保持当前场景[{_activeScene.Label()}]，识别暂停");
+                Notice?.Invoke(ProbeNotice.SceneRefMissing,
+                    rec.Status == SceneMatchStatus.NoReferenceForResolution
+                        ? $"当前分辨率缺少场景识别参考（{rec.Detail}），翻译暂按原场景继续；请用 tools/SceneRefGen 补该分辨率截图"
+                        : $"场景识别参考不可用（{rec.Detail}），请重新安装或重跑 tools/SceneRefGen");
+                return false;
 
-        // 无匹配（三场景线索都不足）：连续 OtherThreshold 次才判定为"其他界面"并停翻，避免瞬时漏检误伤。
-        _pendingScene = GameScene.Unknown; _pendingCount = 0;
-        if (_activeScene == GameScene.Other) return false; // 已在其他态，无需重复
-        if (_unknownCount++ < OtherThreshold) return false;
-        SwitchScene(GameScene.Other);
-        return true;
+            case SceneMatchStatus.Matched:
+                _refMissingLogged = false;
+                _unknownCount = 0; // 有明确匹配→清"其他"计数
+                _activeRace = rec.Race; // 同场景内也刷新种族（游戏内参考按种族分套）
+                if (rec.Scene == _activeScene) { _pendingScene = GameScene.Unknown; _pendingCount = 0; return false; }
+                // 迟滞：候选新场景需连续 Hysteresis 次命中才切换，防单帧误判抖动。
+                if (rec.Scene == _pendingScene) _pendingCount++;
+                else { _pendingScene = rec.Scene; _pendingCount = 1; }
+                if (_pendingCount < Hysteresis) return false;
+                SwitchScene(rec.Scene, rec.Race);
+                return true;
+
+            default: // BelowThreshold
+                _refMissingLogged = false;
+                _pendingScene = GameScene.Unknown; _pendingCount = 0;
+                if (_activeScene == GameScene.Other) return false; // 已在其他态，无需重复
+                if (_unknownCount++ < OtherThreshold) return false;
+                SwitchScene(GameScene.Other, GameRace.Unknown);
+                return true;
+        }
     }
 
-    /// <summary>切换活动场景：重算 ROI 标志、复位变化检测、记日志+气泡。其他界面态无 ROI→自动停翻。</summary>
-    private void SwitchScene(GameScene to)
+    /// <summary>切换活动场景（含游戏内种族）：重算 ROI 标志、复位变化检测、记日志+气泡。其他界面态无 ROI→自动停翻。</summary>
+    private void SwitchScene(GameScene to, GameRace race = GameRace.Unknown)
     {
         var from = _activeScene;
         _activeScene = to;
-        _pendingScene = GameScene.Unknown; _pendingCount = 0; _unknownScene = GameScene.Unknown; _unknownCount = 0;
+        _activeRace = race;
+        _pendingScene = GameScene.Unknown; _pendingCount = 0; _unknownCount = 0;
         RefreshRoiDerivedFlags();
         _lastJoined = ""; _roiMissingLogged = false; // 换场景=换 ROI，重新判定上屏
-        _log.Info($"[scene] 切换 {from.Label()} → {to.Label()}");
-        Notice?.Invoke(ProbeNotice.SceneChanged, $"当前场景：{to.Label()}");
+        _log.Info($"[scene] 切换 {SceneDisplay(from, GameRace.Unknown)} → {SceneDisplay(to, race)}");
+        Notice?.Invoke(ProbeNotice.SceneChanged, $"当前场景：{SceneDisplay(to, race)}");
     }
+
+    /// <summary>面板/气泡用的场景显示名。游戏内带上识别到的种族——装饰板参考本就按种族分套，
+    /// 顺带给出种族，既方便实机核对"识别对不对"，也为将来"按种族选聊天框"留好接口。</summary>
+    static string SceneDisplay(GameScene scene, GameRace race) =>
+        scene == GameScene.InGame && race != GameRace.Unknown ? $"{scene.Label()}·{race.Label()}" : scene.Label();
 
     /// <summary>重新从磁盘加载 rois.json：校准窗口保存后由 App.xaml.cs 调用，使运行中的探测无需重启即可用上新/首次校准的 ROI。
     /// 单飞探测（每帧同步处理，OnFrame 靠 _busy 互斥），故直接整体重赋值 _cfg/_roiAvailable 已足够安全，无需加锁。</summary>
@@ -183,6 +196,8 @@ public sealed class Phase1Probe : IDisposable
         try
         {
             _log.Log("[probe] Start 被调用");
+            if (!SceneRefsAvailable)
+                _log.Warn($"[probe] 场景识别参考不可用（{_scene.Store.LoadError}）：将停在当前场景，跨界面不会自动切换");
             if (!GraphicsCaptureSession.IsSupported())
             {
                 _log.Warn("[probe] GraphicsCapture.IsSupported=false（系统不支持窗口捕获）");
@@ -314,20 +329,26 @@ public sealed class Phase1Probe : IDisposable
     private string BuildDebugText()
     {
         int pollMs = PollInterval.Resolve(_settings.Current.Ocr, _hasChatRoi);
-        int roiCount = _cfg.Scenes.TryGetValue(SceneId, out var bs) ? bs.Sum(b => b.Rois.Count) : 0;
+        int roiCount = _cfg.Scenes.TryGetValue(SceneId, out var bs2) ? bs2.Sum(b => b.Rois.Count) : 0;
         string state = _waitingForWindow ? "等待窗口" : _windowLost ? "窗口丢失" : _paused ? "已暂停" : "运行中";
-        var hits = _lastDet.Hits.Count == 0 ? "—" : string.Join(",", _lastDet.Hits);
+        // 指纹打分明细：排查"识别不对/识别不到"时最想看的就是每个候选各多少分，直接摊开。
+        string scores = _lastRec.Scores.Count == 0 ? "—"
+            : string.Join("  ", _lastRec.Scores.Select(s => $"{s.RefId} {s.HitRatio:P0}"));
+        var store = _scene.Store;
+        string refs = store.IsUsable
+            ? $"{store.References.Count}条(现场{store.OverrideCount}) 块{store.BlockSize} 容差{store.ChannelTolerance} 阈值{store.MinHitRatio:P0}"
+            : $"不可用: {store.LoadError}";
         var t = _settings.Current.Translation;
         return
-            $"场景: {_activeScene.Label()}  检测: {_lastDet.Scene.Label()} s{_lastDet.Score} m{_lastDet.Margin}\n" +
-            $"线索: {hits}\n" +
+            $"场景: {SceneDisplay(_activeScene, _activeRace)}  判定: {_lastRec.Summary}\n" +
+            $"指纹: {scores}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
             $"轮询: {pollMs}ms  引擎: {t.Active}  两级: {(t.TwoLevel ? "on" : "off")}\n" +
             $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  busy={_busy}\n" +
             $"状态: {state}  chatRoi={(_hasChatRoi ? "yes" : "no")}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}\n" +
             $"缓存: {_tiered.CacheCount}  术语表: {_glossaryCount}\n" +
-            $"识别文本: {_lastDetTexts}";
+            $"参考: {refs}";
     }
 
     /// <summary>帧流健康检查（每看门狗周期调用）：
@@ -434,11 +455,11 @@ public sealed class Phase1Probe : IDisposable
                 _log.Debug("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
-            // 场景自动识别（每 DetectIntervalMs 一次）：识别到别的场景就切 ROI 集，本帧跳过翻译下一帧再来。
+            // 场景自动识别（每 DetectIntervalMs 一次，同步指纹比对）：识别到别的场景就切 ROI 集，本帧跳过翻译下一帧再来。
             if ((DateTime.Now - _lastDetect).TotalMilliseconds >= DetectIntervalMs)
             {
                 _lastDetect = DateTime.Now;
-                if (await DetectSceneAsync(frame, CancellationToken.None)) return;
+                if (DetectScene(frame)) return;
             }
             var bucket = RoiStore.SelectBucket(_cfg, SceneId, frame.Width, frame.Height);
             // 分辨率切换检测：命中的 bucket 与当前捕获尺寸不一致=靠等比映射兜底，位置可能偏差，提示重校准（每个不匹配期只发一次）。

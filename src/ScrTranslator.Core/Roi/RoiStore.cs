@@ -81,7 +81,11 @@ public static class RoiStore
                     }
                     bucketList.Add(new SceneBucket(res, rois));
                 }
-                scenes[sceneProp.Name] = bucketList;
+                // 场景键归一：老校准文件里的 custom_games_listing / waiting_room / in_game
+                // 直接映射到 browsing / room / ingame，用户不必因为改名重校准。
+                // 新旧键并存时以规范键那条为准。
+                string sceneKey = Scene.GameSceneIds.Normalize(sceneProp.Name);
+                if (!scenes.ContainsKey(sceneKey) || sceneProp.Name == sceneKey) scenes[sceneKey] = bucketList;
             }
             return new RoiConfig(scenes);
         }

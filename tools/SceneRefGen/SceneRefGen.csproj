@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 场景识别像素参考生成器：读 docs/scenes pictures 的截图，产出 src/ScrTranslator.App/scene-refs.json。
+       新增分辨率或区域后重跑：dotnet run 于本目录（或 dotnet run -p tools/SceneRefGen）。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>ScrTranslator.Tools.SceneRefGen</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="3.119.1" />
+  </ItemGroup>
+
+  <!-- 复用 Core 的 SceneRefIntegrity：校验和算法只有一份实现，生成端与运行端不可能写岔。 -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ScrTranslator.Core\ScrTranslator.Core.csproj" />
+  </ItemGroup>
+
+</Project>

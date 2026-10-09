@@ -9,6 +9,7 @@ using ScrTranslator.App.Logging;
 using ScrTranslator.App.Secrets;
 using ScrTranslator.App.Services;
 using ScrTranslator.Core.Ocr;
+using ScrTranslator.Core.Scene;
 using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
 using ScrTranslator.Core.Translation.Providers;
@@ -84,6 +85,14 @@ public partial class App : Application
         if (!File.Exists(roisPath) && File.Exists(legacyRois))
             try { File.Copy(legacyRois, roisPath); } catch { /* 迁移失败则按无校准处理，F8 重建即可 */ }
 
+        // 场景识别参考（两层，故意分文件）：
+        //  出厂层 exe 旁 scene-refs.json，由 tools/SceneRefGen 生成，带 sha256 校验，程序只读；
+        //  覆盖层 %APPDATA%\ScrTranslator\scene-overrides.json，放用户现场采集的参考，升级 exe 不会丢。
+        string sceneRefsPath = Path.Combine(baseDir, SceneRefStore.DefaultFileName);
+        string sceneOverridesPath = Path.Combine(Path.GetDirectoryName(settingsPath)!, SceneRefStore.OverridesFileName);
+        builder.Services.AddSingleton(_ => SceneRefStore.Load(sceneRefsPath, sceneOverridesPath));
+        builder.Services.AddSingleton<SceneRecognizer>(sp => new SceneRecognizer(sp.GetRequiredService<SceneRefStore>()));
+
         builder.Services.AddSingleton<SecretStore>();
         builder.Services.AddSingleton(new HttpClient());
         builder.Services.AddSingleton<OpenAiOAuth>();
@@ -134,6 +143,7 @@ public partial class App : Application
         builder.Services.AddSingleton(sp => new Phase1Probe(
             sp.GetRequiredService<CaptureService>(),
             sp.GetRequiredService<IOcrEngine>(),
+            sp.GetRequiredService<SceneRecognizer>(),
             sp.GetRequiredService<FileLogger>(),
             sp.GetRequiredService<OverlayWindow>(),
             roisPath,
@@ -201,6 +211,7 @@ public partial class App : Application
                 ProbeNotice.NoFrames => "收不到画面",
                 ProbeNotice.Stalled => "翻译卡住",
                 ProbeNotice.SceneChanged => "场景",
+                ProbeNotice.SceneRefMissing => "场景识别不可用",
                 _ => "翻译",
             };
             _trayService.ShowToast(title, msg);
@@ -211,6 +222,22 @@ public partial class App : Application
         log.DebugEnabled = startupSettings.Current.General.DebugMode; // 启动即同步，避免首帧诊断漏记
         log.Info($"──── SC:R Translator v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version} 启动 ────");
         log.Info($"[app] 配置={settingsPath} | ROI={roisPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
+
+        // 场景识别参考的启动体检：缺文件/缺分辨率是"翻译突然不工作"的头号原因，必须在日志第一屏说清楚。
+        var sceneStore = _host.Services.GetRequiredService<SceneRefStore>();
+        if (sceneStore.IsUsable)
+        {
+            var resList = string.Join(",", sceneStore.References
+                .SelectMany(r => r.Resolutions.Keys).Distinct().OrderBy(k => k));
+            log.Info($"[app] 场景参考={sceneStore.References.Count}条[{string.Join(" ", sceneStore.References.Select(r => r.Id))}] " +
+                     $"| 已收录分辨率 {resList} | 现场覆盖 {sceneStore.OverrideCount} 条 | 块{sceneStore.BlockSize} 容差{sceneStore.ChannelTolerance} 阈值{sceneStore.MinHitRatio:P0}");
+            foreach (var w in sceneStore.Warnings) log.Warn($"[app] 场景参考告警: {w}");
+        }
+        else
+        {
+            log.Error($"[app] 场景参考不可用：{sceneStore.LoadError} —— 场景识别将停在“其他界面”，翻译不会上屏。" +
+                      "请确认 exe 旁存在 scene-refs.json（或重跑 tools/SceneRefGen 生成）");
+        }
 
         // 校准窗口：单例（已开则激活），F8/托盘"进入校准…"打开。窗口关闭后置空以便下次可重新 new（WPF Window 一次性）。
         Calibration.CalibrationWindow? calibrationWindow = null;

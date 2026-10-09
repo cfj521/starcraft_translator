@@ -27,6 +27,11 @@
     <None Include="assets\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- 把出厂场景参考带进测试输出：既验证文件本身能解析，也回归验证"各参考之间确实区分得开"。
+         区域选坏了不会静默——SceneRefsShippingTests 会红。 -->
+    <Content Include="..\..\src\ScrTranslator.App\scene-refs.json" Link="scene-refs.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>
