@@ -24,7 +24,7 @@ public sealed class Phase1Probe : IDisposable
     private readonly CaptureService _capture;
     private readonly IOcrEngine _ocr;
     private readonly SceneRecognizer _scene;   // 图像指纹场景识别（读 scene-refs.json）
-    private readonly LayoutPresetStore _layout;   // 界面布局预设：聊天框与房间列表网格（读 layout-presets.json）
+    private LayoutPresetStore _layout;   // 界面布局预设：聊天框与房间列表网格（可重载，配置页改了要重读盘）
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
     private RoiConfig _cfg;
@@ -221,7 +221,7 @@ public sealed class Phase1Probe : IDisposable
     static string SceneDisplay(GameScene scene, GameRace race) =>
         scene == GameScene.InGame && race != GameRace.Unknown ? $"{scene.Label()}·{race.Label()}" : scene.Label();
 
-    /// <summary>重新从磁盘加载 rois.json：校准窗口保存后由 App.xaml.cs 调用，使运行中的探测无需重启即可用上新/首次校准的 ROI。
+    /// <summary>重新从磁盘加载 rois.json：校准窗口/区域页保存后由 App.xaml.cs 调用，使运行中的探测无需重启即可用上新区域。
     /// 单飞探测（每帧同步处理，OnFrame 靠 _busy 互斥），故直接整体重赋值 _cfg/_roiAvailable 已足够安全，无需加锁。</summary>
     public void ReloadRois()
     {
@@ -231,6 +231,22 @@ public sealed class Phase1Probe : IDisposable
         _resNotified = false; // 校准保存=新 ROI 集，重校准提示允许再发一次
         ResetChangeDetection();
         _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable} 已校准场景={_anySceneCalibrated}");
+    }
+
+    /// <summary>
+    /// 重新从磁盘加载布局预设（出厂层 + 覆盖层）。
+    /// DI 里 LayoutPresetStore 是单例，配置页改了预设（写覆盖层）后若不重载，**运行中还用旧坐标**，
+    /// 表现就是"我明明改了，画面上的框没变"。所以区域页保存后必须连着调这个。
+    /// </summary>
+    public void ReloadLayoutPresets()
+    {
+        if (string.IsNullOrEmpty(_layout.FactoryPath)) return;
+        _layout = LayoutPresetStore.Load(_layout.FactoryPath,
+            string.IsNullOrEmpty(_layout.OverridesPath) ? null : _layout.OverridesPath);
+        RefreshRoiDerivedFlags();
+        ResetChangeDetection();
+        _log.Log($"[probe] 布局预设已重新加载：{_layout.Presets.Count} 条（覆盖 {_layout.OverrideCount}）" +
+                 (_layout.LoadError is null ? "" : $" 错误={_layout.LoadError}"));
     }
 
     /// <summary>启动探测。返回具体失败原因供 UI 提示（首次引导：F9 后没反应要知道为什么）。</summary>

@@ -326,7 +326,9 @@ public partial class App : Application
                 probe.ResetChangeDetection,
                 _hotkeys!, // 此时尚未 new，但 OpenSettings 只会在其后被调用（字段，非局部变量捕获）
                 () => probe.CurrentSceneId,
-                probe.ReloadRois,
+                // 区域页保存后两个都要重载：rois.json（校准条目）与 layout-presets/overrides（预设条目）。
+                // 少调后者会出现"我明明改了预设，画面上的框没变"——DI 里的 store 是单例，不重读盘就是旧值。
+                () => { probe.ReloadRois(); probe.ReloadLayoutPresets(); },
                 _host.Services.GetRequiredService<LayoutPresetStore>());   // 区域页要展示布局预设行
             settingsWindow.Closed += (_, _) => settingsWindow = null;
             settingsWindow.Show();

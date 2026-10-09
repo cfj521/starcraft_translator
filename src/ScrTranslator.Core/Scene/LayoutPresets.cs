@@ -88,6 +88,11 @@ public sealed class LayoutPresetStore
     /// <summary>来自覆盖层（用户在配置页改的）条目数。</summary>
     public int OverrideCount { get; private init; }
 
+    /// <summary>加载时用的两个路径。暴露出来是为了让 <see cref="LayoutPresetStore"/> 的单例
+    /// 能被调用方**原地重载**（配置页改了覆盖层后，运行时必须能重新读盘）。</summary>
+    public string FactoryPath { get; private init; } = "";
+    public string OverridesPath { get; private init; } = "";
+
     public bool IsUsable => LoadError is null && Presets.Count > 0;
 
     public LayoutPreset? Find(string sceneId, int width, int height)
@@ -113,7 +118,14 @@ public sealed class LayoutPresetStore
             else
                 (merged, overrideCount) = Merge(factory, over);
         }
-        return new LayoutPresetStore { Presets = merged, OverrideCount = overrideCount, Warnings = warnings };
+        return new LayoutPresetStore
+        {
+            Presets = merged,
+            OverrideCount = overrideCount,
+            Warnings = warnings,
+            FactoryPath = factoryPath,
+            OverridesPath = overridesPath ?? "",
+        };
     }
 
     /// <summary>同 (场景,分辨率) 覆盖层胜出；新场景/新分辨率直接追加。</summary>
