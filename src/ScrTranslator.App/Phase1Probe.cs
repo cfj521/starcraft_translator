@@ -12,10 +12,10 @@ using Windows.Graphics.Capture;
 namespace ScrTranslator.App;
 
 public sealed record ProbeStartInfo(ProbeStart Status, string ProcessName);
-public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed }
+public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed, WaitingForWindow }
 
 /// <summary>Phase 5 异常恢复事件：看门狗检测到的状态转移，App 订阅后转托盘气泡。</summary>
-public enum ProbeNotice { WindowLost, Reconnected, Minimized, Restored, ResolutionChanged }
+public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged }
 
 public sealed class Phase1Probe : IDisposable
 {
@@ -41,6 +41,7 @@ public sealed class Phase1Probe : IDisposable
     public event Action<ProbeNotice, string>? Notice;
     private System.Threading.Timer? _watchdog;
     private bool _windowLost;   // 已就"窗口丢失"通知过（重连成功后复位）
+    private bool _waitingForWindow; // Start 时未找到窗口→看门狗等待首连（不报"丢失"，连上报"自动开始"）
     private bool _wasIconic;    // 上一轮询周期是否最小化（转移时才通知）
     private bool _resNotified;  // 当前分辨率与 bucket 不匹配的提示只发一次（换回/重校准后复位）
 
@@ -100,21 +101,24 @@ public sealed class Phase1Probe : IDisposable
             }
             var hwnd = WindowFinder.FindByProcess(proc);
             _log.Log($"[probe] FindByProcess({proc}) hwnd={hwnd}");
-            if (hwnd == IntPtr.Zero)
-            {
-                _log.Log($"[probe] 未找到 {proc} 窗口");
-                return new ProbeStartInfo(ProbeStart.WindowNotFound, proc);
-            }
-            if (!_capture.Start(hwnd))
-            {
-                _log.Log("[probe] 捕获启动失败");
-                return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
-            }
-            // 异常恢复看门狗：2s 周期检查窗口存活/最小化；丢失后自动重试重连（游戏重开/换窗口无需手动 F9）。
+            // 看门狗：窗口丢失重连/最小化恢复(5-3)，以及"等待游戏窗口"模式——F9 时游戏没开不再算失败，
+            // 挂 2s 轮询，窗口一出现自动开始捕获翻译（也承载 General.AutoTranslateOnLaunch 的启动自动开）。
             _windowLost = false; _wasIconic = false; _resNotified = false;
+            _waitingForWindow = hwnd == IntPtr.Zero;
             _watchdog ??= new System.Threading.Timer(WatchdogTick, null,
                 System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
             _watchdog.Change(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+            if (_waitingForWindow)
+            {
+                _log.Log($"[probe] 未找到 {proc} 窗口，进入等待模式");
+                return new ProbeStartInfo(ProbeStart.WaitingForWindow, proc);
+            }
+            if (!_capture.Start(hwnd))
+            {
+                _watchdog.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                _log.Log("[probe] 捕获启动失败");
+                return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
+            }
             _log.Log("[probe] 已开始捕获（看门狗已启动）");
             return new ProbeStartInfo(ProbeStart.Ok, proc);
         }
@@ -135,21 +139,26 @@ public sealed class Phase1Probe : IDisposable
             bool alive = hwnd != IntPtr.Zero && NativeMethods.IsWindow(hwnd);
             if (!alive)
             {
-                _capture.Stop(); // 幂等：释放挂在死句柄上的会话，避免 COM 悬挂
-                if (!_windowLost)
+                if (!_waitingForWindow) // 等待首连阶段不误报"窗口已消失"，也不反复 Stop
                 {
-                    _windowLost = true; _wasIconic = false;
-                    _log.Log("[probe] 看门狗：游戏窗口已丢失");
-                    Notice?.Invoke(ProbeNotice.WindowLost,
-                        $"游戏窗口已消失，翻译已暂停。检测到 {TargetProcess()} 重新开窗后将自动续译。");
+                    _capture.Stop(); // 幂等：释放挂在死句柄上的会话，避免 COM 悬挂
+                    if (!_windowLost)
+                    {
+                        _windowLost = true; _wasIconic = false;
+                        _log.Log("[probe] 看门狗：游戏窗口已丢失");
+                        Notice?.Invoke(ProbeNotice.WindowLost,
+                            $"游戏窗口已消失，翻译已暂停。检测到 {TargetProcess()} 重新开窗后将自动续译。");
+                    }
                 }
                 var fresh = WindowFinder.FindByProcess(TargetProcess());
                 if (fresh != IntPtr.Zero && _capture.Start(fresh))
                 {
-                    _windowLost = false;
+                    bool firstConnect = _waitingForWindow;
+                    _waitingForWindow = false; _windowLost = false;
                     ResetChangeDetection(); // 新窗口内容需重新 OCR/上屏
-                    _log.Log($"[probe] 看门狗：已重连新窗口 hwnd={fresh}");
-                    Notice?.Invoke(ProbeNotice.Reconnected, "已重新连接游戏窗口，翻译继续");
+                    _log.Log($"[probe] 看门狗：已{(firstConnect ? "首次连接" : "重连")}游戏窗口 hwnd={fresh}");
+                    Notice?.Invoke(firstConnect ? ProbeNotice.FirstConnected : ProbeNotice.Reconnected,
+                        firstConnect ? "已检测到游戏窗口，翻译自动开始" : "已重新连接游戏窗口，翻译继续");
                 }
                 return;
             }
@@ -198,7 +207,7 @@ public sealed class Phase1Probe : IDisposable
         _watchdog?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
         _capture.Stop();
         _lastJoined = ""; // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
-        _windowLost = false; _wasIconic = false; _resNotified = false;
+        _windowLost = false; _wasIconic = false; _resNotified = false; _waitingForWindow = false;
         _log.Log("[probe] 已停止");
         _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
     }

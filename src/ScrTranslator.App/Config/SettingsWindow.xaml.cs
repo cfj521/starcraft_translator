@@ -444,6 +444,12 @@ public partial class SettingsWindow : Window
             _log.Log($"[settings] 保存 settings.json 失败: {ex.Message}");
             MessageBox.Show(this, $"保存设置失败：{ex.Message}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+        // 开机自启接线 HKCU Run 键（5-4）：失败不影响其他设置，单独提示。
+        if (!Services.AutoStartService.Apply(settings.General.AutoStart, Environment.ProcessPath, out var autoStartErr))
+        {
+            _log.Log($"[settings] 开机自启应用失败: {autoStartErr}");
+            MessageBox.Show(this, $"开机自启设置应用失败：{autoStartErr}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
         _onStateChanged?.Invoke(); // 复位变化检测，让静止画面立即按新设置重译
     }
 

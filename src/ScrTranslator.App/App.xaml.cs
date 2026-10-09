@@ -143,9 +143,10 @@ public partial class App : Application
             string msg = info.Status switch
             {
                 ProbeStart.Ok => "已开启",
+                ProbeStart.WaitingForWindow => $"未找到游戏窗口（进程 {info.ProcessName}），已转入等待：窗口出现后自动开始翻译（游戏需窗口化/无边框运行）",
                 ProbeStart.CaptureUnsupported => "无法开启：系统不支持窗口捕获（需 Win10 1803+，且非 WSL）",
                 ProbeStart.NoRoi => "尚未校准区域：按 F8 框选游戏聊天/房间区域后再按 F9",
-                ProbeStart.WindowNotFound => $"未找到游戏窗口（进程 {info.ProcessName}）：请先以窗口化/无边框模式启动游戏",
+                ProbeStart.WindowNotFound => $"{info.ProcessName} 窗口查找异常：请确认游戏已以窗口化/无边框模式启动",
                 ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见 logs/phase1-ocr.log",
                 _ => "无法开启",
             };
@@ -165,6 +166,7 @@ public partial class App : Application
             {
                 ProbeNotice.WindowLost => "翻译已暂停",
                 ProbeNotice.Reconnected => "翻译已恢复",
+                ProbeNotice.FirstConnected => "翻译已开启",
                 ProbeNotice.Minimized => "翻译已暂停",
                 ProbeNotice.Restored => "翻译已恢复",
                 ProbeNotice.ResolutionChanged => "需要重新校准",
@@ -245,6 +247,13 @@ public partial class App : Application
         var hotkeyResults = _hotkeys.RegisterAll(settingsHolder.Current.Hotkeys, hotkeyActions);
         foreach (var (func, ok) in hotkeyResults)
             log.Log($"[hotkey] 注册 {func}={ok}");
+
+        // 启动自动开翻译（General.AutoTranslateOnLaunch）：游戏没开也不报错——看门狗会等待窗口出现自动续译。
+        if (settingsHolder.Current.General.AutoTranslateOnLaunch)
+        {
+            log.Log("[startup] AutoTranslateOnLaunch=on，自动开启翻译");
+            ToggleProbe();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

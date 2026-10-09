@@ -51,9 +51,9 @@
                         </GroupBox>
                         <GroupBox Header="启动">
                             <StackPanel>
-                                <CheckBox x:Name="AutoStartCheck" Content="开机自启（仅存开关，注册表接线留待打包阶段）（后续生效）" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="StartMinimizedCheck" Content="启动后最小化到托盘（后续生效）" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="AutoTranslateCheck" Content="启动游戏时自动开启翻译（后续生效）" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="AutoStartCheck" Content="开机自启（保存时写 HKCU Run 键；开发期指向 Debug exe）" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="StartMinimizedCheck" Content="启动后最小化到托盘（程序无主窗口，此行为恒为真）" IsEnabled="False" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="AutoTranslateCheck" Content="启动游戏时自动开启翻译（程序启动即开启，等待游戏窗口出现自动续译）" Margin="0,2,0,2"/>
                             </StackPanel>
                         </GroupBox>
                         <GroupBox Header="语言">
