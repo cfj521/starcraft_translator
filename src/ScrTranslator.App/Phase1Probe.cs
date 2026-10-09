@@ -36,12 +36,13 @@ public sealed class Phase1Probe : IDisposable
     public string CurrentSceneId => SceneId;
     private DateTime _lastDetect = DateTime.MinValue;
     private GameScene _pendingScene = GameScene.Unknown; private int _pendingCount; // 迟滞：连续 N 次同判才切换
-    private const int DetectIntervalMs = 2500, Hysteresis = 2;
-    // 场景识别的"特征区"（相对 16:9 画面）：D1 左侧 UI（浏览器按钮/表头 + 大厅队伍/Select Race），
-    // D2 右侧信息面板（大厅 Unit Limits/Turn Rate…），D3 右下 HUD（游戏内 MENU），D4 右上资源栏（supply/计时）。
+    private GameScene _unknownScene = GameScene.Unknown; private int _unknownCount; // 连续"无匹配"计数→达到阈值切到"其他界面"
+    private const int DetectIntervalMs = 1000, Hysteresis = 2, OtherThreshold = 3;
+    // 场景识别特征区（相对 16:9，精简为 2 个）：C0 左侧 UI（浏览器 Filter/Create/Search + 大厅 Select Race/Observers），
+    // C1 右侧（大厅信息面板 Unit Limits/Turn Rate… + 游戏内右下 MENU）。游戏内以 MENU 为主 cue，不再单列资源栏。
     private static readonly (double X, double Y, double W, double H)[] DetectCrops =
     {
-        (0.15, 0.06, 0.35, 0.50), (0.62, 0.30, 0.22, 0.32), (0.72, 0.79, 0.12, 0.08), (0.73, 0.00, 0.25, 0.05),
+        (0.14, 0.05, 0.42, 0.55), (0.60, 0.30, 0.30, 0.62),
     };
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
@@ -70,6 +71,7 @@ public sealed class Phase1Probe : IDisposable
     private string _lastFrameWH = "—";
     private SceneDetection _lastDet = new(GameScene.Unknown, 0, 0, Array.Empty<string>());
     private long _lastTranslateMs; private bool _lastAllResolved; private int _lastLineCount;
+    private string _lastDetTexts = "—"; // 诊断：最近一次场景识别的原始 OCR 文本（含来源特征区）
 
     /// <summary>目标进程名（设置驱动，默认 StarCraft）。Start 与看门狗重连共用。</summary>
     private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
@@ -108,36 +110,58 @@ public sealed class Phase1Probe : IDisposable
     private async Task<bool> DetectSceneAsync(SKBitmap frame, CancellationToken ct)
     {
         var texts = new List<string>();
-        foreach (var c in DetectCrops)
+        var dump = new List<string>(); // 诊断：每条文本 + 来源特征区序号
+        for (int ci = 0; ci < DetectCrops.Length; ci++)
         {
+            var c = DetectCrops[ci];
             Rectangle px = RoiStore.ToPixels(new RelRect(c.X, c.Y, c.W, c.H), frame.Width, frame.Height);
             if (px.Width <= 0 || px.Height <= 0) continue;
             using var sub = new SKBitmap(px.Width, px.Height);
             if (!frame.ExtractSubset(sub, new SKRectI(px.Left, px.Top, px.Right, px.Bottom))) continue;
             var res = await _ocr.RecognizeAsync(sub);
-            foreach (var line in res.Lines) texts.Add(line.Text);
+            foreach (var line in res.Lines)
+            {
+                texts.Add(line.Text);
+                if (dump.Count < 16) dump.Add($"c{ci}:{line.Text}");
+            }
             ct.ThrowIfCancellationRequested();
         }
+        _lastDetTexts = dump.Count == 0 ? "（无文本）" : string.Join(" | ", dump);
         var d = SceneDetector.Detect(texts);
         _lastDet = d;
         _log.Debug($"[scene] 判定={d.Scene.Label()}({_activeScene.Label()}) score={d.Score} margin={d.Margin} 线索=[{string.Join(",", d.Hits)}] 文本数={texts.Count}");
+        _log.Debug($"[scene] 原文: {_lastDetTexts}");
 
-        if (d.Scene == _activeScene) { _pendingScene = GameScene.Unknown; _pendingCount = 0; return false; }
-        if (d.Scene == GameScene.Unknown) return false; // 证据不足：保持当前场景
+        if (d.Scene != GameScene.Unknown)
+        {
+            _unknownScene = GameScene.Unknown; _unknownCount = 0; // 有明确匹配→清"其他"计数
+            if (d.Scene == _activeScene) { _pendingScene = GameScene.Unknown; _pendingCount = 0; return false; }
+            // 迟滞：候选新场景需连续 Hysteresis 次命中才切换，防单帧误判抖动。
+            if (d.Scene == _pendingScene) _pendingCount++;
+            else { _pendingScene = d.Scene; _pendingCount = 1; }
+            if (_pendingCount < Hysteresis) return false;
+            SwitchScene(d.Scene);
+            return true;
+        }
 
-        // 迟滞：候选新场景需连续 Hysteresis 次命中才切换，防单帧误判抖动。
-        if (d.Scene == _pendingScene) _pendingCount++;
-        else { _pendingScene = d.Scene; _pendingCount = 1; }
-        if (_pendingCount < Hysteresis) return false;
-
-        var from = _activeScene;
-        _activeScene = d.Scene;
+        // 无匹配（三场景线索都不足）：连续 OtherThreshold 次才判定为"其他界面"并停翻，避免瞬时漏检误伤。
         _pendingScene = GameScene.Unknown; _pendingCount = 0;
+        if (_activeScene == GameScene.Other) return false; // 已在其他态，无需重复
+        if (_unknownCount++ < OtherThreshold) return false;
+        SwitchScene(GameScene.Other);
+        return true;
+    }
+
+    /// <summary>切换活动场景：重算 ROI 标志、复位变化检测、记日志+气泡。其他界面态无 ROI→自动停翻。</summary>
+    private void SwitchScene(GameScene to)
+    {
+        var from = _activeScene;
+        _activeScene = to;
+        _pendingScene = GameScene.Unknown; _pendingCount = 0; _unknownScene = GameScene.Unknown; _unknownCount = 0;
         RefreshRoiDerivedFlags();
         _lastJoined = ""; _roiMissingLogged = false; // 换场景=换 ROI，重新判定上屏
-        _log.Log($"[scene] 切换 {from.Label()} → {_activeScene.Label()}");
-        Notice?.Invoke(ProbeNotice.SceneChanged, $"当前场景：{_activeScene.Label()}");
-        return true;
+        _log.Info($"[scene] 切换 {from.Label()} → {to.Label()}");
+        Notice?.Invoke(ProbeNotice.SceneChanged, $"当前场景：{to.Label()}");
     }
 
     /// <summary>重新从磁盘加载 rois.json：校准窗口保存后由 App.xaml.cs 调用，使运行中的探测无需重启即可用上新/首次校准的 ROI。
@@ -302,7 +326,8 @@ public sealed class Phase1Probe : IDisposable
             $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  busy={_busy}\n" +
             $"状态: {state}  chatRoi={(_hasChatRoi ? "yes" : "no")}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}\n" +
-            $"缓存: {_tiered.CacheCount}  术语表: {_glossaryCount}";
+            $"缓存: {_tiered.CacheCount}  术语表: {_glossaryCount}\n" +
+            $"识别文本: {_lastDetTexts}";
     }
 
     /// <summary>帧流健康检查（每看门狗周期调用）：
@@ -394,7 +419,10 @@ public sealed class Phase1Probe : IDisposable
             {
                 if (!_roiMissingLogged)
                 {
-                    _log.Log($"[probe] 当前场景[{_activeScene.Label()}]无 ROI 校准——请按 F8 校准该场景");
+                    if (_activeScene == GameScene.Other)
+                        _log.Debug("[probe] 其他界面（主菜单/加载等），本就不翻译"); // 其他态不催校准
+                    else
+                        _log.Info($"[probe] 当前场景[{_activeScene.Label()}]无 ROI 校准——请按 F8 校准该场景");
                     _roiMissingLogged = true;
                 }
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
