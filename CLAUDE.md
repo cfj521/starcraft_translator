@@ -27,6 +27,7 @@
 6. **纯读屏**——不注入游戏进程、不改游戏文件、不读游戏内存（降低封号风险）。
 7. **场景名一律 `browsing` / `room` / `ingame`**（枚举 `GameScene`、`rois.json` 键、提示词、文档同一套）；`other`=游戏前台但不属三场景，此态**不翻译**。老校准文件的 `custom_games_listing`/`waiting_room`/`in_game` 由 `GameSceneIds.Normalize` 兼容。
 8. **`src/ScrTranslator.App/scene-refs.json` 是生成物，禁止手改**：它是场景识别的出厂参考（含 sha256 覆盖"几何+数据"），改一个坐标就会整份被拒用。要变区域/补分辨率 → 改 `tools/SceneRefGen/Program.cs` 的 `SceneDefs` 并重跑该工具（它会顺便打印全量判定矩阵，判错退出码非 0）。用户现场采集写 `%APPDATA%\ScrTranslator\scene-overrides.json`，不写回出厂文件。
+   **`docs/scenes pictures/` 已 gitignore，不要提议把它加进版本库**（近百 MB，用户已明确否决）：截图只当 tools/SceneRefGen 的本机输入，入库的只有生成出来的 scene-refs.json。需要新截图直接找用户要，别去动忽略规则。
 9. 场景截图命名（`docs/scenes pictures/`）：分辨率 `1`=1920x1080 / `2`=2560x1440 / `4`=3840x2160；`ingame` 再带种族字母 `t`/`p`/`z`。必须是**无损 PNG + 1:1 物理像素**（JPG 或缩放图会让指纹整体失效）。`ingame-w*`/`ingame-h*` 是量聊天框用的，不参与识别。
 
 ## 代码约定
