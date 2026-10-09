@@ -31,24 +31,30 @@ public sealed class Phase1Probe : IDisposable
     private readonly SettingsHolder _settings;
     private readonly string _glossaryHint;
     private readonly string _roisJsonPath;
-    private GameScene _activeScene = GameScene.Browsing; // 图像指纹识别出的当前场景（初值=寻找房间，与老校准一致）
+    // 启动时人在哪个界面是**未知**的，所以初值取 Other（不翻译）而不是猜"寻找房间"：
+    // 猜错会拿别的场景的 ROI 去 OCR 当前画面，翻出一堆垃圾。识别每 SceneDetectPollMs 跑一次，
+    // 拿到第一帧后最多 2 个节拍就会自动落到真实场景。
+    private GameScene _activeScene = GameScene.Other;
+    private GameScene _lastKnownScene = GameScene.Browsing; // 最近一次识别到的"目标场景"；Other 态下给校准窗当默认值
     private GameRace _activeRace = GameRace.Unknown;     // 游戏内识别到的种族（装饰板参考按种族分套，顺带给出）
     private string SceneId => _activeScene.ToId();
     public string CurrentSceneLabel => _activeScene.Label();
-    public string CurrentSceneId => SceneId;
+    /// <summary>给校准/配置页用的场景 id：Other 态（含"还没拿到帧"）退到最近一次识别到的目标场景，
+    /// 避免把 ROI 存进永不翻译的 other 桶。</summary>
+    public string CurrentSceneId => (_activeScene == GameScene.Other ? _lastKnownScene : _activeScene).ToId();
     /// <summary>场景参考是否可用（scene-refs.json 加载成功且非空）。配置页/托盘用它提示"识别不可用"。</summary>
     public bool SceneRefsAvailable => _scene.Store.IsUsable;
     private DateTime _lastDetect = DateTime.MinValue;
     private GameScene _pendingScene = GameScene.Unknown; private int _pendingCount; // 迟滞：连续 N 次同判才切换
     private int _unknownCount; // 连续"指纹不达标"计数→达到阈值切到"其他界面"
     private bool _refMissingLogged; // "参考缺失"只提示一次，避免每帧刷屏
-    private const int DetectIntervalMs = 1000, Hysteresis = 2, OtherThreshold = 3;
-    // 场景识别不再做 OCR：改用 scene-refs.json 里的静态区域块均值指纹（区域由参考自带，见 SceneRecognizer）。
+    private const int Hysteresis = 2, OtherThreshold = 3;
+    // 场景识别节拍与翻译节拍各自独立（Ocr.SceneDetectPollMs / Ocr.TranslatePollMs），见 OnFrame 顶部的门控。
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
     private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
     private bool _roiAvailable; // 当前活动场景是否存在且 bucket 非空；活动场景/ReloadRois 变化时重算
-    private bool _hasChatRoi;   // 场景级"含 Chat ROI"，决定轮询用 ChatPollMs 还是 OtherPollMs；构造/ReloadRois 时算
+    private bool _anySceneCalibrated; // 至少一个场景校准过 ROI——F9 的启动前置条件（与"当前场景"无关）
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
     private bool _paused; // F11 暂停/继续：暂停时跳过 OnFrame 处理，不动 CaptureService（与 F9 的 Start/Stop 互不干扰）
 
@@ -96,17 +102,17 @@ public sealed class Phase1Probe : IDisposable
         _debugTimer.Start();
     }
 
-    /// <summary>从 _cfg 按当前活动场景计算派生标志（ROI 可用性 / 是否含 Chat ROI）。ctor/ReloadRois/场景切换时调用。</summary>
+    /// <summary>从 _cfg 算派生标志：当前场景有没有 ROI（决定翻不翻）+ 有没有任何一个场景校准过
+    /// （决定 F9 能不能启动）。后者必须与"当前场景"解耦——启动瞬间还没识别，当前场景是 Other，
+    /// 若按前者判断就会误报"尚未校准"。</summary>
     private void RefreshRoiDerivedFlags()
     {
         _roiAvailable = _cfg.Scenes.TryGetValue(SceneId, out var buckets) && buckets.Count > 0;
-        // 场景级（跨该场景所有分辨率 bucket）判定：只要可能出现聊天区就用聊天轮询值。
-        _hasChatRoi = _cfg.Scenes.TryGetValue(SceneId, out var bs)
-            && bs.Any(b => b.Rois.Any(r => RoiTypes.Parse(r.Type) == RoiType.Chat));
+        _anySceneCalibrated = _cfg.Scenes.Values.Any(bs => bs.Count > 0 && bs.Any(b => b.Rois.Count > 0));
     }
 
     /// <summary>
-    /// 图像指纹场景识别（每 DetectIntervalMs 一次），带迟滞地更新活动场景；返回本帧是否发生了切换。
+    /// 图像指纹场景识别（每 <c>Ocr.SceneDetectPollMs</c> 一次），带迟滞地更新活动场景；返回本帧是否发生了切换。
     ///
     /// 与旧 OCR 版的区别：识别不再产生文本、不再 await，只读几块静态区域做块均值比对（&lt;1ms），
     /// 所以整条链路是同步的，也就不会再和翻译请求抢 OCR 线程。
@@ -141,6 +147,7 @@ public sealed class Phase1Probe : IDisposable
                 _refMissingLogged = false;
                 _unknownCount = 0; // 有明确匹配→清"其他"计数
                 _activeRace = rec.Race; // 同场景内也刷新种族（游戏内参考按种族分套）
+                _lastKnownScene = rec.Scene; // 记住最近的目标场景：Other 态下按 F8 时用它做默认桶
                 if (rec.Scene == _activeScene) { _pendingScene = GameScene.Unknown; _pendingCount = 0; return false; }
                 // 迟滞：候选新场景需连续 Hysteresis 次命中才切换，防单帧误判抖动。
                 if (rec.Scene == _pendingScene) _pendingCount++;
@@ -159,7 +166,12 @@ public sealed class Phase1Probe : IDisposable
         }
     }
 
-    /// <summary>切换活动场景（含游戏内种族）：重算 ROI 标志、复位变化检测、记日志+气泡。其他界面态无 ROI→自动停翻。</summary>
+    /// <summary>
+    /// 切换活动场景（含游戏内种族）：清掉上一场景的译文、重算 ROI 标志、复位变化检测、记日志+气泡。
+    /// **必须同步清空悬浮层**：旧译文是按旧场景 ROI 定位的，留在屏幕上既位置错内容也错
+    /// （游戏内聊天条会浮到房间列表的坐标上），比"短暂空白"糟糕得多。
+    /// 其他界面态无 ROI→自动停翻。
+    /// </summary>
     private void SwitchScene(GameScene to, GameRace race = GameRace.Unknown)
     {
         var from = _activeScene;
@@ -167,6 +179,7 @@ public sealed class Phase1Probe : IDisposable
         _activeRace = race;
         _pendingScene = GameScene.Unknown; _pendingCount = 0; _unknownCount = 0;
         RefreshRoiDerivedFlags();
+        ClearOverlay(); // 换场景=旧译文全部失效，立即清屏（不等下一帧）
         _lastJoined = ""; _roiMissingLogged = false; // 换场景=换 ROI，重新判定上屏
         _log.Info($"[scene] 切换 {SceneDisplay(from, GameRace.Unknown)} → {SceneDisplay(to, race)}");
         Notice?.Invoke(ProbeNotice.SceneChanged, $"当前场景：{SceneDisplay(to, race)}");
@@ -186,7 +199,7 @@ public sealed class Phase1Probe : IDisposable
         _roiMissingLogged = false;
         _resNotified = false; // 校准保存=新 ROI 集，重校准提示允许再发一次
         ResetChangeDetection();
-        _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable} _hasChatRoi={_hasChatRoi}");
+        _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable} 已校准场景={_anySceneCalibrated}");
     }
 
     /// <summary>启动探测。返回具体失败原因供 UI 提示（首次引导：F9 后没反应要知道为什么）。</summary>
@@ -203,9 +216,11 @@ public sealed class Phase1Probe : IDisposable
                 _log.Warn("[probe] GraphicsCapture.IsSupported=false（系统不支持窗口捕获）");
                 return new ProbeStartInfo(ProbeStart.CaptureUnsupported, proc);
             }
-            if (!_roiAvailable)
+            if (!_anySceneCalibrated)
             {
-                _log.Log("[probe] rois.json 无当前场景 ROI，请先校准");
+                // 注意判断的是"有没有任何场景校准过"，不是"当前场景有没有 ROI"：
+                // 启动瞬间还没拿到帧，当前场景恒为 Other（无 ROI），按后者会永远报"尚未校准"。
+                _log.Log("[probe] rois.json 无任何场景 ROI，请先校准");
                 return new ProbeStartInfo(ProbeStart.NoRoi, proc);
             }
             var hwnd = WindowFinder.FindByProcess(proc);
@@ -328,7 +343,8 @@ public sealed class Phase1Probe : IDisposable
 
     private string BuildDebugText()
     {
-        int pollMs = PollInterval.Resolve(_settings.Current.Ocr, _hasChatRoi);
+        var ocr = _settings.Current.Ocr;
+        int detectMs = PollInterval.SceneDetect(ocr), translateMs = PollInterval.Translate(ocr);
         int roiCount = _cfg.Scenes.TryGetValue(SceneId, out var bs2) ? bs2.Sum(b => b.Rois.Count) : 0;
         string state = _waitingForWindow ? "等待窗口" : _windowLost ? "窗口丢失" : _paused ? "已暂停" : "运行中";
         // 指纹打分明细：排查"识别不对/识别不到"时最想看的就是每个候选各多少分，直接摊开。
@@ -343,9 +359,9 @@ public sealed class Phase1Probe : IDisposable
             $"场景: {SceneDisplay(_activeScene, _activeRace)}  判定: {_lastRec.Summary}\n" +
             $"指纹: {scores}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
-            $"轮询: {pollMs}ms  引擎: {t.Active}  两级: {(t.TwoLevel ? "on" : "off")}\n" +
-            $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  busy={_busy}\n" +
-            $"状态: {state}  chatRoi={(_hasChatRoi ? "yes" : "no")}\n" +
+            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  引擎: {t.Active}  两级: {(t.TwoLevel ? "on" : "off")}\n" +
+            $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  已校准场景={(_anySceneCalibrated ? "yes" : "no")}  busy={_busy}\n" +
+            $"状态: {state}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}\n" +
             $"缓存: {_tiered.CacheCount}  术语表: {_glossaryCount}\n" +
             $"参考: {refs}";
@@ -423,29 +439,30 @@ public sealed class Phase1Probe : IDisposable
         }
         _lastFrameWH = $"{frame.Width}x{frame.Height}";
         if (_paused) { frame.Dispose(); return; }
-        // 轮询频率接线（Phase 5）：每帧实时读设置→场景含 Chat ROI 用 ChatPollMs，否则 OtherPollMs（钳制 150–5000ms）。
-        // 同时刷新捕获侧节流，保证"帧转换节流 ≤ 处理节流"，改设置即时生效无需重启。
-        int pollMs = PollInterval.Resolve(_settings.Current.Ocr, _hasChatRoi);
-        _capture.MinIntervalMs = pollMs;
-        if ((DateTime.Now - _lastShot).TotalMilliseconds < pollMs
-            || Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
-        {
-            frame.Dispose();
-            return;
-        }
-        _lastShot = DateTime.Now;
+        // ── 两个独立节拍：场景检测(Ocr.SceneDetectPollMs，默认 200ms) 与 翻译(Ocr.TranslatePollMs，默认 500ms)。
+        // 每帧实时读设置，改设置即时生效无需重启。识别很便宜要跑得快，翻译贵(OCR+LLM)按自己节拍跑。
+        var ocr = _settings.Current.Ocr;
+        int detectMs = PollInterval.SceneDetect(ocr), translateMs = PollInterval.Translate(ocr);
+        _capture.MinIntervalMs = PollInterval.CaptureFloor(ocr); // 上游闸门=两者较快值，否则识别被翻译拖平
+        var now = DateTime.Now;
+        bool detectDue = (now - _lastDetect).TotalMilliseconds >= detectMs;
+        bool translateDue = (now - _lastShot).TotalMilliseconds >= translateMs;
+        if (!detectDue && !translateDue) { frame.Dispose(); return; } // 两个钟都没到，直接丢帧
+        if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0) { frame.Dispose(); return; } // 单飞：上一帧还在处理
         try
         {
             // ── 场景识别必须在 ROI 可用性判断之前跑 ──
             // _roiAvailable 是识别的**结果**（切到"其他界面"或某场景没校准 → 它变 false），
             // 把它放在识别前面会让这些状态变成"只进不出"的死胡同：一旦进去就再没有帧去识别回来。
             // 实测症状：开局头两次识别正常，之后永远停在"其他界面"。
-            if ((DateTime.Now - _lastDetect).TotalMilliseconds >= DetectIntervalMs)
+            if (detectDue)
             {
-                _lastDetect = DateTime.Now;
-                // 识别到场景切换 → 本帧不翻（ROI 集刚变，bucket 需重取），下一帧按新场景继续。
+                _lastDetect = now;
+                // 识别到切换时 SwitchScene 已同步清屏；本帧不翻（ROI 集刚变，bucket 需重取），下一帧按新场景继续。
                 if (DetectScene(frame)) return;
             }
+            if (!translateDue) return; // 这一拍只该跑识别：不裁剪不 OCR，省下开销
+            _lastShot = now;
             if (!_roiAvailable)
             {
                 if (!_roiMissingLogged)

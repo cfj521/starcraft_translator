@@ -126,8 +126,8 @@ public partial class SettingsWindow : Window
         TranslatePlayerIdCheck.IsChecked = s.Translation.TranslatePlayerId;
         RefreshChatGptStatus();
 
-        ChatPollBox.Text = s.Ocr.ChatPollMs.ToString();
-        OtherPollBox.Text = s.Ocr.OtherPollMs.ToString();
+        SceneDetectPollBox.Text = s.Ocr.SceneDetectPollMs.ToString();
+        TranslatePollBox.Text = s.Ocr.TranslatePollMs.ToString();
 
         FontFamilyBox.Text = s.Appearance.FontFamily;
         FontSizeBox.Text = s.Appearance.FontSize.ToString();
@@ -479,8 +479,8 @@ public partial class SettingsWindow : Window
 
         var ocr = original.Ocr with
         {
-            ChatPollMs = ParseIntOr(ChatPollBox.Text, original.Ocr.ChatPollMs),
-            OtherPollMs = ParseIntOr(OtherPollBox.Text, original.Ocr.OtherPollMs),
+            SceneDetectPollMs = ParseIntOr(SceneDetectPollBox.Text, original.Ocr.SceneDetectPollMs),
+            TranslatePollMs = ParseIntOr(TranslatePollBox.Text, original.Ocr.TranslatePollMs),
         };
 
         var appearance = original.Appearance with

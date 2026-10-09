@@ -1,29 +1,55 @@
 using ScrTranslator.Core.Settings;
 namespace ScrTranslator.Core.Tests.Settings;
 
-/// <summary>Phase 5: 轮询频率接线——场景是否含 Chat ROI 决定取哪个设置值，并钳制到合理区间。</summary>
+/// <summary>
+/// 两个正交轮询节拍：场景检测(默认 200ms) 与 翻译(默认 500ms)，各自钳制到合理区间；
+/// 外加一条关键不变量——捕获侧节流必须取两者较快值，否则识别会被翻译的慢节拍拖平。
+/// </summary>
 public class PollIntervalTests
 {
-    [Fact] public void HasChat_UsesChatPollMs()
-        => Assert.Equal(250, PollInterval.Resolve(new OcrSettings { ChatPollMs = 250, OtherPollMs = 800 }, hasChat: true));
+    [Fact] public void Defaults_Are200And500()
+    {
+        var ocr = new OcrSettings();
+        Assert.Equal(200, PollInterval.SceneDetect(ocr));
+        Assert.Equal(500, PollInterval.Translate(ocr));
+    }
 
-    [Fact] public void NoChat_UsesOtherPollMs()
-        => Assert.Equal(800, PollInterval.Resolve(new OcrSettings { ChatPollMs = 250, OtherPollMs = 800 }, hasChat: false));
+    [Fact] public void SceneDetect_And_Translate_AreIndependent()
+    {
+        var ocr = new OcrSettings { SceneDetectPollMs = 120, TranslatePollMs = 1500 };
+        Assert.Equal(120, PollInterval.SceneDetect(ocr));
+        Assert.Equal(1500, PollInterval.Translate(ocr));
+    }
 
     [Theory]
-    [InlineData(0)]    // 0 → 下限
-    [InlineData(-100)] // 负数 → 下限
-    [InlineData(50)]   // 过小 → 下限(150)：OCR+网络再快也不该低于此，防空转
+    [InlineData(0)]     // 0 → 下限，防把 CPU 打满
+    [InlineData(-100)]  // 负数 → 下限
+    [InlineData(10)]    // 过小 → 下限
     public void BelowMin_ClampsToMin(int ms)
-        => Assert.Equal(PollInterval.MinMs, PollInterval.Resolve(new OcrSettings { ChatPollMs = ms, OtherPollMs = ms }, hasChat: true));
+    {
+        var ocr = new OcrSettings { SceneDetectPollMs = ms, TranslatePollMs = ms };
+        Assert.Equal(PollInterval.MinMs, PollInterval.SceneDetect(ocr));
+        Assert.Equal(PollInterval.MinMs, PollInterval.Translate(ocr));
+    }
 
     [Fact] public void AboveMax_ClampsToMax()
-        => Assert.Equal(PollInterval.MaxMs, PollInterval.Resolve(new OcrSettings { ChatPollMs = 999_999, OtherPollMs = 999_999 }, hasChat: false));
-
-    [Fact] public void Defaults_AreWithinRange()
     {
-        var ocr = new OcrSettings(); // 300 / 800
-        Assert.Equal(300, PollInterval.Resolve(ocr, hasChat: true));
-        Assert.Equal(800, PollInterval.Resolve(ocr, hasChat: false));
+        var ocr = new OcrSettings { SceneDetectPollMs = 999_999, TranslatePollMs = 999_999 };
+        Assert.Equal(PollInterval.MaxMs, PollInterval.SceneDetect(ocr));
+        Assert.Equal(PollInterval.MaxMs, PollInterval.Translate(ocr));
+    }
+
+    [Fact] public void CaptureFloor_FollowsTheFasterClock()
+    {
+        // 识别 200 / 翻译 500：上游必须放行到 200，否则"检测 200ms"是假的。
+        Assert.Equal(200, PollInterval.CaptureFloor(new OcrSettings { SceneDetectPollMs = 200, TranslatePollMs = 500 }));
+        // 反过来的配置（翻译比识别还勤）也要跟着较快的那个。
+        Assert.Equal(150, PollInterval.CaptureFloor(new OcrSettings { SceneDetectPollMs = 400, TranslatePollMs = 150 }));
+    }
+
+    [Fact] public void CaptureFloor_UsesClampedValues()
+    {
+        // 越界值先钳制再比较，不能把 0/负数原样透传给捕获层。
+        Assert.Equal(PollInterval.MinMs, PollInterval.CaptureFloor(new OcrSettings { SceneDetectPollMs = 0, TranslatePollMs = 500 }));
     }
 }

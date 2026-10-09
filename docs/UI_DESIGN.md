@@ -109,11 +109,11 @@
 ```
 引擎            PaddleOCR（当前唯一实现；内置 OCR 方案已废弃）
 识别语言        韩文 (ko)（固定，无需语言包检查）
-轮询频率
-  聊天区        每 [ 300 ] ms 检测一次
-  其它区域      每 [ 800 ] ms 检测一次
+轮询节拍
+  场景检测      每 [ 200 ] ms 识别一次（只比几块静态区，很便宜）
+  翻译          每 [ 500 ] ms 跑一轮 OCR+翻译
 ```
-> 注：轮询频率已接线并即时生效（场景含 Chat ROI 取聊天值，钳制 150–5000ms）。原"图像预处理/变化检测灵敏度"控件为占位假设置——RapidOcrNet 不暴露对应旋钮、变化检测为精确文本比对；实测原生分辨率裁条放大 2x 无收益（avgConf .987 直读 vs .982 放大），已整体移除（UI_DESIGN 与 settings.json 字段同步删除，旧文件多余字段读取时自动忽略）。
+> 注：两个节拍**正交**、改后即时生效（各自钳制 100–5000ms）。捕获侧帧节流自动取两者较快值（`PollInterval.CaptureFloor`）——否则识别配 200ms 也会被翻译的 500ms 上游拖平。原"聊天区/其它区域"两值设计已废弃：其他界面根本不翻译，给它配一个翻译节拍属于假旋钮。原"图像预处理/变化检测灵敏度"控件为占位假设置——RapidOcrNet 不暴露对应旋钮、变化检测为精确文本比对；实测原生分辨率裁条放大 2x 无收益（avgConf .987 直读 vs .982 放大），已整体移除（UI_DESIGN 与 settings.json 字段同步删除，旧文件多余字段读取时自动忽略）。
 
 ### 3.4 区域 ROI
 ```
@@ -220,7 +220,7 @@
 class AppSettings {
     GeneralSettings General;      // TargetProcess / AutoStart / StartMinimized / AutoTranslateOnLaunch
     TranslationSettings Translation;
-    OcrSettings Ocr;              // ChatPollMs=300 / OtherPollMs=800（仅此两项；预处理/灵敏度字段已移除，见 §3.3 注）
+    OcrSettings Ocr;              // SceneDetectPollMs=200 / TranslatePollMs=500（两个正交节拍；旧 ChatPollMs/OtherPollMs 与预处理/灵敏度字段均已移除，见 §3.3 注）
     AppearanceSettings Appearance;// FontFamily / FontSize / Opacity / ShowOriginalAndTranslation
     Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F7–F11/Ctrl+F9
     // ROI 配置单独存 rois.json（RoiStore），按分辨率 bucket 分组，RoomList 可含列定义

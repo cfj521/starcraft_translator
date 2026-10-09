@@ -12,10 +12,17 @@ public sealed record GeneralSettings
 }
 public sealed record OcrSettings
 {
-    public int ChatPollMs { get; init; } = 300;
-    public int OtherPollMs { get; init; } = 800;
+    /// <summary>场景检测轮询（毫秒）。默认 200：识别只读几块静态区做块均值比对（&lt;1ms），
+    /// 200ms 一次开销可忽略，换来"切界面立刻跟上"——慢了就出现"人已在房间内、还在按老 ROI 翻"的窗口期。</summary>
+    public int SceneDetectPollMs { get; init; } = 200;
+
+    /// <summary>翻译轮询（毫秒）。默认 500：一轮 = 各 ROI 裁剪 + OCR + 翻译上屏。</summary>
+    public int TranslatePollMs { get; init; } = 500;
+
+    // 曾有 ChatPollMs/OtherPollMs 两个值（按"场景里有没有聊天 ROI"二选一）：其他界面根本不翻译，
+    // 给它单独配一个"翻译轮询"是无意义的假旋钮 → 收敛成上面这两个正交的轮询节拍。
     // 曾有 Upscale/Grayscale/Binarize/ChangeSensitivity 四字段：RapidOcrNet 不暴露这些旋钮、
-    // 变化检测是精确文本比对无"灵敏度"可言；实测(房间列表样图 原生裁条 直读 avgConf .987 vs 2x放大 .982)
+    // 变化检测是精确文本比对无"灵敏度"可言；实测(原生裁条直读 avgConf .987 vs 2x放大 .982)
     // 证明原生分辨率放大无收益 → 诚实移除，避免假设置。旧 settings.json 多余字段反序列化时自动忽略。
 }
 public sealed record AppearanceSettings

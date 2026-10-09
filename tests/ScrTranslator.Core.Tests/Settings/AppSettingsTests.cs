@@ -8,8 +8,8 @@ public class AppSettingsTests
         var a = new AppSettings();
         Assert.Equal("StarCraft", a.General.TargetProcess);
         Assert.True(a.General.StartMinimized);
-        Assert.Equal(300, a.Ocr.ChatPollMs);
-        Assert.Equal(800, a.Ocr.OtherPollMs);
+        Assert.Equal(200, a.Ocr.SceneDetectPollMs);
+        Assert.Equal(500, a.Ocr.TranslatePollMs);
         Assert.InRange(a.Appearance.Opacity, 0.0, 1.0);
         Assert.Equal(TranslationEngine.DashScope, a.Translation.Active); // 复用 TranslationSettings 默认
     }

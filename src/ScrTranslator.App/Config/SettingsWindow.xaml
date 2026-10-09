@@ -138,19 +138,19 @@
                         <GroupBox Header="识别引擎">
                             <TextBlock Text="PaddleOCR（韩文 mobile 模型，随包分发，无需系统语言包）" Margin="4"/>
                         </GroupBox>
-                        <GroupBox Header="轮询频率（应用后即时生效；场景含聊天区取聊天值，否则取其它值；150–5000ms）">
+                        <GroupBox Header="轮询节拍（应用后即时生效；100–5000ms）">
                             <StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="聊天区" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="场景检测" Style="{StaticResource RowLabel}"/>
                                     <TextBlock Text="每" VerticalAlignment="Center"/>
-                                    <TextBox x:Name="ChatPollBox" Width="60" Margin="4,0,4,0"/>
-                                    <TextBlock Text="ms 检测一次" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="SceneDetectPollBox" Width="60" Margin="4,0,4,0"/>
+                                    <TextBlock Text="ms 识别一次（只比几块静态区，很快；默认 200）" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="其它区域" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="翻译" Style="{StaticResource RowLabel}"/>
                                     <TextBlock Text="每" VerticalAlignment="Center"/>
-                                    <TextBox x:Name="OtherPollBox" Width="60" Margin="4,0,4,0"/>
-                                    <TextBlock Text="ms 检测一次" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="TranslatePollBox" Width="60" Margin="4,0,4,0"/>
+                                    <TextBlock Text="ms 跑一轮 OCR+翻译（默认 500）" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </StackPanel>
                         </GroupBox>
