@@ -146,7 +146,7 @@ public sealed class TrayService : IDisposable
         }
         catch (Exception ex)
         {
-            _log.Log($"[tray] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
+            _log.Error($"[tray] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
             MessageBox.Show($"ChatGPT 登录出错：{ex.Message}", "登录失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
@@ -205,7 +205,7 @@ public sealed class TrayService : IDisposable
     private void SaveSettings()
     {
         try { SettingsStore.Save(_settings.Current, _settingsPath); }
-        catch (Exception ex) { _log.Log($"[tray] 保存 settings.json 失败: {ex.Message}"); }
+        catch (Exception ex) { _log.Error($"[tray] 保存 settings.json 失败: {ex.Message}"); }
     }
 
     private void ToggleOverlay()
@@ -217,7 +217,7 @@ public sealed class TrayService : IDisposable
     public void ShowToast(string title, string message)
     {
         try { _trayIcon?.ShowNotification(title, message); }
-        catch (Exception ex) { _log.Log($"[tray] 显示提示失败: {ex.Message}"); }
+        catch (Exception ex) { _log.Warn($"[tray] 显示提示失败: {ex.Message}"); }
     }
 
     public void Dispose()

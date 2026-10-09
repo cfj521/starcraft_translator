@@ -86,7 +86,8 @@ public sealed class Phase1Probe : IDisposable
         _glossaryCount = glossary.Entries.Count;
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
-        _capture.Log = msg => _log.Log(msg); // 帧转换异常进文件日志（诊断）
+        _capture.LogError = msg => _log.Error(msg); // 帧转换异常=业务错误，恒记
+        _capture.LogDebug = msg => _log.Debug(msg); // 帧流统计=诊断，DEBUG 才记
         // 窗口显隐：250ms 刷新。游戏非前台→隐藏悬浮层+调试窗口；前台→按用户意图(overlay.EnabledByUser / General.DebugMode)显示。
         _debugTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _debugTimer.Tick += (_, _) => ApplyWindowVisibility();
@@ -119,7 +120,7 @@ public sealed class Phase1Probe : IDisposable
         }
         var d = SceneDetector.Detect(texts);
         _lastDet = d;
-        _log.Log($"[scene] 判定={d.Scene.Label()}({_activeScene.Label()}) score={d.Score} margin={d.Margin} 线索=[{string.Join(",", d.Hits)}] 文本数={texts.Count}");
+        _log.Debug($"[scene] 判定={d.Scene.Label()}({_activeScene.Label()}) score={d.Score} margin={d.Margin} 线索=[{string.Join(",", d.Hits)}] 文本数={texts.Count}");
 
         if (d.Scene == _activeScene) { _pendingScene = GameScene.Unknown; _pendingCount = 0; return false; }
         if (d.Scene == GameScene.Unknown) return false; // 证据不足：保持当前场景
@@ -160,7 +161,7 @@ public sealed class Phase1Probe : IDisposable
             _log.Log("[probe] Start 被调用");
             if (!GraphicsCaptureSession.IsSupported())
             {
-                _log.Log("[probe] GraphicsCapture.IsSupported=false");
+                _log.Warn("[probe] GraphicsCapture.IsSupported=false（系统不支持窗口捕获）");
                 return new ProbeStartInfo(ProbeStart.CaptureUnsupported, proc);
             }
             if (!_roiAvailable)
@@ -169,7 +170,7 @@ public sealed class Phase1Probe : IDisposable
                 return new ProbeStartInfo(ProbeStart.NoRoi, proc);
             }
             var hwnd = WindowFinder.FindByProcess(proc);
-            _log.Log($"[probe] FindByProcess({proc}) hwnd={hwnd}");
+            _log.Debug($"[probe] FindByProcess({proc}) hwnd={hwnd}");
             // 看门狗：窗口丢失重连/最小化恢复(5-3)，以及"等待游戏窗口"模式——F9 时游戏没开不再算失败，
             // 挂 2s 轮询，窗口一出现自动开始捕获翻译（也承载 General.AutoTranslateOnLaunch 的启动自动开）。
             _windowLost = false; _wasIconic = false; _resNotified = false;
@@ -188,7 +189,7 @@ public sealed class Phase1Probe : IDisposable
             if (!_capture.Start(hwnd))
             {
                 _watchdog.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
-                _log.Log("[probe] 捕获启动失败");
+                _log.Error("[probe] 捕获启动失败");
                 return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
             }
             _log.Log("[probe] 已开始捕获（看门狗已启动）");
@@ -196,7 +197,7 @@ public sealed class Phase1Probe : IDisposable
         }
         catch (Exception ex)
         {
-            _log.Log($"[probe] Start 异常: {ex}");
+            _log.Error($"[probe] Start 异常: {ex}");
             return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
         }
     }
@@ -254,7 +255,7 @@ public sealed class Phase1Probe : IDisposable
             }
             if (!iconic) WatchdogFrameFlow(hwnd); // 帧流健康：零帧=独占全屏/未渲染；帧在来但处理不动=卡死
         }
-        catch (Exception ex) { _log.Log($"[probe] 看门狗异常: {ex.Message}"); }
+        catch (Exception ex) { _log.Error($"[probe] 看门狗异常: {ex.Message}"); }
     }
 
     private void ClearOverlay() =>
@@ -264,6 +265,8 @@ public sealed class Phase1Probe : IDisposable
     /// 调试窗口显示时顺带刷新文本。</summary>
     private void ApplyWindowVisibility()
     {
+        // 诊断级日志开关与 DEBUG 面板同步（单一真源=General.DebugMode，覆盖 F6/配置页/托盘所有切换路径）。
+        _log.DebugEnabled = _settings.Current.General.DebugMode;
         bool gameActive = IsGameForeground();
         var overlayTarget = gameActive && _overlay.EnabledByUser ? System.Windows.Visibility.Visible : System.Windows.Visibility.Hidden;
         if (_overlay.Visibility != overlayTarget) _overlay.Visibility = overlayTarget;
@@ -313,7 +316,7 @@ public sealed class Phase1Probe : IDisposable
             if (++_zeroFrameTicks == 5 && !_noFrameNotified) // ~10s
             {
                 _noFrameNotified = true;
-                _log.Log("[probe] 看门狗：10s 无新帧（独占全屏或画面静止）");
+                _log.Warn("[probe] 看门狗：10s 无新帧（独占全屏或画面静止）");
                 Notice?.Invoke(ProbeNotice.NoFrames,
                     "10 秒没收到新画面：若游戏是独占全屏，请改窗口化/无边框；画面静止则动一下鼠标即可。");
             }
@@ -328,7 +331,7 @@ public sealed class Phase1Probe : IDisposable
                 if (++_stallTicks == 5 && !_stallNotified)
                 {
                     _stallNotified = true;
-                    _log.Log("[probe] 看门狗：帧在到达但 10s 未完成处理，疑似 _busy 卡死");
+                    _log.Warn("[probe] 看门狗：帧在到达但 10s 未完成处理，疑似 _busy 卡死");
                     Notice?.Invoke(ProbeNotice.Stalled, "画面在刷新但翻译卡住了（可能 OCR/网络阻塞），稍后自动重试；持续则重启程序。");
                 }
             }
@@ -397,7 +400,7 @@ public sealed class Phase1Probe : IDisposable
             var winRect = NativeMethods.GetWindowScreenRect(_capture.Hwnd);
             if (winRect.IsEmpty || winRect.Width <= 0 || winRect.Height <= 0 || winRect.Left <= -30000 || winRect.Top <= -30000)
             {
-                _log.Log("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
+                _log.Debug("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
             // 场景自动识别（每 DetectIntervalMs 一次）：识别到别的场景就切 ROI 集，本帧跳过翻译下一帧再来。
@@ -428,14 +431,14 @@ public sealed class Phase1Probe : IDisposable
                 using var sub = new SKBitmap(px.Width, px.Height);
                 if (!frame.ExtractSubset(sub, new SKRectI(px.Left, px.Top, px.Right, px.Bottom)))
                 {
-                    _log.Log($"[{roi.Name}] 裁剪失败 rect={px}");
+                    _log.Warn($"[{roi.Name}] 裁剪失败 rect={px}");
                     continue;
                 }
                 var roiType = RoiTypes.Parse(roi.Type);
                 var res = await _ocr.RecognizeAsync(sub);
                 foreach (var line in res.Lines)
                 {
-                    _log.Log($"[{roi.Name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
+                    _log.Debug($"[{roi.Name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
                     double relX = (line.Bounds.X + line.Bounds.Width / 2.0) / Math.Max(1, px.Width);
                     ColumnKind? col = roi.Columns is null
                         ? (roiType == RoiType.RoomList ? ColumnKind.RoomName : (ColumnKind?)null)
@@ -449,7 +452,7 @@ public sealed class Phase1Probe : IDisposable
                     metas.Add((frameBounds, roi.Name));
                 }
                 if (res.Lines.Count == 0)
-                    _log.Log($"[{roi.Name}] (空)");
+                    _log.Debug($"[{roi.Name}] (空)");
             }
 
             // 变化检测：本帧全部 ROI 韩文与上一帧完全相同则跳过翻译与上屏（省 API 费用，减少闪烁）。
@@ -482,13 +485,13 @@ public sealed class Phase1Probe : IDisposable
             sw.Stop();
             _lastTranslateMs = sw.ElapsedMilliseconds; _lastAllResolved = outcome.AllResolved; _lastLineCount = koLines.Count;
             for (int k = 0; k < koLines.Count; k++)
-                _log.Log($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" engine={engine} 两级={_settings.Current.Translation.TwoLevel} {sw.ElapsedMilliseconds}ms");
+                _log.Debug($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" engine={engine} 两级={_settings.Current.Translation.TwoLevel} {sw.ElapsedMilliseconds}ms");
 
             // 仅当无“总失败”行(AllResolved)才提交变化检测,否则下一帧同内容重试。
             if (outcome.AllResolved) _lastJoined = joined;
-            _log.Log($"[probe] 上屏完成 AllResolved={outcome.AllResolved}");
+            _log.Debug($"[probe] 上屏完成 lines={koLines.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
         }
-        catch (Exception ex) { _log.Log($"[probe] 异常: {ex.Message}"); }
+        catch (Exception ex) { _log.Error($"[probe] 处理帧异常: {ex.Message}"); }
         finally { Interlocked.Increment(ref _processed); frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }
     }
 

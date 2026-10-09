@@ -207,6 +207,10 @@ public partial class App : Application
         });
 
         var log = _host.Services.GetRequiredService<FileLogger>();
+        var startupSettings = _host.Services.GetRequiredService<SettingsHolder>();
+        log.DebugEnabled = startupSettings.Current.General.DebugMode; // 启动即同步，避免首帧诊断漏记
+        log.Info($"──── SC:R Translator v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version} 启动 ────");
+        log.Info($"[app] 配置={settingsPath} | ROI={roisPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
 
         // 校准窗口：单例（已开则激活），F8/托盘"进入校准…"打开。窗口关闭后置空以便下次可重新 new（WPF Window 一次性）。
         Calibration.CalibrationWindow? calibrationWindow = null;
@@ -271,8 +275,10 @@ public partial class App : Application
             var cur = settingsHolder.Current;
             bool newVal = !cur.General.DebugMode;
             settingsHolder.Current = cur with { General = cur.General with { DebugMode = newVal } };
+            log.DebugEnabled = newVal; // 即时生效，诊断日志与面板同步切换（探测定时器亦会兜底同步）
             try { SettingsStore.Save(settingsHolder.Current, settingsPath); }
-            catch (Exception ex) { log.Log($"[hotkey] 保存 settings.json 失败: {ex.Message}"); }
+            catch (Exception ex) { log.Error($"[hotkey] 保存 settings.json 失败: {ex.Message}"); }
+            log.Info($"[app] DEBUG 模式: {(newVal ? "开（全量诊断日志+面板）" : "关（仅业务日志）")}");
             _trayService.ShowToast("DEBUG 面板", newVal ? "已开启" : "已关闭");
         }
 

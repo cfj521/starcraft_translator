@@ -283,7 +283,7 @@ public partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            _log.Log($"[settings] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
+            _log.Error($"[settings] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
             MessageBox.Show(this, $"ChatGPT 登录出错：{ex.Message}", "登录失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
@@ -405,7 +405,7 @@ public partial class SettingsWindow : Window
         try { SettingsStore.Save(_holder.Current, _settingsPath); }
         catch (Exception ex)
         {
-            _log.Log($"[settings] 保存热键失败: {ex.Message}");
+            _log.Error($"[settings] 保存热键失败: {ex.Message}");
             MessageBox.Show(this, $"保存热键失败：{ex.Message}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -438,7 +438,7 @@ public partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            _log.Log($"[settings] 保存 settings.json 失败: {ex.Message}");
+            _log.Error($"[settings] 保存 settings.json 失败: {ex.Message}");
             MessageBox.Show(this, $"保存设置失败：{ex.Message}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         // 开机自启接线 HKCU Run 键（5-4）：失败不影响其他设置，单独提示。
