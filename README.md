@@ -24,6 +24,7 @@
 | [docs/TECH_DESIGN.md](docs/TECH_DESIGN.md) | 技术设计：架构、模块、数据流、关键难点方案 |
 | [docs/UI_DESIGN.md](docs/UI_DESIGN.md) | 界面设计：配置窗口、悬浮层、托盘、校准、热键 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 分阶段开发计划与每阶段验收 |
+| [docs/E2E_CHECKLIST.md](docs/E2E_CHECKLIST.md) | **实机验收清单**（Phase 2/4/5 合并，接真实 SC:R 时逐项勾） |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | 星际韩文术语表（翻译引擎使用） |
 | [CLAUDE.md](CLAUDE.md) | 给 Claude Code 的项目说明与开发约定 |
 
