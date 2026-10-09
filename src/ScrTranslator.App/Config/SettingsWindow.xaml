@@ -159,19 +159,33 @@
             <TabItem Header="区域">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
-                        <TextBlock x:Name="RegionHintText" Text="尚未加载" Margin="0,0,0,6"/>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                            <Button x:Name="EnterCalibrationButton" Content="进入校准…" Click="OnEnterCalibrationClick"/>
-                            <Button x:Name="EditRoiButton" Content="编辑选中…" Margin="8,0,0,0" Click="OnEditRoiClick"/>
-                            <Button x:Name="DeleteRoiButton" Content="删除选中" Margin="8,0,0,0" Click="OnDeleteRoiClick"/>
-                        </StackPanel>
-                        <TextBlock Text="已定义区域（全部场景 × 全部分辨率；坐标为该分辨率下的整数像素）：" FontWeight="Bold" Margin="0,0,0,4"/>
-                        <ListView x:Name="RoiListView" Height="200" Margin="0,0,0,4">
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="RegionHintText" Text="尚未加载" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准 (F8)" Click="OnEnterCalibrationClick"/>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="已定义区域（坐标为像素坐标）：" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button x:Name="EditRoiButton" Content="编辑选中" Click="OnEditRoiClick"/>
+                                <Button x:Name="DeleteRoiButton" Content="删除选中" Margin="8,0,0,0" Click="OnDeleteRoiClick"/>
+                            </StackPanel>
+                        </Grid>
+                        <ListView x:Name="RoiListView" Height="200" Margin="0,0,0,4"
+                                  MouseDoubleClick="OnRoiListDoubleClick">
                             <ListView.View>
                                 <GridView>
                                     <GridViewColumn Header="场景" Width="86" DisplayMemberBinding="{Binding Scene}"/>
                                     <GridViewColumn Header="分辨率" Width="90" DisplayMemberBinding="{Binding Resolution}"/>
-                                    <GridViewColumn Header="名称" Width="132" DisplayMemberBinding="{Binding Name}"/>
+                                    <GridViewColumn Header="名称" Width="150" DisplayMemberBinding="{Binding Name}"/>
                                     <GridViewColumn Header="类型" Width="86" DisplayMemberBinding="{Binding Type}"/>
                                     <GridViewColumn Header="左上角 X,Y" Width="94" DisplayMemberBinding="{Binding TopLeft}"/>
                                     <GridViewColumn Header="宽 × 高" Width="94" DisplayMemberBinding="{Binding Size}"/>
@@ -179,19 +193,30 @@
                             </ListView.View>
                         </ListView>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10"
-                                   Text="ⓘ 名称/类型/像素矩形可在这里直接改（“编辑选中…”），便于把聊天框上下沿卡准；要重新拖框或划列请用“进入校准…”。"/>
-                        <TextBlock Text="列定义（框内哪些段算房间名 / 地图；校准与预设两个来源都汇到这里，只读，划列请进校准）：" FontWeight="Bold" Margin="0,0,0,4"/>
-                        <ListView x:Name="ColumnsListView" Height="140">
+                                   Text="ⓘ 双击或选中后点&quot;编辑选中&quot;即可改坐标；预设的修改写入 %APPDATA%\ScrTranslator\layout-overrides.json，删掉该文件即恢复出厂值。拖框请用&quot;进入校准&quot;。"/>
+
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="房间列表列区域：" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button x:Name="EditColumnButton" Content="编辑选中" Click="OnEditColumnClick"/>
+                                <Button x:Name="DeleteColumnButton" Content="删除选中" Margin="8,0,0,0" Click="OnDeleteColumnClick"/>
+                            </StackPanel>
+                        </Grid>
+                        <ListView x:Name="ColumnsListView" Height="140" MouseDoubleClick="OnColumnListDoubleClick">
                             <ListView.View>
                                 <GridView>
-                                    <GridViewColumn Header="所属区域" Width="180" DisplayMemberBinding="{Binding RoiName}"/>
-                                    <GridViewColumn Header="列范围" Width="120" DisplayMemberBinding="{Binding Range}"/>
-                                    <GridViewColumn Header="语义" Width="100" DisplayMemberBinding="{Binding Kind}"/>
+                                    <GridViewColumn Header="列名" Width="150" DisplayMemberBinding="{Binding Name}"/>
+                                    <GridViewColumn Header="左上角 X,Y" Width="110" DisplayMemberBinding="{Binding TopLeft}"/>
+                                    <GridViewColumn Header="宽 × 高" Width="110" DisplayMemberBinding="{Binding Size}"/>
                                 </GridView>
                             </ListView.View>
                         </ListView>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,8,0,0"
-                                   Text="ⓘ “ID 列是否翻译”由「翻译」页的「翻译玩家 ID」开关联动决定，不在此单独配置。"/>
+                                   Text="ⓘ 每列的 Y 与高跟随所属列表框，只有 X 与宽可改；&quot;翻译玩家 ID&quot;开关仍由「翻译」页决定。"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

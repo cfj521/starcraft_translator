@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace ScrTranslator.Core.Scene;
@@ -77,10 +78,15 @@ public sealed class LayoutPresetStore
 {
     public const int SupportedVersion = 1;
     public const string DefaultFileName = "layout-presets.json";
+    /// <summary>用户编辑预设时落的覆盖层文件名（与 rois.json 同目录，跟出厂层分家，升级 exe 不丢）。</summary>
+    public const string OverridesFileName = "layout-overrides.json";
 
     public IReadOnlyList<LayoutPreset> Presets { get; private init; } = Array.Empty<LayoutPreset>();
     public string? LoadError { get; private init; }
     public IReadOnlyList<string> Warnings { get; private init; } = Array.Empty<string>();
+
+    /// <summary>来自覆盖层（用户在配置页改的）条目数。</summary>
+    public int OverrideCount { get; private init; }
 
     public bool IsUsable => LoadError is null && Presets.Count > 0;
 
@@ -90,21 +96,130 @@ public sealed class LayoutPresetStore
     /// <summary>该场景是否有任何预设（用于"没校准也能翻"的可用性判断）。</summary>
     public bool HasScene(string sceneId) => Presets.Any(p => p.Scene == sceneId);
 
-    public static LayoutPresetStore Load(string path)
+    /// <summary>读出厂层 + 可选覆盖层。覆盖层坏了只告警、不连累出厂层。</summary>
+    public static LayoutPresetStore Load(string factoryPath, string? overridesPath = null)
     {
         var warnings = new List<string>();
+        var factory = ReadFile(factoryPath, "出厂布局预设", warnings, out var factoryError);
+        if (factoryError is not null) return new LayoutPresetStore { LoadError = factoryError, Warnings = warnings };
+
+        var merged = factory;
+        int overrideCount = 0;
+        if (overridesPath is not null && File.Exists(overridesPath))
+        {
+            var over = ReadFile(overridesPath, "布局预设覆盖层", warnings, out var overrideError);
+            if (overrideError is not null)
+                warnings.Add(overrideError + "（已忽略覆盖层，仅用出厂预设）");
+            else
+                (merged, overrideCount) = Merge(factory, over);
+        }
+        return new LayoutPresetStore { Presets = merged, OverrideCount = overrideCount, Warnings = warnings };
+    }
+
+    /// <summary>同 (场景,分辨率) 覆盖层胜出；新场景/新分辨率直接追加。</summary>
+    static (IReadOnlyList<LayoutPreset>, int) Merge(IReadOnlyList<LayoutPreset> factory, IReadOnlyList<LayoutPreset> overrides)
+    {
+        var result = factory.ToList();
+        int applied = 0;
+        foreach (var o in overrides)
+        {
+            applied++;
+            int idx = result.FindIndex(p => p.Scene == o.Scene && p.Resolution == o.Resolution);
+            if (idx < 0) result.Add(o);
+            else result[idx] = o;
+        }
+        return (result, applied);
+    }
+
+    /// <summary>把一条预设写进覆盖层文件（同 (场景,分辨率) 整条替换）。出厂文件永不被程序改写。</summary>
+    public static void SaveOverride(string overridesPath, LayoutPreset preset)
+    {
+        var existing = File.Exists(overridesPath)
+            ? ReadFile(overridesPath, "布局预设覆盖层", new List<string>(), out _)
+            : Array.Empty<LayoutPreset>();
+        var next = Upsert(existing, preset);
+        string? dir = Path.GetDirectoryName(overridesPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        File.WriteAllText(overridesPath, ToJson(next), new UTF8Encoding(false));
+    }
+
+    /// <summary>从覆盖层删掉某条 = 该 (场景,分辨率) 恢复成出厂值。</summary>
+    public static void RemoveOverride(string overridesPath, string scene, string resolution)
+    {
+        if (!File.Exists(overridesPath)) return;
+        var existing = ReadFile(overridesPath, "布局预设覆盖层", new List<string>(), out _);
+        var next = existing.Where(p => !(p.Scene == scene && p.Resolution == resolution)).ToList();
+        File.WriteAllText(overridesPath, ToJson(next), new UTF8Encoding(false));
+    }
+
+    static IReadOnlyList<LayoutPreset> Upsert(IReadOnlyList<LayoutPreset> list, LayoutPreset preset)
+    {
+        var next = list.ToList();
+        int idx = next.FindIndex(p => p.Scene == preset.Scene && p.Resolution == preset.Resolution);
+        if (idx < 0) next.Add(preset);
+        else next[idx] = preset;
+        return next;
+    }
+
+    /// <summary>序列化回 JSON。手写而不是 JsonSerializer：字段顺序要和出厂文件一致，diff 才看得下去。</summary>
+    public static string ToJson(IReadOnlyList<LayoutPreset> presets)
+    {
+        var sb = new StringBuilder();
+        sb.Append("{\n  \"version\": 1,\n");
+        sb.Append("  \"note\": \"用户在配置页改的界面布局预设覆盖层；同 (场景,分辨率) 覆盖出厂 layout-presets.json。删掉本文件即恢复出厂值。\",\n");
+        sb.Append("  \"presets\": {");
+        bool firstScene = true;
+        foreach (var g in presets.GroupBy(p => p.Scene))
+        {
+            if (!firstScene) sb.Append(',');
+            firstScene = false;
+            sb.Append($"\n    \"{g.Key}\": {{");
+            bool firstRes = true;
+            foreach (var p in g)
+            {
+                if (!firstRes) sb.Append(',');
+                firstRes = false;
+                sb.Append($"\n      \"{p.Resolution}\": {{");
+                var parts = new List<string>();
+                if (p.Chat is { } c) parts.Add($" \"chat\": [{c.X}, {c.Y}, {c.Width}, {c.Height}]");
+                if (p.RoomList is { } r)
+                {
+                    var cols = string.Join(", ", r.Columns.Select(col =>
+                        "{ \"kind\": \"" + col.Kind + "\", \"x\": " + col.X + ", \"width\": " + col.Width + " }"));
+                    parts.Add($" \"roomList\": {{ \"list\": [{r.X}, {r.Y}, {r.Width}, {r.Height}], \"rowHeight\": {r.RowHeight}, \"columns\": [{cols}] }}");
+                }
+                sb.Append(string.Join(",", parts));
+                sb.Append(" }");
+            }
+            sb.Append("\n    }");
+        }
+        sb.Append("\n  }\n}\n");
+        return sb.ToString();
+    }
+
+    /// <summary>读一份预设文件（出厂层与覆盖层同一 schema）。</summary>
+    static IReadOnlyList<LayoutPreset> ReadFile(string path, string what, List<string> warnings, out string? error)
+    {
+        error = null;
         try
         {
             if (!File.Exists(path))
-                return new LayoutPresetStore { LoadError = $"找不到界面布局预设文件 {Path.GetFileName(path)}" };
-
+            {
+                error = $"找不到{what}文件 {Path.GetFileName(path)}";
+                return Array.Empty<LayoutPreset>();
+            }
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
             if (root.TryGetProperty("version", out var v) && v.TryGetInt32(out int ver) && ver != SupportedVersion)
-                return new LayoutPresetStore { LoadError = $"{path} version={ver}，本程序只支持 v{SupportedVersion}" };
+            {
+                error = $"{what} version={ver}，本程序只支持 v{SupportedVersion}";
+                return Array.Empty<LayoutPreset>();
+            }
             if (!root.TryGetProperty("presets", out var presets) || presets.ValueKind != JsonValueKind.Object)
-                return new LayoutPresetStore { LoadError = "layout-presets.json 缺少 presets 对象" };
-
+            {
+                error = $"{what} 缺少 presets 对象";
+                return Array.Empty<LayoutPreset>();
+            }
             var list = new List<LayoutPreset>();
             foreach (var sceneEl in presets.EnumerateObject())
                 foreach (var resEl in sceneEl.Value.EnumerateObject())
@@ -112,11 +227,13 @@ public sealed class LayoutPresetStore
                     var p = ParseOne(sceneEl.Name, resEl.Name, resEl.Value, warnings);
                     if (p is not null) list.Add(p);
                 }
-            return new LayoutPresetStore { Presets = list, Warnings = warnings };
+            if (list.Count == 0) { error = $"{what} 没有任何可用条目"; return Array.Empty<LayoutPreset>(); }
+            return list;
         }
         catch (Exception ex)
         {
-            return new LayoutPresetStore { LoadError = $"layout-presets.json 解析失败：{ex.Message}" };
+            error = $"{what} 解析失败：{ex.Message}";
+            return Array.Empty<LayoutPreset>();
         }
     }
 

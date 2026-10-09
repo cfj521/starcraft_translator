@@ -95,7 +95,9 @@ public partial class App : Application
 
         // 界面布局预设（出厂层 exe 旁 layout-presets.json）：该界面位置与行高按分辨率是死的，
         // 不必校准；缺当前分辨率或文件损坏时自动回落到"只用校准 ROI"，不影响其它功能。
-        builder.Services.AddSingleton(_ => LayoutPresetStore.Load(Path.Combine(baseDir, LayoutPresetStore.DefaultFileName)));
+        builder.Services.AddSingleton(_ => LayoutPresetStore.Load(
+            Path.Combine(baseDir, LayoutPresetStore.DefaultFileName),
+            Path.Combine(Path.GetDirectoryName(roisPath)!, LayoutPresetStore.OverridesFileName)));
 
         builder.Services.AddSingleton<SecretStore>();
         builder.Services.AddSingleton(new HttpClient());

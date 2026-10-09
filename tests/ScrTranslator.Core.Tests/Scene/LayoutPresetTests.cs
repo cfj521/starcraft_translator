@@ -102,7 +102,7 @@ public class LayoutPresetTests
         var store = LayoutPresetStore.Load(TempWith(Json.Replace("\"rowHeight\": 38", "\"rowHeight\": 0")));
 
         Assert.Contains(store.Warnings, w => w.Contains("roomList 参数非法"));
-        var p = Assert.Single(store.Presets.Where(x => x.Resolution == "1920x1080"));
+        var p = Assert.Single(store.Presets, x => x.Resolution == "1920x1080");
         Assert.True(p.RoomList is null);
         Assert.True(p.Chat is not null);
     }
@@ -114,6 +114,82 @@ public class LayoutPresetTests
             """{ "version": 1, "presets": { "room": { "1920x1080": {} } } }"""));
         Assert.Empty(store.Presets);
         Assert.Contains(store.Warnings, w => w.Contains("既无 chat 也无 roomList"));
+    }
+
+    // ---- 覆盖层（用户在配置页改预设）----
+
+    [Fact]
+    public void Override_WinsPerSceneResolution_AndIsCounted()
+    {
+        var factory = TempWith(Json);
+        var over = TempWith("""
+            { "version": 1, "presets": { "browsing": {
+              "1920x1080": { "chat": [10, 20, 30, 40] } } } }
+            """);
+
+        var store = LayoutPresetStore.Load(factory, over);
+
+        Assert.Equal(1, store.OverrideCount);
+        var p = store.Find("browsing", 1920, 1080)!;
+        Assert.Equal(10, p.Chat!.X);                       // 覆盖层胜出
+        Assert.True(p.RoomList is null);                    // 整条替换，不是逐字段合并
+        Assert.Equal(560, store.Find("browsing", 3840, 2160)!.Chat!.X);   // 另一档没被牵连，仍是出厂值
+    }
+
+    [Fact]
+    public void SaveOverride_RoundTripsThroughLoad()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "layout-ov-" + Guid.NewGuid() + ".json");
+        var p = new LayoutPreset("ingame", "3840x2160", new PixelRect(16, 470, 2296, 830), null);
+
+        LayoutPresetStore.SaveOverride(path, p);
+        var back = LayoutPresetStore.Load(TempWith(Json), path);
+
+        var found = back.Find("ingame", 3840, 2160);
+        Assert.NotNull(found);
+        Assert.Equal(2296, found!.Chat!.Width);
+        Assert.True(found.RoomList is null);
+        Assert.Equal(1, back.OverrideCount);
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void SaveOverride_Upserts_NotAppends()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "layout-ov-" + Guid.NewGuid() + ".json");
+        LayoutPresetStore.SaveOverride(path, new LayoutPreset("room", "1920x1080", new PixelRect(1, 2, 3, 4), null));
+        LayoutPresetStore.SaveOverride(path, new LayoutPreset("room", "1920x1080", new PixelRect(9, 9, 9, 9), null));
+
+        var store = LayoutPresetStore.Load(TempWith(Json), path);
+        Assert.Equal(1, store.OverrideCount);
+        Assert.Equal(9, store.Find("room", 1920, 1080)!.Chat!.X);
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void RemoveOverride_FallsBackToFactory()
+    {
+        var factory = TempWith(Json);
+        var path = Path.Combine(Path.GetTempPath(), "layout-ov-" + Guid.NewGuid() + ".json");
+        LayoutPresetStore.SaveOverride(path, new LayoutPreset("browsing", "1920x1080", new PixelRect(1, 1, 1, 1), null));
+
+        LayoutPresetStore.RemoveOverride(path, "browsing", "1920x1080");
+        var store = LayoutPresetStore.Load(factory, path);
+
+        Assert.Equal(0, store.OverrideCount);
+        Assert.Equal(280, store.Find("browsing", 1920, 1080)!.Chat!.X);   // 回到出厂值
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void BrokenOverride_DoesNotTakeFactoryDown()
+    {
+        var over = TempWith("{ presets: 这不是 json ");
+        var store = LayoutPresetStore.Load(TempWith(Json), over);
+
+        Assert.True(store.IsUsable, "覆盖层坏了不该连累出厂层");
+        Assert.NotNull(store.Find("browsing", 1920, 1080));
+        Assert.Contains(store.Warnings, w => w.Contains("已忽略覆盖层"));
     }
 
     // ---- 出厂预设回归 ----
