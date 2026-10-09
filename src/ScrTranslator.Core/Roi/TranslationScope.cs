@@ -6,6 +6,11 @@ public record ContentScopeSettings(bool Chat, bool RoomName, bool MapInfo, bool 
 /// <summary>纯判定：某行是否翻译，及其所属列。无 UI 依赖，可单测。</summary>
 public static class TranslationScope
 {
+    /// <summary>
+    /// 该行按用户开关该不该翻。**只管开关**：内容层面"有没有韩文"的闸门由调用方先用
+    /// <see cref="KoreanText.ContainsHangul"/> 判掉（它还要为跳过的行记一条诊断日志），
+    /// 两件事各归一处，别在这里混成一个方法。
+    /// </summary>
     public static bool ShouldTranslate(RoiType type, ColumnKind? column, ContentScopeSettings s) => type switch
     {
         RoiType.Chat => s.Chat,

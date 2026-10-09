@@ -516,6 +516,13 @@ public sealed class Phase1Probe : IDisposable
                     ColumnKind? col = roi.Columns is null
                         ? (roiType == RoiType.RoomList ? ColumnKind.RoomName : (ColumnKind?)null)
                         : TranslationScope.HitColumn(roi.Columns, relX);
+                    // 内容闸门先于用户开关：无韩文的行（地图名、"Top vs Bottom"、表头…）根本不进翻译管线。
+                    // 提示词要求"纯英文/数字/符号原样保留"，送过去只会拿回同样的英文 → 白花 API 且悬浮层显示一堆英文。
+                    if (!KoreanText.ContainsHangul(line.Text))
+                    {
+                        _log.Debug($"[{roi.Name}][skip-无韩文] \"{line.Text}\"");
+                        continue;
+                    }
                     bool translate = TranslationScope.ShouldTranslate(roiType, col, scope);
                     if (!translate) continue;
                     var frameBounds = new RectangleF(
