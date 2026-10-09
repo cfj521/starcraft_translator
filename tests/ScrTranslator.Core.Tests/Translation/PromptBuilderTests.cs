@@ -7,7 +7,7 @@ public class PromptBuilderTests
     {
         var ctx = new TranslationContext("custom_games_listing", "저그=虫族; 러시=速攻");
         var sys = PromptBuilder.BuildSystemPrompt(ctx);
-        Assert.Contains("自定义游戏房间列表", sys);
+        Assert.Contains("寻找房间", sys);
         Assert.Contains("저그=虫族", sys);
     }
 
@@ -15,7 +15,7 @@ public class PromptBuilderTests
     public void SystemPrompt_NullHint_NoGlossarySection_NoCrash()
     {
         var sys = PromptBuilder.BuildSystemPrompt(new TranslationContext("custom_games_listing", null));
-        Assert.Contains("自定义游戏房间列表", sys);
+        Assert.Contains("寻找房间", sys);
         Assert.DoesNotContain("统一采用", sys);
     }
 

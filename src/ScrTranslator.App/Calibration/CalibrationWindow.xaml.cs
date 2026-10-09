@@ -43,9 +43,11 @@ public partial class CalibrationWindow : Window
     private double _dpiX = 1, _dpiY = 1;
 
     private sealed record Option<T>(T Value, string Label);
+    /// <summary>ROI 类型选项。显示名用"房间名列表"，与**场景名**"寻找房间"区分开（两者不是一回事：
+    /// 场景=当前是哪个界面，ROI=该界面里要框出来翻的一块区域）。</summary>
     private static readonly Option<RoiType>[] RoiTypeOptions =
     {
-        new(RoiType.Chat, "聊天"), new(RoiType.RoomList, "房间列表"), new(RoiType.MapInfo, "地图信息"),
+        new(RoiType.Chat, "聊天"), new(RoiType.RoomList, "房间名列表"), new(RoiType.MapInfo, "地图信息"),
     };
     private static readonly Option<ColumnKind>[] ColumnKindOptions =
     {
@@ -479,10 +481,11 @@ public partial class CalibrationWindow : Window
         _ => Brushes.White,
     };
 
+    /// <summary>已框区域的类型标签（与 <see cref="RoiTypeOptions"/> 的显示名保持一致）。</summary>
     private static string TypeLabel(RoiType t) => t switch
     {
         RoiType.Chat => "聊天",
-        RoiType.RoomList => "房间列表",
+        RoiType.RoomList => "房间名列表",
         RoiType.MapInfo => "地图信息",
         _ => "?",
     };

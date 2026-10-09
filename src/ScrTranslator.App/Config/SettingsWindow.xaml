@@ -112,7 +112,7 @@
                                 <CheckBox x:Name="TranslateMapInfoCheck" Content="翻译地图信息" Margin="0,2,0,2"/>
                                 <CheckBox x:Name="TranslatePlayerIdCheck" Content="翻译玩家 ID（默认关，F7）" Margin="0,2,0,2"/>
                                 <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"
-                                           Text="ⓘ 玩家 ID 多为专有名词，通常不翻译。开启后房间列表的 ID 列也会被翻译。可用热键 F7 随时切换。"/>
+                                           Text="ⓘ 玩家 ID 多为专有名词，通常不翻译。开启后&quot;房间名列表&quot;里的 ID 列也会被翻译。可用热键 F7 随时切换。"/>
                             </StackPanel>
                         </GroupBox>
 
@@ -178,7 +178,7 @@
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                        <TextBlock Text="RoomList 列定义（只读，进入校准可编辑）：" FontWeight="Bold" Margin="0,0,0,4"/>
+                        <TextBlock Text="房间名列表（RoomList）列定义（只读，进入校准可编辑）：" FontWeight="Bold" Margin="0,0,0,4"/>
                         <ListView x:Name="ColumnsListView" Height="140">
                             <ListView.View>
                                 <GridView>

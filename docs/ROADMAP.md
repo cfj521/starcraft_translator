@@ -46,8 +46,8 @@
 
 ## Phase 4 — 多区域 + 校准 UI + 配置窗口 🎛️
 **目标**：好用、可配置。按 [UI_DESIGN.md](UI_DESIGN.md) 实现。✅ 代码完成（M1 数据基座 / M2 配置窗 / M3 校准窗 / M4 热键系统），实机可视验收待用户。
-- [x] 多 ROI 管理：聊天 / 房间列表 / 地图信息（`rois.json` v2，按类型门控）
-- [x] 房间列表列定义：房间名/地图列翻；ID 列据配置 `TranslatePlayerId`(默认 false) 决定（`TranslationScope` 纯判定 + `Phase1Probe` 逐行接线）
+- [x] 多 ROI 管理：聊天 / 房间名列表 / 地图信息（`rois.json` v2，按类型门控）
+- [x] 房间名列表列定义：房间名/地图列翻；ID 列据配置 `TranslatePlayerId`(默认 false) 决定（`TranslationScope` 纯判定 + `Phase1Probe` 逐行接线）
 - [x] 校准模式 UI：拖框定义区域、命名、选类型、划列、按分辨率保存（`CalibrationWindow`，保存后热重载无需重启）
 - [x] 配置窗口（左侧竖直标签 6 页 + 关于）：常规 / 翻译(含**翻译玩家 ID 开关**) / OCR / 区域 / 热键 / 外观；应用/确定/取消；密钥只走 SecretStore
 - [x] 系统托盘菜单 + 双击打开配置

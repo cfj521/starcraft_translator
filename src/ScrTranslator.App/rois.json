@@ -1,6 +1,6 @@
 {
   "scenes": {
-    "custom_games_listing": {
+    "browsing": {
       "buckets": [
         {
           "resolution": "1920x1080",

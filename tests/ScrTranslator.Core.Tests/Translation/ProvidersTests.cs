@@ -29,7 +29,7 @@ public class ProvidersTests
         var sys = JsonDocument.Parse(stub.LastBody!).RootElement
             .GetProperty("messages")[0].GetProperty("content").GetString();
         Assert.Contains("저그=虫族", sys);        // 术语提示进了 system prompt
-        Assert.Contains("自定义游戏房间列表", sys); // 场景也进了
+        Assert.Contains("寻找房间", sys); // 场景也进了
     }
 
     [Fact]
