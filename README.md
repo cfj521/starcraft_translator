@@ -6,14 +6,14 @@
 
 ## 一句话技术方案
 
-`抓取 SC:R 窗口画面 → 区域(ROI)截图 → 变化检测 → 韩文 OCR → 两级翻译(快引擎+LLM) → 透明置顶悬浮窗显示中文`
+`抓取 SC:R 窗口画面 → 区域(ROI)裁剪 → 变化检测 → 韩文 OCR(PaddleOCR) → 翻译(术语表/缓存直出，否则 LLM；可选两级=快态先行、终态原地替换) → 透明置顶悬浮窗显示中文`
 
 ## 技术栈
 
 - **.NET 10 (LTS) + WPF**（透明置顶、点击穿透悬浮窗）
 - 屏幕捕获：`Windows.Graphics.Capture`（抓窗口，非独占全屏）
-- OCR：Windows 内置 OCR（韩文）→ 可升级 PaddleOCR / RapidOCR(ONNX)
-- 翻译：两级混合 = 快引擎(Papago/百度) 秒出 + Claude LLM(+术语表) 回填
+- OCR：**PaddleOCR**（RapidOcrNet + 韩文 mobile ONNX 模型，随包分发，**无需系统韩文语言包**）
+- 翻译：**OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** 与 **阿里云 DashScope（OpenAI 兼容）** 单活跃可切换；术语表/LRU 缓存命中直出；可选两级编排（快态 qwen-flash 临时显示 → 质量态原地替换）。密钥走 DPAPI 本地加密。
 - 平台：**仅 Windows 10 1803+ / Windows 11**（WPF + Graphics.Capture 必须在 Windows 端编译运行）
 
 ## 文档导航
@@ -29,7 +29,9 @@
 
 ## 当前状态
 
-📋 设计阶段完成，待 **Phase 0**（工程骨架 + 透明置顶悬浮窗）开始。详见 [ROADMAP](docs/ROADMAP.md)。
+🚧 **Phase 0–4 代码已完成**（开发分支 `phase4-multiregion-ui`）：端到端管线可用——捕获 → 校准 ROI（多区域/列定义/按分辨率）→ PaddleOCR → 术语表/缓存/LLM 翻译（可选两级）→ 悬浮上屏；配置窗口六页、托盘、六个全局热键（可重绑/冲突检测/恢复默认）。Core 单测 92/92 绿，构建 0 错误。
+
+⏳ 待办：**实机 e2e 验收**（真实 SC:R + 登录/Key + 上屏中文，需用户）；**Phase 5**（设置项接线：轮询频率/预处理/开机自启等、异常恢复、首次引导、打包发布）。详见 [ROADMAP](docs/ROADMAP.md)。
 
 ## 重要约束
 

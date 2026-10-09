@@ -10,7 +10,7 @@
 - 开发计划（按 Phase 推进）：`docs/ROADMAP.md`
 - 韩文术语表：`docs/GLOSSARY.md`
 
-**当前进度**：Phase 0（骨架/悬浮窗）与 Phase 1（捕获+ROI+PaddleOCR+上屏）已完成；**Phase 2（翻译层：两 provider 单活跃 + 缓存 + DPAPI + 术语表 + 托盘入口）代码完成，在分支 `phase2-translation`，待实机 e2e 验收**。设计/计划见 `docs/superpowers/specs|plans/2026-07-02-phase2-*`。
+**当前进度**：Phase 0（骨架/悬浮窗）、Phase 1（捕获+ROI+PaddleOCR+上屏）、Phase 2（翻译层：两 provider 单活跃 + 缓存 + DPAPI + 术语表 + 托盘入口）、Phase 3（两级编排 opt-in，默认关闭）、**Phase 4（多区域门控/校准窗/配置窗六页/热键系统 RegisterAll+Rebind+冲突检测）代码全部完成**，在分支 `phase4-multiregion-ui`；Core 单测 92/92 绿。**实机 e2e 验收（真实 SC:R）待用户**。部分设置字段（轮询频率、图像预处理、变化灵敏度、开机自启、原文+译文显示）仅存盘未接线，标注"（后续生效）"——属 Phase 5 范围（性能调优/异常恢复/首次引导/打包）。
 
 ## 技术栈与环境
 - **.NET 10 (LTS) + WPF**，目标框架 `net10.0-windows10.0.19041.0`，`UseWPF=true`。

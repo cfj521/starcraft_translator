@@ -75,12 +75,15 @@
 ```
 
 ### 3.2 翻译 Translation  ★（含"翻译玩家 ID"）
+> 实现对齐（Phase 2–4）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = 主引擎单选（DashScope / ChatGPT 订阅）**单活跃** + **两级翻译 opt-in 开关**；密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
+
 ```
-引擎
-  模式            ( ) 仅快引擎   (•) 两级混合   ( ) 仅 LLM
-  快引擎          [ Papago ▼ ]   API Key [ ********** ] [测试]
-  LLM 引擎        [ Claude ▼ ]   API Key [ ********** ] [测试]
-  LLM 模型        [ claude-haiku-4-5 (快) ▼ ]   ← 另有 sonnet(质量)
+引擎（单活跃，托盘可快速切换）
+  主引擎          (•) DashScope（阿里云）  ( ) ChatGPT（订阅）
+                  [ 设置阿里 Key… ]        [ 登录 ChatGPT… ]
+  模型            DashScope [ qwen-flash ]   ChatGPT [ gpt-5 ]
+  [ ] 两级翻译（opt-in）  快态(默认 DashScope qwen-flash) 先出临时译文
+                         → 主引擎精译后**原地替换**；临时灰斜体 / 终态白
 
 内容范围                                              ┌── 热键可绑
   [✓] 翻译聊天
@@ -91,26 +94,28 @@
           的 ID 列也会被翻译。可用热键 F7 随时切换。
 
 质量与省流
-  [✓] 启用术语表 (星际黑话)        [ 编辑术语表… ]
-  [✓] 启用翻译缓存   缓存时长 [ 10 ] 分钟
-  [✓] LLM 节流(防刷屏) 最小间隔 [ 800 ] ms
-  保留上下文          最近 [ 5 ] 条聊天供 LLM 参考
+  [✓] 启用术语表 (星际黑话)        [ 编辑术语表… ]   ← 命中直出，无网络（始终启用）
+  [✓] 启用翻译缓存                 ← 进程内 LRU，容量固定，无 TTL；只存最终态（始终启用）
+  [ ] LLM 节流/合并(防刷屏)        ← 后续
+  [ ] 保留上下文供 LLM 参考        ← 后续
 ```
 
 > **"翻译玩家 ID"** 落地为配置项 `Translation.TranslatePlayerId`（默认 `false`）。
 > RoomList 型 ROI 的 ID 列是否翻译，取此开关；房间名/地图列始终按各自勾选项翻译。
 
 ### 3.3 OCR
+> 实现对齐：OCR **仅 PaddleOCR**（RapidOcrNet + 韩文 mobile ONNX 模型随包分发），已取代 Windows 内置 OCR 方案，**无需系统语言包**，识别语言固定韩文。
+
 ```
-引擎            (•) Windows 内置 OCR   ( ) PaddleOCR(高精度)
-识别语言        [ 韩文 (ko) ▼ ]   [ 检查语言包 ]
-                ⚠ 未检测到韩文 OCR 语言包 → [ 如何安装 ]
+引擎            PaddleOCR（当前唯一实现；内置 OCR 方案已废弃）
+识别语言        韩文 (ko)（固定，无需语言包检查）
 轮询频率
   聊天区        每 [ 300 ] ms 检测一次
   其它区域      每 [ 800 ] ms 检测一次
 图像预处理      [✓] 放大  [✓] 灰度  [ ] 二值化   阈值 [ — ]
 变化检测灵敏度   [────●─────]  低 ←→ 高
 ```
+> 注：轮询频率/预处理/灵敏度在配置窗有字段；轮询频率已接线（场景含 Chat ROI 用聊天值，钳制 150–5000ms），预处理/灵敏度为占位（模型内置预处理/精确文本变化检测），见 ROADMAP Phase 5。
 
 ### 3.4 区域 ROI
 ```
@@ -204,32 +209,35 @@
 
 ---
 
-## 6. 配置数据模型（与界面对应）
+## 6. 配置数据模型（与界面对应，实现对齐版）
+
+> 与代码一致：`src/ScrTranslator.Core/Settings/AppSettings.cs` + `Translation/TranslationSettings.cs` + `Roi/RoiModels.cs`。
+> **实际字段**（非早期设想）：无 `EngineMode(FastOnly/Hybrid/LlmOnly)`，改 `Active` 单选 + `TwoLevel` 开关；密钥字段**不在** `AppSettings` 内（走 `SecretStore`/DPAPI）。
 
 ```csharp
 class AppSettings {
-    GeneralSettings General;
+    GeneralSettings General;      // TargetProcess / AutoStart / StartMinimized / AutoTranslateOnLaunch
     TranslationSettings Translation;
-    OcrSettings Ocr;
-    AppearanceSettings Appearance;
-    Dictionary<string, Hotkey> Hotkeys;     // 功能名 → 热键
-    // ROI 配置单独存 rois.json，按分辨率分组
+    OcrSettings Ocr;              // ChatPollMs=300 / OtherPollMs=800 / Upscale / Grayscale / Binarize / ChangeSensitivity
+    AppearanceSettings Appearance;// FontFamily / FontSize / Opacity / ShowOriginalAndTranslation
+    Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F7–F11/Ctrl+F9
+    // ROI 配置单独存 rois.json（RoiStore），按分辨率 bucket 分组，RoomList 可含列定义
 }
 
 class TranslationSettings {
-    EngineMode Mode;                 // FastOnly / Hybrid / LlmOnly
-    string FastProvider; string FastApiKey;
-    string LlmProvider;  string LlmApiKey;  string LlmModel;
+    TranslationEngine Active;     // DashScope | ChatGpt（单活跃）
+    string DashScopeModel;        // 默认 qwen-flash
+    string ChatGptModel;          // 默认 gpt-5
+    int TimeoutSeconds;           // 整轮(快+质量共用)超时，默认 10
+    bool TwoLevel;                // 两级编排 opt-in，默认 false
+    TranslationEngine FastEngine; // 快态引擎，默认 DashScope
+    string FastModel;             // 快态模型，默认 qwen-flash
     bool TranslateChat   = true;
     bool TranslateRoomName = true;
     bool TranslateMapInfo  = true;
     bool TranslatePlayerId = false;  // ★ 对应"翻译玩家ID"开关 / F7
-    bool UseGlossary = true;
-    bool UseCache = true;  int CacheMinutes = 10;
-    bool LlmThrottle = true; int LlmMinIntervalMs = 800;
-    int ContextLines = 5;
 }
 ```
 
 > 实现时：`TranslationService` 决定某条文本是否翻译，依据 = ROI 类型对应的开关；
-> 若该文本来自 RoomList 的 ID 列，则取 `TranslatePlayerId`。API Key 字段持久化前用 DPAPI 加密。
+> 若该文本来自 RoomList 的 ID 列，则取 `TranslatePlayerId`。API Key 字段持久化前用 DPAPI 加密（`SecretStore`，与 `settings.json` 分离）。
