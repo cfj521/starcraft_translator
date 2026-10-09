@@ -17,7 +17,7 @@ public sealed record ProbeStartInfo(ProbeStart Status, string ProcessName);
 public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed, WaitingForWindow }
 
 /// <summary>Phase 5 异常恢复事件：看门狗检测到的状态转移，App 订阅后转托盘气泡。</summary>
-public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled, SceneChanged, SceneRefMissing }
+public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled, SceneChanged, SceneRefMissing, TranslateFailed, NeedsCalibration }
 
 public sealed class Phase1Probe : IDisposable
 {
@@ -78,6 +78,7 @@ public sealed class Phase1Probe : IDisposable
     private SceneRecognition _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
         GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别");
     private long _lastTranslateMs; private bool _lastAllResolved; private int _lastLineCount;
+    private string? _lastTranslateError;   // 最近一次 provider 失败原因（null=正常）；也是"同因只提示一次"的去重键
 
     /// <summary>目标进程名（设置驱动，默认 StarCraft）。Start 与看门狗重连共用。</summary>
     private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
@@ -182,7 +183,15 @@ public sealed class Phase1Probe : IDisposable
         ClearOverlay(); // 换场景=旧译文全部失效，立即清屏（不等下一帧）
         _lastJoined = ""; _roiMissingLogged = false; // 换场景=换 ROI，重新判定上屏
         _log.Info($"[scene] 切换 {SceneDisplay(from, GameRace.Unknown)} → {SceneDisplay(to, race)}");
-        Notice?.Invoke(ProbeNotice.SceneChanged, $"当前场景：{SceneDisplay(to, race)}");
+        if (to != GameScene.Other && !_roiAvailable)
+        {
+            // 三个场景各自一套 ROI（rois.json 按场景分键）。切到一个还没校准的场景时必须当场说出来，
+            // 否则用户的感受是"切了界面就什么都不翻/还在用老场景的框"，像是区域在场景间混用。
+            _log.Info($"[probe] 当前场景[{SceneDisplay(to, race)}]无 ROI 校准——请按 F8 校准该场景");
+            Notice?.Invoke(ProbeNotice.NeedsCalibration,
+                $"当前场景：{SceneDisplay(to, race)}——这个场景还没框选区域，请按 F8 校准（三个场景要各校准一次）");
+        }
+        else Notice?.Invoke(ProbeNotice.SceneChanged, $"当前场景：{SceneDisplay(to, race)}");
     }
 
     /// <summary>面板/气泡用的场景显示名。游戏内带上识别到的种族——装饰板参考本就按种族分套，
@@ -362,7 +371,8 @@ public sealed class Phase1Probe : IDisposable
             $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  引擎: {t.Active}  两级: {(t.TwoLevel ? "on" : "off")}\n" +
             $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  已校准场景={(_anySceneCalibrated ? "yes" : "no")}  busy={_busy}\n" +
             $"状态: {state}\n" +
-            $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}\n" +
+            $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
+            (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
             $"缓存: {_tiered.CacheCount}  术语表: {_glossaryCount}\n" +
             $"参考: {refs}";
     }
@@ -551,6 +561,9 @@ public sealed class Phase1Probe : IDisposable
                 var items = new List<OverlayItem>(snap.Count);
                 foreach (var ln in snap)
                 {
+                    // **原文照抄的行不上屏**：provider 失败/超时时编排会回落原文，
+                    // 把它当译文显示出去，用户看到的就是"识别到韩文却没翻译"，比什么都不显示更误导。
+                    if (ln.Text == koLines[ln.Index]) continue;
                     var (frameBounds, _) = metas[ln.Index];
                     var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
                     // Source=该行韩文原文：供悬浮层"原文+译文双行"模式使用（单行模式忽略）。
@@ -570,6 +583,13 @@ public sealed class Phase1Probe : IDisposable
             // 仅当无“总失败”行(AllResolved)才提交变化检测,否则下一帧同内容重试。
             if (outcome.AllResolved) _lastJoined = joined;
             _log.Debug($"[probe] 上屏完成 lines={koLines.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
+
+            // 翻译失败：日志已在 TieredTranslator 的 onError 里逐条记过，这里只负责"让你知道"——
+            // 同一原因只气泡提示一次（否则每 1.7s 弹一次），原因变了再弹。
+            if (outcome.Error is not null && outcome.Error != _lastTranslateError)
+                Notice?.Invoke(ProbeNotice.TranslateFailed,
+                    $"{outcome.Error}\n（{engine} 引擎；请检查 API Key / 登录状态，或换引擎）");
+            _lastTranslateError = outcome.Error;
         }
         catch (Exception ex) { _log.Error($"[probe] 处理帧异常: {ex.Message}"); }
         finally { Interlocked.Increment(ref _processed); frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }

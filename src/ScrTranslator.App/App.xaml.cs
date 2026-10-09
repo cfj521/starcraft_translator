@@ -130,7 +130,10 @@ public partial class App : Application
                 sp.GetRequiredService<Glossary>(),
                 sp.GetRequiredService<TranslationCache>(),
                 Fast, Quality,
-                () => settings.Current.Translation);
+                () => settings.Current.Translation,
+                // provider 异常必须冒到日志：以前是 catch 掉直接回落原文，
+                // 症状就是"识别到韩文但显示的还是原文"，且无处可查原因（实测是空 API Key）。
+                msg => sp.GetRequiredService<FileLogger>().Error(msg));
         });
 
         builder.Services.AddSingleton(sp => new TrayService(
@@ -178,6 +181,28 @@ public partial class App : Application
             }
             var info = probe.Start(); // 首次引导：失败原因不再只进日志，托盘气泡直出
             running = info.Status == ProbeStart.Ok;
+
+            // 凭据体检：OCR 认得出韩文、但翻译引擎没钥匙时，症状是"字出来了却没翻"，
+            // 而且失败发生在网络层、离配置页很远——必须在开翻译这一刻就说破。
+            if (running)
+            {
+                var tr = _host!.Services.GetRequiredService<SettingsHolder>().Current.Translation;
+                var sec = _host.Services.GetRequiredService<SecretStore>().Load();
+                string? missing = tr.Active switch
+                {
+                    TranslationEngine.DashScope when string.IsNullOrWhiteSpace(sec.DashScopeApiKey)
+                        => "当前引擎＝阿里云 DashScope，但 API Key 是空的",
+                    TranslationEngine.ChatGpt when string.IsNullOrWhiteSpace(sec.OpenAi.AccessToken)
+                        => "当前引擎＝ChatGPT 订阅，但还没登录",
+                    _ => null,
+                };
+                if (missing is not null)
+                {
+                    _trayService.ShowToast("翻译翻不出来",
+                        $"{missing}。韩文能识别出来，但翻不成中文。请到 配置→翻译 填 Key / 登录，或切换引擎。");
+                }
+            }
+
             string msg = info.Status switch
             {
                 ProbeStart.Ok => "已开启",
@@ -212,6 +237,8 @@ public partial class App : Application
                 ProbeNotice.Stalled => "翻译卡住",
                 ProbeNotice.SceneChanged => "场景",
                 ProbeNotice.SceneRefMissing => "场景识别不可用",
+                ProbeNotice.TranslateFailed => "翻译失败",
+                ProbeNotice.NeedsCalibration => "需要校准",
                 _ => "翻译",
             };
             _trayService.ShowToast(title, msg);

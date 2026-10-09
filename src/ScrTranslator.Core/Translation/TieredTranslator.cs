@@ -2,7 +2,9 @@ namespace ScrTranslator.Core.Translation;
 
 public enum TranslationStage { Direct, Provisional, Final }
 public sealed record LineTranslation(int Index, string Text, TranslationStage Stage);
-public sealed record TranslateOutcome(bool AllResolved);
+/// <summary><see cref="AllResolved"/>=本批每行都真翻出来了。<see cref="Error"/>=最近一次 provider 失败的原因
+/// （null=没失败）。失败时编排会回落原文，调用方**必须**据此决定别把原文当译文显示出去。</summary>
+public sealed record TranslateOutcome(bool AllResolved, string? Error = null);
 
 /// <summary>
 /// 两级/单级翻译编排。术语/缓存命中直出(Direct)；未命中行——两级时先快态(Provisional,不缓存)
@@ -19,13 +21,17 @@ public sealed class TieredTranslator
     private readonly Func<ITranslationProvider> _fast;
     private readonly Func<ITranslationProvider> _quality;
     private readonly Func<TranslationSettings> _settings;
+    private readonly Action<string>? _onError;
 
+    /// <param name="onError">provider 异常上报（"什么消息+耗时"级别，调用方接日志）。
+    /// 不给这个回调就等于把失败吞进黑洞：编排会回落原文显示，用户只会看到"韩文没翻译"而不知道为什么。</param>
     public TieredTranslator(Glossary glossary, TranslationCache cache,
         Func<ITranslationProvider> fastProvider, Func<ITranslationProvider> qualityProvider,
-        Func<TranslationSettings> settings)
+        Func<TranslationSettings> settings, Action<string>? onError = null)
     {
         _glossary = glossary; _cache = cache;
         _fast = fastProvider; _quality = qualityProvider; _settings = settings;
+        _onError = onError;
     }
 
     /// <summary>当前缓存条目数（调试面板用）。</summary>
@@ -56,9 +62,11 @@ public sealed class TieredTranslator
 
         bool twoLevel = _settings().TwoLevel;
         IReadOnlyList<string>? fastZh = null;
+        string? error = null;
         if (twoLevel)
         {
-            fastZh = await CallAsync(_fast(), missText, ctx, ct);
+            var (fastLines, fastErr) = await CallAsync(_fast(), missText, ctx, ct);
+            fastZh = fastLines; error = fastErr;
             for (int j = 0; j < missIdx.Count; j++)
             {
                 text[missIdx[j]] = fastZh[j];
@@ -67,7 +75,8 @@ public sealed class TieredTranslator
             onStage(Snapshot(text, stage)); // 临时态；快态不入缓存
         }
 
-        var qualZh = await CallAsync(_quality(), missText, ctx, ct);
+        var (qualZh, qualErr) = await CallAsync(_quality(), missText, ctx, ct);
+        error ??= qualErr;
         bool allResolved = true;
         for (int j = 0; j < missIdx.Count; j++)
         {
@@ -82,14 +91,22 @@ public sealed class TieredTranslator
         // 终态快照统一标 Final（含本轮直出的 Direct 行）：一旦进入翻译轮次，整批一起"定稿"上屏。
         for (int i = 0; i < n; i++) stage[i] = TranslationStage.Final;
         onStage(Snapshot(text, stage));
-        return new TranslateOutcome(allResolved);
+        return new TranslateOutcome(allResolved, error);
     }
 
-    private static async Task<IReadOnlyList<string>> CallAsync(
+    /// <summary>调 provider；异常时**回落传入引用**（引用相等 == 该行没翻成），同时把原因上报。</summary>
+    private async Task<(IReadOnlyList<string> Lines, string? Error)> CallAsync(
         ITranslationProvider p, IReadOnlyList<string> lines, TranslationContext ctx, CancellationToken ct)
     {
-        try { return await p.TranslateAsync(lines, ctx, ct); }
-        catch { return lines; } // 异常 → 回落传入引用(引用相等 == 降级)
+        try { return (await p.TranslateAsync(lines, ctx, ct), null); }
+        catch (Exception ex)
+        {
+            // 只 catch 不报 = 把失败吞进黑洞。回落的原文会被当译文显示，用户看到的症状是
+            // "识别到韩文但没翻译"，且没有任何地方说明为什么（实测就是空 API Key 秒返回 401）。
+            string msg = $"{p.Name} 翻译失败: {ex.Message}";
+            _onError?.Invoke(msg);
+            return (lines, msg);
+        }
     }
 
     private static IReadOnlyList<LineTranslation> Snapshot(string[] text, TranslationStage[] stage)
