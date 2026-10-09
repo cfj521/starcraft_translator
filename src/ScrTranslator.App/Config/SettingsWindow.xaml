@@ -159,9 +159,9 @@
             <TabItem Header="区域">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                            <TextBlock x:Name="RegionHintText" Text="尚未加载" VerticalAlignment="Center"/>
-                            <Button x:Name="EnterCalibrationButton" Content="进入校准…" Margin="16,0,0,0" Click="OnEnterCalibrationClick"/>
+                        <TextBlock x:Name="RegionHintText" Text="尚未加载" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="EnterCalibrationButton" Content="进入校准…" Click="OnEnterCalibrationClick"/>
                             <Button x:Name="EditRoiButton" Content="编辑选中…" Margin="8,0,0,0" Click="OnEditRoiClick"/>
                             <Button x:Name="DeleteRoiButton" Content="删除选中" Margin="8,0,0,0" Click="OnDeleteRoiClick"/>
                         </StackPanel>

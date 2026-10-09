@@ -171,8 +171,8 @@ public partial class SettingsWindow : Window
     /// 区域页数据源 = 校准的 ROI ＋ 出厂布局预设，两类条目同表展示、同表核对。
     ///
     /// 三条口径：
-    ///  1. **只显示主显示器当前分辨率**的行。同一场景在 1080p/2K/4K 各有一套数值，
-    ///     全列出来既刷屏又容易照着错的分辨率改；被隐藏的数量在提示行里报出来，不玩"悄悄过滤"。
+    ///  1. **只显示主显示器当前分辨率**的行——同一场景在 1080p/2K/4K 各有一套数值，
+    ///     全列出来既刷屏又容易照着错的分辨率改。顶部提示只报当前分辨率，别的统计都不放（用户要求精简）。
     ///  2. 坐标一律**整数像素**（该分辨率下），相对百分比人读不动。
     ///  3. 首列是场景，且**可编辑**（编辑对话框里改场景 = 把这条 ROI 挪到另一个场景的桶）——
     ///     误在别的界面校准的条目不必删了重画。预设行的场景是它本来的归属，不可改。
@@ -186,43 +186,36 @@ public partial class SettingsWindow : Window
             string curRes = $"{curW}x{curH}";
             var rows = new List<RoiRow>();
             var colRows = new List<ColumnRow>();
-            var covered = new List<string>();
-            int hidden = 0;
 
             // --- 校准的 ROI ---
             foreach (var (sceneId, buckets) in cfg.Scenes)
             {
                 string sceneLabel = GameSceneIds.FromId(sceneId).Label();
-                int inScene = 0;
                 foreach (var bucket in buckets)
                 {
-                    bool here = bucket.Resolution == curRes;
+                    if (bucket.Resolution != curRes) continue;      // 别的分辨率不进表，也不计数
                     var (bw, bh) = ParseResolution(bucket.Resolution);
                     for (int idx = 0; idx < bucket.Rois.Count; idx++)
                     {
                         var roi = bucket.Rois[idx];
-                        if (!here) { hidden++; continue; }
                         var t = RoiTypes.Parse(roi.Type);
                         rows.Add(new RoiRow(sceneId, sceneLabel, bucket.Resolution, idx, roi.Name, TypeLabel(t),
                             $"{Px(roi.Rect.X, bw)}, {Px(roi.Rect.Y, bh)}",
                             $"{Px(roi.Rect.W, bw)} × {Px(roi.Rect.H, bh)}", false));
-                        inScene++;
                         if (roi.Columns is { Count: > 0 })
                             foreach (var c in roi.Columns)
                                 colRows.Add(new ColumnRow($"{sceneLabel} / {roi.Name}",
                                     $"{c.RelStart:P0}–{c.RelEnd:P0}（占该框宽度）", ColumnKindLabel(c.Kind)));
                     }
                 }
-                if (inScene > 0) covered.Add(sceneLabel);
             }
 
             // --- 出厂布局预设（聊天框 / 房间列表网格）---
             foreach (var p in _layout.Presets)
             {
-                if (p.Resolution != curRes) { hidden++; continue; }
+                if (p.Resolution != curRes) continue;
                 var (bw, bh) = ParseResolution(p.Resolution);
                 string sceneLabel = GameSceneIds.FromId(p.Scene).Label();
-                if (!covered.Contains(sceneLabel)) covered.Add(sceneLabel);
                 if (p.Chat is { } chat)
                     rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, $"{p.Scene}·聊天(预设)", "聊天",
                         $"{chat.X}, {chat.Y}", $"{chat.Width} × {chat.Height}", true));
@@ -234,12 +227,9 @@ public partial class SettingsWindow : Window
                         $"{c.X}px 起、宽 {c.Width}px（占框内像素）", ColumnKindLabel(c.Kind)));
             }
 
-            string missing = string.Join("、", AllSceneLabels.Except(covered));
             RegionHintText.Text = rows.Count == 0
-                ? $"当前分辨率 {curRes} 下没有任何区域：进游戏到对应界面后按 F8 框选。"
-                : $"当前分辨率 {curRes} · 共 {rows.Count} 项（含出厂预设）· 已覆盖场景：{string.Join("、", covered)}" +
-                  (missing.Length > 0 ? $" · 还缺：{missing}" : " · 三场景齐全") +
-                  (hidden > 0 ? $" · 另有 {hidden} 项属于其它分辨率（已隐藏）" : "");
+                ? $"当前分辨率 {curRes} · 无区域"
+                : $"当前分辨率 {curRes}";
             RoiListView.ItemsSource = rows;
             ColumnsListView.ItemsSource = colRows;
         }
@@ -260,9 +250,6 @@ public partial class SettingsWindow : Window
         int h = (int)Math.Round(SystemParameters.PrimaryScreenHeight * dpi.DpiScaleY);
         return w > 0 && h > 0 ? (w, h) : (1920, 1080);
     }
-
-    /// <summary>三个目标场景的显示名，用来点名"还缺哪几个场景没校准"。</summary>
-    private static readonly string[] AllSceneLabels = { "寻找房间", "房间内", "游戏内" };
 
     /// <summary>bucket 的分辨率键（"3840x2160"）→ 宽高像素；非法一律回 1，防除零。</summary>
     private static (int W, int H) ParseResolution(string res)

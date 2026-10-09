@@ -149,7 +149,10 @@ public static class RoiStore
         out IReadOnlyList<SceneBucket> buckets, out SceneBucket bucket, out IReadOnlyList<Roi> rois)
     {
         buckets = Array.Empty<SceneBucket>(); bucket = null!; rois = Array.Empty<Roi>();
-        if (index < 0 || !cfg.Scenes.TryGetValue(scene, out buckets)) return false;
+        if (index < 0) return false;
+        // TryGetValue 的 out 参数是可空类型（键存在但值可能是 null），直接赋给非空 out 会报 CS8601，显式兜一下。
+        if (!cfg.Scenes.TryGetValue(scene, out var foundBuckets) || foundBuckets is null) return false;
+        buckets = foundBuckets;
         var found = buckets.FirstOrDefault(b => b.Resolution == resolution);
         if (found is null) return false;
         bucket = found;
