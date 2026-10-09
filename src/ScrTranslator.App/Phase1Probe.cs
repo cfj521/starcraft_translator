@@ -436,6 +436,16 @@ public sealed class Phase1Probe : IDisposable
         _lastShot = DateTime.Now;
         try
         {
+            // ── 场景识别必须在 ROI 可用性判断之前跑 ──
+            // _roiAvailable 是识别的**结果**（切到"其他界面"或某场景没校准 → 它变 false），
+            // 把它放在识别前面会让这些状态变成"只进不出"的死胡同：一旦进去就再没有帧去识别回来。
+            // 实测症状：开局头两次识别正常，之后永远停在"其他界面"。
+            if ((DateTime.Now - _lastDetect).TotalMilliseconds >= DetectIntervalMs)
+            {
+                _lastDetect = DateTime.Now;
+                // 识别到场景切换 → 本帧不翻（ROI 集刚变，bucket 需重取），下一帧按新场景继续。
+                if (DetectScene(frame)) return;
+            }
             if (!_roiAvailable)
             {
                 if (!_roiMissingLogged)
@@ -454,12 +464,6 @@ public sealed class Phase1Probe : IDisposable
             {
                 _log.Debug("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
-            }
-            // 场景自动识别（每 DetectIntervalMs 一次，同步指纹比对）：识别到别的场景就切 ROI 集，本帧跳过翻译下一帧再来。
-            if ((DateTime.Now - _lastDetect).TotalMilliseconds >= DetectIntervalMs)
-            {
-                _lastDetect = DateTime.Now;
-                if (DetectScene(frame)) return;
             }
             var bucket = RoiStore.SelectBucket(_cfg, SceneId, frame.Width, frame.Height);
             // 分辨率切换检测：命中的 bucket 与当前捕获尺寸不一致=靠等比映射兜底，位置可能偏差，提示重校准（每个不匹配期只发一次）。
