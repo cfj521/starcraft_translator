@@ -96,6 +96,50 @@ public static class RoiStore
         }
     }
 
+    /// <summary>
+    /// 替换（或重命名）指定 (场景, 分辨率bucket, 序号) 的那一条 ROI，返回**新配置**（record 不可变，原对象不动）。
+    /// 定位不到（场景/bucket/序号越界）时返回 null —— 调用方据此提示，绝不静默改到别的条目上。
+    /// 给配置页的"编辑区域"用：允许在不进校准窗的情况下改名字/类型/像素矩形。
+    /// </summary>
+    public static RoiConfig? ReplaceRoi(RoiConfig cfg, string scene, string resolution, int index, Roi updated)
+    {
+        if (!Locate(cfg, scene, resolution, index, out var buckets, out var bucket, out var rois)) return null;
+        var edited = rois.ToList();
+        edited[index] = updated;
+        return Rebuild(cfg, scene, buckets, ReplaceAt(buckets, bucket, new SceneBucket(bucket.Resolution, edited)));
+    }
+
+    /// <summary>删除指定 (场景, 分辨率bucket, 序号) 的那一条 ROI；定位失败同样返回 null。</summary>
+    public static RoiConfig? RemoveRoi(RoiConfig cfg, string scene, string resolution, int index)
+    {
+        if (!Locate(cfg, scene, resolution, index, out var buckets, out var bucket, out var rois)) return null;
+        var kept = rois.ToList();
+        kept.RemoveAt(index);
+        return Rebuild(cfg, scene, buckets, ReplaceAt(buckets, bucket, new SceneBucket(bucket.Resolution, kept)));
+    }
+
+    static bool Locate(RoiConfig cfg, string scene, string resolution, int index,
+        out IReadOnlyList<SceneBucket> buckets, out SceneBucket bucket, out IReadOnlyList<Roi> rois)
+    {
+        buckets = Array.Empty<SceneBucket>(); bucket = null!; rois = Array.Empty<Roi>();
+        if (index < 0 || !cfg.Scenes.TryGetValue(scene, out buckets)) return false;
+        var found = buckets.FirstOrDefault(b => b.Resolution == resolution);
+        if (found is null) return false;
+        bucket = found;
+        rois = found.Rois;
+        return index < rois.Count;
+    }
+
+    static IReadOnlyList<SceneBucket> ReplaceAt(IReadOnlyList<SceneBucket> buckets, SceneBucket oldB, SceneBucket newB)
+        => buckets.Select(b => ReferenceEquals(b, oldB) ? newB : b).ToList();
+
+    static RoiConfig Rebuild(RoiConfig cfg, string scene, IReadOnlyList<SceneBucket> oldBuckets, IReadOnlyList<SceneBucket> newBuckets)
+    {
+        var map = new Dictionary<string, IReadOnlyList<SceneBucket>>(cfg.Scenes);
+        map[scene] = newBuckets;
+        return new RoiConfig(map);
+    }
+
     /// <summary>写 rois.json：先写临时文件再 <see cref="File.Move(string,string,bool)"/> 原子替换，
     /// 避免写到一半被中断（崩溃/断电）导致目标文件截断损坏。</summary>
     public static void Save(RoiConfig cfg, string jsonPath)

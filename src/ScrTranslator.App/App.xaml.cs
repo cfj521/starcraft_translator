@@ -292,7 +292,8 @@ public partial class App : Application
                 OpenCalibration,
                 probe.ResetChangeDetection,
                 _hotkeys!, // 此时尚未 new，但 OpenSettings 只会在其后被调用（字段，非局部变量捕获）
-                () => probe.CurrentSceneId);
+                () => probe.CurrentSceneId,
+                probe.ReloadRois);   // 区域页"编辑/删除"落盘后立即热重载，不必重启探测
             settingsWindow.Closed += (_, _) => settingsWindow = null;
             settingsWindow.Show();
             settingsWindow.Activate();

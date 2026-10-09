@@ -36,9 +36,14 @@ public partial class SettingsWindow : Window
     private readonly FileLogger _log;
     private readonly Action _openCalibration;
     private readonly Action? _onStateChanged;
+    /// <summary>rois.json 被本页"编辑/删除"改动后的回调（= probe.ReloadRois），让正在跑的探测立即用新区域。</summary>
+    private readonly Action? _onRoisChanged;
     private readonly HotkeyService _hotkeyService;
 
-    private sealed record RoiRow(string Name, string Type, string Position);
+    /// <summary>区域列表的一行。SceneId/Resolution/Index 三元组定位 rois.json 里的哪一条
+    /// （名字会被改、序号才是稳定坐标，所以编辑与删除都靠这三元组回写）。</summary>
+    private sealed record RoiRow(string SceneId, string Scene, string Resolution, int Index,
+                                 string Name, string Type, string TopLeft, string Size);
     private sealed record ColumnRow(string RoiName, string Range, string Kind);
     private sealed record HotkeyRow(string Key, string Function, string Current);
 
@@ -69,7 +74,8 @@ public partial class SettingsWindow : Window
         Action openCalibration,
         Action? onStateChanged,
         HotkeyService hotkeyService,
-        Func<string>? sceneIdProvider = null)
+        Func<string>? sceneIdProvider = null,
+        Action? onRoisChanged = null)
     {
         InitializeComponent();
         _sceneIdProvider = sceneIdProvider ?? new Func<string>(() => ScrTranslator.Core.Scene.GameSceneIds.Browsing);
@@ -81,6 +87,7 @@ public partial class SettingsWindow : Window
         _log = log;
         _openCalibration = openCalibration;
         _onStateChanged = onStateChanged;
+        _onRoisChanged = onRoisChanged;
         _hotkeyService = hotkeyService;
 
         VersionText.Text = $"版本 {Assembly.GetExecutingAssembly().GetName().Version}";
@@ -155,53 +162,122 @@ public partial class SettingsWindow : Window
         ChatGptStatusText.Text = loggedIn ? $"已登录: {email}({plan})" : "未登录";
     }
 
+    /// <summary>
+    /// 区域页数据源：**全部场景 × 全部分辨率**都列出来，首列是场景。
+    /// 以前只显示"当前场景 + 当前分辨率"那一桶，看不到"我到底校准了哪几套"，
+    /// 也就理解不了"切到房间内怎么什么都不翻"——三场景各一套 ROI 是设计前提，必须摆在明面上。
+    /// 坐标一律显示为该 bucket 自己分辨率下的**整数像素**（相对百分比人读不动）。
+    /// </summary>
     private void LoadRoiList()
     {
         try
         {
             var cfg = RoiStore.Load(_roisJsonPath);
-            string proc = string.IsNullOrWhiteSpace(TargetProcessBox.Text) ? "StarCraft" : TargetProcessBox.Text.Trim();
-            var hwnd = WindowFinder.FindByProcess(proc);
-            var rect = hwnd == IntPtr.Zero ? System.Drawing.Rectangle.Empty : NativeMethods.GetWindowScreenRect(hwnd);
-
-            SceneBucket? bucket = null;
-            string resLabel;
-            if (!rect.IsEmpty && rect.Width > 0 && rect.Height > 0)
-            {
-                resLabel = $"{rect.Width}x{rect.Height}";
-                try { bucket = RoiStore.SelectBucket(cfg, Scene, rect.Width, rect.Height); }
-                catch { bucket = null; }
-            }
-            else
-            {
-                resLabel = "游戏未运行";
-                if (cfg.Scenes.TryGetValue(Scene, out var buckets) && buckets.Count > 0) bucket = buckets[0];
-            }
-
             var roiRows = new List<RoiRow>();
             var colRows = new List<ColumnRow>();
-            if (bucket is not null)
+            var covered = new List<string>();
+
+            foreach (var (sceneId, buckets) in cfg.Scenes)
             {
-                foreach (var roi in bucket.Rois)
+                string sceneLabel = GameSceneIds.FromId(sceneId).Label();
+                int inScene = 0;
+                foreach (var bucket in buckets)
                 {
-                    roiRows.Add(new RoiRow(roi.Name, RoiTypes.Parse(roi.Type).ToString(),
-                        $"X{roi.Rect.X:P0} Y{roi.Rect.Y:P0} {roi.Rect.W:P0}×{roi.Rect.H:P0}"));
-                    if (roi.Columns is { Count: > 0 })
-                        foreach (var c in roi.Columns)
-                            colRows.Add(new ColumnRow(roi.Name, $"{c.RelStart:P0}–{c.RelEnd:P0}", ColumnKindLabel(c.Kind)));
+                    var (bw, bh) = ParseResolution(bucket.Resolution);
+                    for (int idx = 0; idx < bucket.Rois.Count; idx++)
+                    {
+                        var roi = bucket.Rois[idx];
+                        var t = RoiTypes.Parse(roi.Type);
+                        roiRows.Add(new RoiRow(sceneId, sceneLabel, bucket.Resolution, idx, roi.Name, TypeLabel(t),
+                            $"{Px(roi.Rect.X, bw)}, {Px(roi.Rect.Y, bh)}",
+                            $"{Px(roi.Rect.W, bw)} × {Px(roi.Rect.H, bh)}"));
+                        inScene++;
+                        if (roi.Columns is { Count: > 0 })
+                            foreach (var c in roi.Columns)
+                                colRows.Add(new ColumnRow($"{sceneLabel} / {roi.Name}",
+                                    $"{c.RelStart:P0}–{c.RelEnd:P0}（占该框宽度）", ColumnKindLabel(c.Kind)));
+                    }
                 }
-                RegionHintText.Text = $"场景[{ScrTranslator.Core.Scene.GameSceneIds.FromId(Scene).Label()}] · 当前分辨率({resLabel})共 {roiRows.Count} 个区域";
+                if (inScene > 0) covered.Add(sceneLabel);
             }
-            else
-            {
-                RegionHintText.Text = $"场景[{ScrTranslator.Core.Scene.GameSceneIds.FromId(Scene).Label()}] · 未找到 {resLabel} 分辨率的校准数据，请点击“进入校准”新建";
-            }
+
+            RegionHintText.Text = roiRows.Count == 0
+                ? "还没有任何校准区域：进游戏到对应界面后按 F8 框选。三个场景要各校准一次。"
+                : $"共 {roiRows.Count} 个区域 · 已覆盖：{string.Join("、", covered)} · 还缺：{string.Join("、", AllSceneLabels.Except(covered))}" +
+                  $" · 当前识别场景：{GameSceneIds.FromId(Scene).Label()}";
             RoiListView.ItemsSource = roiRows;
             ColumnsListView.ItemsSource = colRows;
         }
         catch (Exception ex)
         {
             RegionHintText.Text = $"读取 rois.json 失败: {ex.Message}";
+        }
+    }
+
+    /// <summary>三个目标场景的显示名，用来点名"还缺哪几个场景没校准"。</summary>
+    private static readonly string[] AllSceneLabels = { "寻找房间", "房间内", "游戏内" };
+
+    /// <summary>bucket 的分辨率键（"3840x2160"）→ 宽高像素；非法一律回 1，防除零。</summary>
+    private static (int W, int H) ParseResolution(string res)
+    {
+        var parts = (res ?? "").Split('x');
+        if (parts.Length == 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h) && w > 0 && h > 0)
+            return (w, h);
+        return (1, 1);
+    }
+
+    private static int Px(double rel, int total) => (int)Math.Round(rel * total);
+
+    private static string TypeLabel(RoiType t) => t switch
+    {
+        RoiType.Chat => "聊天",
+        RoiType.RoomList => "房间名列表",
+        RoiType.MapInfo => "地图信息",
+        _ => t.ToString(),
+    };
+
+    /// <summary>编辑选中区域：改名/类型/像素矩形。改完立即落盘并让探测热重载，不必重启。</summary>
+    private void OnEditRoiClick(object sender, RoutedEventArgs e)
+    {
+        if (RoiListView.SelectedItem is not RoiRow row) { MessageBox.Show(this, "请先在列表里选中一个区域。", "编辑区域"); return; }
+        var cfg = RoiStore.Load(_roisJsonPath);
+        var current = cfg.Scenes[row.SceneId].First(b => b.Resolution == row.Resolution).Rois[row.Index];
+        var (bw, bh) = ParseResolution(row.Resolution);
+
+        var dlg = new RoiEditWindow(row.Scene, row.Resolution, bw, bh, current) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+
+        var updated = RoiStore.ReplaceRoi(cfg, row.SceneId, row.Resolution, row.Index, dlg.Result);
+        if (updated is null) { MessageBox.Show(this, "定位失败：列表可能已过期，请重新打开本页。", "编辑区域"); return; }
+        CommitRois(updated, $"区域“{row.Name}”未能写入 rois.json。");
+    }
+
+    /// <summary>删除选中区域（含确认）。只删该 (场景,分辨率) 桶里的那一条，不影响其它分辨率。</summary>
+    private void OnDeleteRoiClick(object sender, RoutedEventArgs e)
+    {
+        if (RoiListView.SelectedItem is not RoiRow row) { MessageBox.Show(this, "请先在列表里选中一个区域。", "删除区域"); return; }
+        if (MessageBox.Show(this,
+                $"确定删除 {row.Scene} / {row.Resolution} 的区域“{row.Name}”？\n（只删这一分辨率这一条，其它场景与分辨率不受影响）",
+                "删除区域", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
+
+        var cfg = RoiStore.Load(_roisJsonPath);
+        var updated = RoiStore.RemoveRoi(cfg, row.SceneId, row.Resolution, row.Index);
+        if (updated is null) { MessageBox.Show(this, "定位失败：列表可能已过期，请重新打开本页。", "删除区域"); return; }
+        CommitRois(updated, $"区域“{row.Name}”未能删除。");
+    }
+
+    /// <summary>落盘 + 重画列表 + 让正在跑的探测热重载（与校准窗保存后同一条路径）。</summary>
+    private void CommitRois(RoiConfig cfg, string failMessage)
+    {
+        try
+        {
+            RoiStore.Save(cfg, _roisJsonPath);
+            LoadRoiList();
+            _onRoisChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, failMessage + "\n" + ex.Message, "保存失败");
         }
     }
 
