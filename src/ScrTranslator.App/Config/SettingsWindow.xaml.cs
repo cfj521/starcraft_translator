@@ -204,8 +204,11 @@ public partial class SettingsWindow : Window
                             $"{Px(roi.Rect.W, bw)} × {Px(roi.Rect.H, bh)}", false));
                         if (roi.Columns is { Count: > 0 })
                             foreach (var c in roi.Columns)
+                                // 一律换算成像素再显示：预设行本来就是像素口径，
+                                // 这里再留百分比就成了同一列两种单位，反而更难核对。
                                 colRows.Add(new ColumnRow($"{sceneLabel} / {roi.Name}",
-                                    $"{c.RelStart:P0}–{c.RelEnd:P0}（占该框宽度）", ColumnKindLabel(c.Kind)));
+                                    $"{Px(c.RelStart, bw)}px 起、宽 {Px(c.RelEnd - c.RelStart, bw)}px（占框内像素）",
+                                    ColumnKindLabel(c.Kind)));
                     }
                 }
             }

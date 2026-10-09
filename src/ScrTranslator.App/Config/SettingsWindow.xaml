@@ -180,7 +180,7 @@
                         </ListView>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10"
                                    Text="ⓘ 名称/类型/像素矩形可在这里直接改（“编辑选中…”），便于把聊天框上下沿卡准；要重新拖框或划列请用“进入校准…”。"/>
-                        <TextBlock Text="房间名列表（RoomList）列定义（只读，进入校准可编辑）：" FontWeight="Bold" Margin="0,0,0,4"/>
+                        <TextBlock Text="列定义（框内哪些段算房间名 / 地图；校准与预设两个来源都汇到这里，只读，划列请进校准）：" FontWeight="Bold" Margin="0,0,0,4"/>
                         <ListView x:Name="ColumnsListView" Height="140">
                             <ListView.View>
                                 <GridView>
