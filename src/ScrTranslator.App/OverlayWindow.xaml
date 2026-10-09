@@ -10,5 +10,16 @@
         ResizeMode="NoResize"
         WindowStartupLocation="Manual"
         Left="0" Top="0">
-    <Canvas x:Name="RootCanvas"/>
+    <Grid>
+        <!-- 译文层：每条绝对定位，ShowLines 只清这层 -->
+        <Canvas x:Name="RootCanvas"/>
+        <!-- 调试面板层：左上角固定，约 8x5cm(4K)。点击穿透(继承自窗口)，不参与译文清除 -->
+        <Border x:Name="DebugPanel" Visibility="Collapsed"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="10" Background="#B3000000" CornerRadius="6" Padding="8,6"
+                BorderBrush="#40FFFFFF" BorderThickness="1">
+            <TextBlock x:Name="DebugText" Foreground="#FF7CFF9B" FontFamily="Consolas, Cascadia Mono, Microsoft YaHei"
+                       FontSize="12" LineHeight="15" TextWrapping="Wrap" Text="调试面板"/>
+        </Border>
+    </Grid>
 </Window>

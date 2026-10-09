@@ -56,6 +56,11 @@
                                 <CheckBox x:Name="AutoTranslateCheck" Content="启动游戏时自动开启翻译（程序启动即开启，等待游戏窗口出现自动续译）" Margin="0,2,0,2"/>
                             </StackPanel>
                         </GroupBox>
+                        <GroupBox Header="调试">
+                            <StackPanel>
+                                <CheckBox x:Name="DebugModeCheck" Content="DEBUG 模式：左上角显示诊断面板（场景识别/帧/ROI/翻译状态）（F6）" Margin="0,2,0,2"/>
+                            </StackPanel>
+                        </GroupBox>
                         <GroupBox Header="语言">
                             <StackPanel>
                                 <TextBlock Text="界面语言：简体中文（固定）" Margin="0,2,0,2"/>

@@ -7,6 +7,8 @@ public sealed record GeneralSettings
     public bool AutoStart { get; init; } = false;
     public bool StartMinimized { get; init; } = true;
     public bool AutoTranslateOnLaunch { get; init; } = false;
+    /// <summary>DEBUG 模式：左上角显示诊断面板（场景识别/帧/ROI/翻译状态），便于实机排障。默认关。</summary>
+    public bool DebugMode { get; init; } = false;
 }
 public sealed record OcrSettings
 {
@@ -27,7 +29,7 @@ public sealed record HotkeyBinding(uint Modifiers, uint Vk);
 
 public static class HotkeyKeys
 {
-    public const uint VK_F7 = 0x76, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 = 0x79, VK_F11 = 0x7A;
+    public const uint VK_F6 = 0x75, VK_F7 = 0x76, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 = 0x79, VK_F11 = 0x7A;
     public const uint MOD_NONE = 0x0, MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4;
 }
 public static class HotkeyDefaults
@@ -41,6 +43,7 @@ public static class HotkeyDefaults
             ["OpenConfig"]      = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F9),
             ["TogglePlayerId"]  = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F7),
             ["TogglePause"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F11),
+            ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F6),
         };
 }
 

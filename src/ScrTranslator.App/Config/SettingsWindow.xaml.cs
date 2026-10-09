@@ -53,6 +53,7 @@ public partial class SettingsWindow : Window
         ("OpenConfig", "打开配置"),
         ("TogglePlayerId", "切换“翻译玩家 ID”"),
         ("TogglePause", "暂停/继续"),
+        ("ToggleDebug", "切换 DEBUG 面板"),
     };
 
     /// <param name="openCalibration">复用 App.xaml.cs 里管理的单例 CalibrationWindow 打开方法（不在本窗口另建实例）。</param>
@@ -109,6 +110,7 @@ public partial class SettingsWindow : Window
         AutoStartCheck.IsChecked = s.General.AutoStart;
         StartMinimizedCheck.IsChecked = s.General.StartMinimized;
         AutoTranslateCheck.IsChecked = s.General.AutoTranslateOnLaunch;
+        DebugModeCheck.IsChecked = s.General.DebugMode;
         RefreshStatusText();
 
         DashScopeEngineRadio.IsChecked = s.Translation.Active == TranslationEngine.DashScope;
@@ -458,6 +460,7 @@ public partial class SettingsWindow : Window
             AutoStart = AutoStartCheck.IsChecked == true,
             StartMinimized = StartMinimizedCheck.IsChecked == true,
             AutoTranslateOnLaunch = AutoTranslateCheck.IsChecked == true,
+            DebugMode = DebugModeCheck.IsChecked == true,
         };
 
         var translation = original.Translation with

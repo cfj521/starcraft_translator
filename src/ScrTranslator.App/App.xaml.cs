@@ -246,7 +246,18 @@ public partial class App : Application
             _trayService.ShowToast("翻译", nowPaused ? "已暂停" : "已继续");
         }
 
-        // 全局热键：从 SettingsHolder.Current.Hotkeys 驱动注册全部六功能（游戏有焦点时也生效）。
+        // DEBUG 面板开关（F6）：翻转 General.DebugMode + 落盘；探测的 500ms 定时器随即显隐面板。
+        void ToggleDebug()
+        {
+            var cur = settingsHolder.Current;
+            bool newVal = !cur.General.DebugMode;
+            settingsHolder.Current = cur with { General = cur.General with { DebugMode = newVal } };
+            try { SettingsStore.Save(settingsHolder.Current, settingsPath); }
+            catch (Exception ex) { log.Log($"[hotkey] 保存 settings.json 失败: {ex.Message}"); }
+            _trayService.ShowToast("DEBUG 面板", newVal ? "已开启" : "已关闭");
+        }
+
+        // 全局热键：从 SettingsHolder.Current.Hotkeys 驱动注册全部七功能（游戏有焦点时也生效）。
         _hotkeys = new HotkeyService(overlay);
         var hotkeyActions = new Dictionary<string, Action>
         {
@@ -256,6 +267,7 @@ public partial class App : Application
             ["OpenConfig"] = OpenSettings,
             ["TogglePlayerId"] = TogglePlayerId,
             ["TogglePause"] = TogglePause,
+            ["ToggleDebug"] = ToggleDebug,
         };
         var hotkeyResults = _hotkeys.RegisterAll(settingsHolder.Current.Hotkeys, hotkeyActions);
         foreach (var (func, ok) in hotkeyResults)

@@ -28,6 +28,9 @@ public sealed class TieredTranslator
         _fast = fastProvider; _quality = qualityProvider; _settings = settings;
     }
 
+    /// <summary>当前缓存条目数（调试面板用）。</summary>
+    public int CacheCount => _cache.Count;
+
     public async Task<TranslateOutcome> TranslateAsync(
         IReadOnlyList<string> koreanLines, TranslationContext ctx,
         Action<IReadOnlyList<LineTranslation>> onStage, CancellationToken ct)

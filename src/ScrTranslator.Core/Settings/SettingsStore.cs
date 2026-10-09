@@ -19,7 +19,12 @@ public static class SettingsStore
         {
             if (!File.Exists(path)) return new AppSettings();
             var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Opts);
-            return s ?? new AppSettings();
+            if (s is null) return new AppSettings();
+            // 合并热键：以默认全集为底，用户已存的覆盖之。这样后续新增功能（如 ToggleDebug/F6）
+            // 对老配置自动补上默认绑定，而用户自定义的绑定不被冲掉。
+            var merged = new Dictionary<string, HotkeyBinding>(HotkeyDefaults.Map);
+            foreach (var kv in s.Hotkeys) merged[kv.Key] = kv.Value;
+            return s with { Hotkeys = merged };
         }
         catch { return new AppSettings(); } // 损坏/反序列化失败 → 默认
     }

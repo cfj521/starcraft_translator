@@ -25,6 +25,9 @@ public partial class OverlayWindow : Window
         Top = 0;
         Width = SystemParameters.PrimaryScreenWidth;   // DIP
         Height = SystemParameters.PrimaryScreenHeight; // DIP
+        // 调试面板 ≈ 8×5cm：WPF DIP 定义为 1/96 英寸，故 cm/2.54*96 得逻辑尺寸，在典型缩放下接近真实物理大小。
+        DebugPanel.Width = 8.0 / 2.54 * 96;   // ≈302 DIP
+        DebugPanel.Height = 5.0 / 2.54 * 96;  // ≈189 DIP
         SourceInitialized += OnSourceInitialized;
     }
 
@@ -33,6 +36,13 @@ public partial class OverlayWindow : Window
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
         NativeMethods.EnableClickThrough(hwnd);
     }
+
+    /// <summary>显示/隐藏左上角调试面板（UI 线程调用）。</summary>
+    public void SetDebugVisible(bool on) =>
+        DebugPanel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>刷新调试面板文本（UI 线程调用）。面板固定尺寸，文本超出行会被裁掉。</summary>
+    public void UpdateDebug(string text) => DebugText.Text = text;
 
     /// <summary>清屏并按物理屏幕坐标（内部换算为 DIP）摆放文本。必须在 UI 线程调用。
     /// 字号/字体/不透明度/显示模式读自 Appearance（配置页热改，靠 App.xaml.cs 在应用设置后调用 ResetChangeDetection 触发重译上屏）。

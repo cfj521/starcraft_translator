@@ -14,7 +14,7 @@ public class AppSettingsTests
         Assert.Equal(TranslationEngine.DashScope, a.Translation.Active); // 复用 TranslationSettings 默认
     }
 
-    [Fact] public void HotkeyDefaults_HasAllSixFunctions_WithExactBindings()
+    [Fact] public void HotkeyDefaults_HasAllSevenFunctions_WithExactBindings()
     {
         var m = HotkeyDefaults.Map;
         Assert.Equal(HotkeyKeys.VK_F9, m["ToggleTranslate"].Vk);
@@ -24,6 +24,7 @@ public class AppSettingsTests
         Assert.Equal(HotkeyKeys.MOD_CONTROL, m["OpenConfig"].Modifiers);
         Assert.Equal(HotkeyKeys.VK_F7, m["TogglePlayerId"].Vk);
         Assert.Equal(HotkeyKeys.VK_F11, m["TogglePause"].Vk);
-        Assert.Equal(6, m.Count);
+        Assert.Equal(HotkeyKeys.VK_F6, m["ToggleDebug"].Vk);
+        Assert.Equal(7, m.Count);
     }
 }

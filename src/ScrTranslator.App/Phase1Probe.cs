@@ -9,6 +9,7 @@ using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
 using SkiaSharp;
 using Windows.Graphics.Capture;
+using System.Windows.Threading;
 
 namespace ScrTranslator.App;
 
@@ -62,6 +63,13 @@ public sealed class Phase1Probe : IDisposable
     private long _lastFrameCount; private int _zeroFrameTicks; private bool _noFrameNotified;
     private int _processed; private int _lastProcessed; private int _stallTicks; private bool _stallNotified;
 
+    // ── DEBUG 面板状态（F6/常规页开关驱动，500ms 刷新）──
+    private DispatcherTimer? _debugTimer;
+    private int _glossaryCount;
+    private string _lastFrameWH = "—";
+    private SceneDetection _lastDet = new(GameScene.Unknown, 0, 0, Array.Empty<string>());
+    private long _lastTranslateMs; private bool _lastAllResolved; private int _lastLineCount;
+
     /// <summary>目标进程名（设置驱动，默认 StarCraft）。Start 与看门狗重连共用。</summary>
     private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
@@ -74,9 +82,14 @@ public sealed class Phase1Probe : IDisposable
         _cfg = RoiStore.Load(roisJsonPath);
         RefreshRoiDerivedFlags();
         _tiered = tiered; _settings = settings;
+        _glossaryCount = glossary.Entries.Count;
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
         _capture.Log = msg => _log.Log(msg); // 帧转换异常进文件日志（诊断）
+        // DEBUG 面板：500ms 刷新，读 General.DebugMode 决定显隐（F6/常规页开关即时生效，无需重启）。
+        _debugTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _debugTimer.Tick += (_, _) => RefreshDebug();
+        _debugTimer.Start();
     }
 
     /// <summary>从 _cfg 按当前活动场景计算派生标志（ROI 可用性 / 是否含 Chat ROI）。ctor/ReloadRois/场景切换时调用。</summary>
@@ -104,6 +117,7 @@ public sealed class Phase1Probe : IDisposable
             ct.ThrowIfCancellationRequested();
         }
         var d = SceneDetector.Detect(texts);
+        _lastDet = d;
         _log.Log($"[scene] 判定={d.Scene.Label()}({_activeScene.Label()}) score={d.Score} margin={d.Margin} 线索=[{string.Join(",", d.Hits)}] 文本数={texts.Count}");
 
         if (d.Scene == _activeScene) { _pendingScene = GameScene.Unknown; _pendingCount = 0; return false; }
@@ -245,6 +259,32 @@ public sealed class Phase1Probe : IDisposable
     private void ClearOverlay() =>
         _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
 
+    /// <summary>DEBUG 面板刷新（DispatcherTimer 500ms，UI 线程）：读 General.DebugMode 决定显隐，开则重建文本。</summary>
+    private void RefreshDebug()
+    {
+        bool on = _settings.Current.General.DebugMode;
+        _overlay.SetDebugVisible(on);
+        if (on) _overlay.UpdateDebug(BuildDebugText());
+    }
+
+    private string BuildDebugText()
+    {
+        int pollMs = PollInterval.Resolve(_settings.Current.Ocr, _hasChatRoi);
+        int roiCount = _cfg.Scenes.TryGetValue(SceneId, out var bs) ? bs.Sum(b => b.Rois.Count) : 0;
+        string state = _waitingForWindow ? "等待窗口" : _windowLost ? "窗口丢失" : _paused ? "已暂停" : "运行中";
+        var hits = _lastDet.Hits.Count == 0 ? "—" : string.Join(",", _lastDet.Hits);
+        var t = _settings.Current.Translation;
+        return
+            $"场景: {_activeScene.Label()}  检测: {_lastDet.Scene.Label()} s{_lastDet.Score} m{_lastDet.Margin}\n" +
+            $"线索: {hits}\n" +
+            $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
+            $"轮询: {pollMs}ms  引擎: {t.Active}  两级: {(t.TwoLevel ? "on" : "off")}\n" +
+            $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  busy={_busy}\n" +
+            $"状态: {state}  chatRoi={(_hasChatRoi ? "yes" : "no")}\n" +
+            $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}\n" +
+            $"缓存: {_tiered.CacheCount}  术语表: {_glossaryCount}";
+    }
+
     /// <summary>帧流健康检查（每看门狗周期调用）：
     /// A) 捕获会话在、但 10s 零新帧 → 大概率独占全屏盖住了 WGC，或画面完全静止；
     /// B) 有新帧但 10s 没走完一次处理 → _busy 卡死（OCR/网络未返回）。各提示一次，恢复后复位。</summary>
@@ -315,6 +355,7 @@ public sealed class Phase1Probe : IDisposable
             _firstFrameLogged = true;
             _log.Log($"[probe] 首帧到达 {frame.Width}x{frame.Height}（捕获→处理链路已通）");
         }
+        _lastFrameWH = $"{frame.Width}x{frame.Height}";
         if (_paused) { frame.Dispose(); return; }
         // 轮询频率接线（Phase 5）：每帧实时读设置→场景含 Chat ROI 用 ChatPollMs，否则 OtherPollMs（钳制 150–5000ms）。
         // 同时刷新捕获侧节流，保证"帧转换节流 ≤ 处理节流"，改设置即时生效无需重启。
@@ -425,6 +466,7 @@ public sealed class Phase1Probe : IDisposable
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var outcome = await _tiered.TranslateAsync(koLines, ctx, Render, cts.Token);
             sw.Stop();
+            _lastTranslateMs = sw.ElapsedMilliseconds; _lastAllResolved = outcome.AllResolved; _lastLineCount = koLines.Count;
             for (int k = 0; k < koLines.Count; k++)
                 _log.Log($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" engine={engine} 两级={_settings.Current.Translation.TwoLevel} {sw.ElapsedMilliseconds}ms");
 
@@ -439,6 +481,7 @@ public sealed class Phase1Probe : IDisposable
     public void Dispose()
     {
         _capture.FrameArrived -= OnFrame;
+        _debugTimer?.Stop();
         _watchdog?.Dispose();
         _watchdog = null;
     }
