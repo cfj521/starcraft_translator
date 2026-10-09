@@ -149,20 +149,8 @@
                                 </StackPanel>
                             </StackPanel>
                         </GroupBox>
-                        <GroupBox Header="图像预处理（后续生效）">
-                            <StackPanel Orientation="Horizontal">
-                                <CheckBox x:Name="UpscaleCheck" Content="放大" Margin="0,0,16,0"/>
-                                <CheckBox x:Name="GrayscaleCheck" Content="灰度" Margin="0,0,16,0"/>
-                                <CheckBox x:Name="BinarizeCheck" Content="二值化"/>
-                            </StackPanel>
-                        </GroupBox>
-                        <GroupBox Header="变化检测灵敏度（0=最不敏感，10=最敏感）（后续生效）">
-                            <StackPanel Orientation="Horizontal">
-                                <Slider x:Name="SensitivitySlider" Width="240" Minimum="0" Maximum="10"
-                                        TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="OnSensitivityChanged"/>
-                                <TextBlock x:Name="SensitivityValueText" Text="5" Margin="8,0,0,0" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </GroupBox>
+                        <TextBlock Text="预处理与变化检测：由 PaddleOCR 内置管线与精确文本比对处理，实测无需额外开关（原占位设置已移除）。"
+                                   Foreground="Gray" Margin="4,8,4,0" TextWrapping="Wrap"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

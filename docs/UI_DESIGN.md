@@ -112,10 +112,8 @@
 轮询频率
   聊天区        每 [ 300 ] ms 检测一次
   其它区域      每 [ 800 ] ms 检测一次
-图像预处理      [✓] 放大  [✓] 灰度  [ ] 二值化   阈值 [ — ]
-变化检测灵敏度   [────●─────]  低 ←→ 高
 ```
-> 注：轮询频率/预处理/灵敏度在配置窗有字段；轮询频率已接线（场景含 Chat ROI 用聊天值，钳制 150–5000ms），预处理/灵敏度为占位（模型内置预处理/精确文本变化检测），见 ROADMAP Phase 5。
+> 注：轮询频率已接线并即时生效（场景含 Chat ROI 取聊天值，钳制 150–5000ms）。原"图像预处理/变化检测灵敏度"控件为占位假设置——RapidOcrNet 不暴露对应旋钮、变化检测为精确文本比对；实测原生分辨率裁条放大 2x 无收益（avgConf .987 直读 vs .982 放大），已整体移除（UI_DESIGN 与 settings.json 字段同步删除，旧文件多余字段读取时自动忽略）。
 
 ### 3.4 区域 ROI
 ```
@@ -218,7 +216,7 @@
 class AppSettings {
     GeneralSettings General;      // TargetProcess / AutoStart / StartMinimized / AutoTranslateOnLaunch
     TranslationSettings Translation;
-    OcrSettings Ocr;              // ChatPollMs=300 / OtherPollMs=800 / Upscale / Grayscale / Binarize / ChangeSensitivity
+    OcrSettings Ocr;              // ChatPollMs=300 / OtherPollMs=800（仅此两项；预处理/灵敏度字段已移除，见 §3.3 注）
     AppearanceSettings Appearance;// FontFamily / FontSize / Opacity / ShowOriginalAndTranslation
     Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F7–F11/Ctrl+F9
     // ROI 配置单独存 rois.json（RoiStore），按分辨率 bucket 分组，RoomList 可含列定义

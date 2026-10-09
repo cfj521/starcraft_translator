@@ -120,10 +120,6 @@ public partial class SettingsWindow : Window
 
         ChatPollBox.Text = s.Ocr.ChatPollMs.ToString();
         OtherPollBox.Text = s.Ocr.OtherPollMs.ToString();
-        UpscaleCheck.IsChecked = s.Ocr.Upscale;
-        GrayscaleCheck.IsChecked = s.Ocr.Grayscale;
-        BinarizeCheck.IsChecked = s.Ocr.Binarize;
-        SensitivitySlider.Value = s.Ocr.ChangeSensitivity;
 
         FontFamilyBox.Text = s.Appearance.FontFamily;
         FontSizeBox.Text = s.Appearance.FontSize.ToString();
@@ -407,12 +403,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void OnSensitivityChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (SensitivityValueText is not null)
-            SensitivityValueText.Text = ((int)Math.Round(e.NewValue)).ToString();
-    }
-
     private void OnOpacityChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (OpacityValueText is not null)
@@ -482,10 +472,6 @@ public partial class SettingsWindow : Window
         {
             ChatPollMs = ParseIntOr(ChatPollBox.Text, original.Ocr.ChatPollMs),
             OtherPollMs = ParseIntOr(OtherPollBox.Text, original.Ocr.OtherPollMs),
-            Upscale = UpscaleCheck.IsChecked == true,
-            Grayscale = GrayscaleCheck.IsChecked == true,
-            Binarize = BinarizeCheck.IsChecked == true,
-            ChangeSensitivity = (int)Math.Round(SensitivitySlider.Value),
         };
 
         var appearance = original.Appearance with

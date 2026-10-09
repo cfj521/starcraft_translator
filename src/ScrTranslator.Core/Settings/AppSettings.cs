@@ -12,10 +12,9 @@ public sealed record OcrSettings
 {
     public int ChatPollMs { get; init; } = 300;
     public int OtherPollMs { get; init; } = 800;
-    public bool Upscale { get; init; } = true;
-    public bool Grayscale { get; init; } = true;
-    public bool Binarize { get; init; } = false;
-    public int ChangeSensitivity { get; init; } = 5; // 0..10
+    // 曾有 Upscale/Grayscale/Binarize/ChangeSensitivity 四字段：RapidOcrNet 不暴露这些旋钮、
+    // 变化检测是精确文本比对无"灵敏度"可言；实测(房间列表样图 原生裁条 直读 avgConf .987 vs 2x放大 .982)
+    // 证明原生分辨率放大无收益 → 诚实移除，避免假设置。旧 settings.json 多余字段反序列化时自动忽略。
 }
 public sealed record AppearanceSettings
 {
