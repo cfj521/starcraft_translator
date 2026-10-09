@@ -18,9 +18,14 @@ namespace ScrTranslator.App.Calibration;
 /// F8 打开（App.xaml.cs）；Esc 取消不存、Enter 归一化写 rois.json（RoiStore.Save）。</summary>
 public partial class CalibrationWindow : Window
 {
-    private readonly string _sceneId; // 本次校准写入的场景键（由打开方按当前识别场景传入）
+    /// <summary>本次校准写入的场景键。**由校准窗自己检测得出**（打开方传的值只作兜底），
+    /// 所以它不是 readonly：OnLoaded 里检测到真实场景后会覆盖。</summary>
+    private string _sceneId;
+    private readonly SceneRecognizer? _scene;
+    private readonly LayoutPresetStore? _layout;
     private const double HandleSize = 8;
-    private const double MinBoxSize = 10; // DIP
+    private const double MinBoxSize = 10;             // DIP，用于"拖角不许缩成线"
+    private const double MinNewBoxPhysicalPx = 20;    // 新建框的最小边（物理像素）：小于它一律当作单击/误触
 
     private readonly string _roisJsonPath;
     private readonly FileLogger? _log;
@@ -28,6 +33,7 @@ public partial class CalibrationWindow : Window
 
     private readonly List<CalibBox> _boxes = new();
     private CalibBox? _selected;
+    private readonly List<FrameworkElement> _presetDecorations = new(); // 预设参考框（只读，不写盘）
 
     private enum Mode { Idle, Drawing, ResizingCorner, DraggingDivider }
     private Mode _mode = Mode.Idle;
@@ -38,6 +44,10 @@ public partial class CalibrationWindow : Window
     private int _dividerIndex;
     private Border? _newBoxPanel;
     private Rect? _pendingRect;
+    // 操作条拖拽：按住它自己（非控件区）可以挪动，避免挡住正在对齐的区域
+    private bool _panelDragging;
+    private Point _panelDragStart;
+    private Point _panelOriginStart;
 
     private System.Drawing.Rectangle _gameRect; // 物理像素：归一化基准（同 Phase1Probe/ScreenMapper 的窗口矩形）
     private double _dpiX = 1, _dpiY = 1;
@@ -73,13 +83,20 @@ public partial class CalibrationWindow : Window
 
     /// <param name="onSaved">保存成功（Enter 触发 SaveAndClose 走完写盘且未抛异常）后调用；
     /// 供 App.xaml.cs 接线让运行中的 Phase1Probe.ReloadRois()，使首次校准/改动无需重启即可生效。</param>
-    public CalibrationWindow(string roisJsonPath, FileLogger? log = null, Action? onSaved = null, string? sceneId = null)
+    /// <param name="sceneId">打开方认为的当前场景，仅作**兜底**：校准窗自己会抓一帧做指纹检测覆盖它，
+    /// 所以 F9 没开也能定准场景。</param>
+    /// <param name="scene">场景识别器（图像指纹）。为 null 时跳过检测，沿用传入的 sceneId。</param>
+    /// <param name="layout">布局预设：校准窗把它们画成只读参考框，省得用户重复框已有的区域。</param>
+    public CalibrationWindow(string roisJsonPath, FileLogger? log = null, Action? onSaved = null, string? sceneId = null,
+        SceneRecognizer? scene = null, LayoutPresetStore? layout = null)
     {
         InitializeComponent();
         _roisJsonPath = roisJsonPath;
         _log = log;
         _onSaved = onSaved;
         _sceneId = sceneId ?? GameSceneIds.Browsing;
+        _scene = scene;
+        _layout = layout;
         Left = 0;
         Top = 0;
         Width = SystemParameters.PrimaryScreenWidth;
@@ -104,13 +121,107 @@ public partial class CalibrationWindow : Window
         }
         _gameRect = rect;
 
+        // 场景由校准窗自己检测（不依赖 F9 是否开着），检测不到才沿用打开方传进来的值
+        DetectSceneOrKeep();
+
         DrawGameOutline();
+        DrawPresetBoxes();
         LoadExisting();
 
         Focusable = true;
         Focus();
         Keyboard.Focus(this);
     }
+
+    /// <summary>
+    /// 抓游戏窗口那块屏幕做指纹场景检测。
+    ///
+    /// 用 CopyFromScreen 而不是 PrintWindow：本窗打开的前提就是"游戏在前台"（App.xaml.cs 已挡），
+    /// 所以那块像素就是游戏画面本身，所见即所测，还省掉一套 GDI 互操作。
+    /// 这样校准**不依赖 F9 是否开启**——没开翻译也能定准当前场景，框的区域才会落到对的场景桶里。
+    /// </summary>
+    private void DetectSceneOrKeep()
+    {
+        if (_scene is null) return;
+        try
+        {
+            using var bmp = new System.Drawing.Bitmap(_gameRect.Width, _gameRect.Height,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            int stride;
+            byte[] buf;
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+                g.CopyFromScreen(_gameRect.Left, _gameRect.Top, 0, 0, bmp.Size);
+            var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
+                System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            stride = Math.Abs(data.Stride);
+            buf = new byte[stride * bmp.Height];
+            System.Runtime.InteropServices.Marshal.Copy(data.Scan0, buf, 0, buf.Length);
+            bmp.UnlockBits(data);
+
+            var rec = _scene.Recognize(new FramePixels(buf, bmp.Width, bmp.Height, stride, 4, 2, 1, 0));
+            _log?.Log($"[calibration] 场景检测：{rec.Summary}");
+            if (rec.IsMatched) _sceneId = rec.Scene.ToId();
+        }
+        catch (Exception ex)
+        {
+            _log?.Log($"[calibration] 场景检测失败，沿用传入场景 {_sceneId}: {ex.Message}");
+        }
+    }
+
+    /// <summary>把当前场景/分辨率的布局预设画成**只读参考框**（虚线 + 标签）。
+    /// 目的：让用户一眼看见"这块系统已经知道了"，不必重复框；它们不参与拖拽也不写盘。</summary>
+    private void DrawPresetBoxes()
+    {
+        var p = _layout?.Find(_sceneId, _gameRect.Width, _gameRect.Height);
+        if (p is null) return;
+        var parts = new List<(PixelRect Rect, string Label)>();
+        if (p.Chat is { } c) parts.Add((c, "聊天(预设)"));
+        if (p.RoomList is { } g)
+        {
+            parts.Add((new PixelRect(g.X, g.Y, g.Width, g.Height), "房间列表(预设)"));
+            foreach (var col in g.Columns)
+                parts.Add((new PixelRect(g.X + col.X, g.Y, col.Width, g.Height), $"列·{ColumnKindLabel(col.Kind)}"));
+        }
+        foreach (var (r, label) in parts)
+        {
+            var dip = PhysicalToDipRect(new System.Drawing.Rectangle(_gameRect.Left + r.X, _gameRect.Top + r.Y, r.Width, r.Height));
+            var box = new Rectangle
+            {
+                Width = Math.Max(1, dip.Width),
+                Height = Math.Max(1, dip.Height),
+                Stroke = Brushes.DeepSkyBlue,
+                StrokeThickness = 1.5,
+                StrokeDashArray = new DoubleCollection { 3, 3 },
+                Fill = new SolidColorBrush(Color.FromArgb(28, 0, 191, 255)),
+                IsHitTestVisible = false,   // 参考框不吃鼠标，别挡住下面的框选
+            };
+            Canvas.SetLeft(box, dip.X);
+            Canvas.SetTop(box, dip.Y);
+            var tag = new TextBlock
+            {
+                Text = label,
+                Foreground = Brushes.DeepSkyBlue,
+                FontSize = 11,
+                Background = new SolidColorBrush(Color.FromArgb(180, 0, 0, 0)),
+                Padding = new Thickness(3, 0, 3, 0),
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(tag, dip.X);
+            Canvas.SetTop(tag, Math.Max(0, dip.Y - 16));
+            RootCanvas.Children.Add(box);
+            RootCanvas.Children.Add(tag);
+            _presetDecorations.Add(box);
+            _presetDecorations.Add(tag);
+        }
+    }
+
+    private static string ColumnKindLabel(ColumnKind k) => k switch
+    {
+        ColumnKind.RoomName => "房间名",
+        ColumnKind.MapName => "地图",
+        ColumnKind.PlayerId => "玩家ID",
+        _ => "其它",
+    };
 
     // ── 加载 ─────────────────────────────────────────────────────────────
 
@@ -143,13 +254,17 @@ public partial class CalibrationWindow : Window
         }
 
         string resKey = $"{_gameRect.Width}x{_gameRect.Height}";
+        string sceneLabel = GameSceneIds.FromId(_sceneId).Label();
+        // 顶部常驻显示"正在校准哪个场景/分辨率"——它决定 Enter 保存后这些框落到哪个桶，
+        // 不显示的话用户根本不知道自己其实是在给"游戏内"画框。
+        HintText.Text = $"场景【{sceneLabel}】 · 分辨率 {resKey} · 拖动鼠标框选 (Esc 退出 / Enter 保存)";
         SceneBucket? bucket = null;
         if (cfg.Scenes.TryGetValue(_sceneId, out var buckets))
             bucket = buckets.FirstOrDefault(b => b.Resolution == resKey);
 
         if (bucket is null)
         {
-            HintText.Text = $"未找到当前分辨率({resKey})的校准数据 — 新建校准：拖动鼠标框选区域 (Esc 退出 / Enter 保存)";
+            HintText.Text += " — 该场景在此分辨率下还没有校准区域";
             return;
         }
 
@@ -256,10 +371,22 @@ public partial class CalibrationWindow : Window
         double w = _drawPreview.Width, h = _drawPreview.Height;
         RootCanvas.Children.Remove(_drawPreview);
         _drawPreview = null;
-        if (w < MinBoxSize || h < MinBoxSize) return; // 太小视为误触/单击，不弹面板
+        if (w * _dpiX < MinNewBoxPhysicalPx || h * _dpiY < MinNewBoxPhysicalPx)
+        {
+            // 太小（含纯单击）一律当误触：不弹操作条，也不留半个框。
+            // 用物理像素判定而不是 DIP：用户说的"20 像素"是屏幕像素，且高 DPI 下 DIP 会把门槛放大。
+            _log?.Debug($"[calibration] 框选 {w * _dpiX:F0}×{h * _dpiY:F0}px 小于 {MinNewBoxPhysicalPx}px，忽略");
+            return;
+        }
         ShowNewBoxPanel(new Rect(left, top, w, h));
     }
 
+    /// <summary>
+    /// 框选完成后的操作条。三件事：
+    ///  1. 第二行显示**这次框的坐标/尺寸 + 当前场景 + 分辨率**（物理像素）——不显示的话用户无从知道自己框到了哪；
+    ///  2. 摆放先量自己要多宽，放不下就翻到框的左侧，并夹在画布内 —— 修"贴右边缘时溢出窗口"；
+    ///  3. 按住操作条空白处可拖走 —— 免得它压住正要对齐的区域。
+    /// </summary>
     private void ShowNewBoxPanel(Rect rect)
     {
         var nameBox = new TextBox { Width = 160, Text = "新区域" };
@@ -272,31 +399,71 @@ public partial class CalibrationWindow : Window
             SelectedIndex = 0,
         };
         var okBtn = new Button { Content = "确定", Width = 50, Margin = new Thickness(8, 0, 4, 0), IsDefault = true };
-        var cancelBtn = new Button { Content = "取消", Width = 50, Margin = new Thickness(0, 0, 0, 0), IsCancel = true };
+        var cancelBtn = new Button { Content = "取消", Width = 50, IsCancel = true };
 
-        var content = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6) };
-        content.Children.Add(new TextBlock { Text = "名称:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0), Foreground = Brushes.White });
-        content.Children.Add(nameBox);
-        content.Children.Add(new TextBlock { Text = "类型:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0), Foreground = Brushes.White });
-        content.Children.Add(typeCombo);
-        content.Children.Add(okBtn);
-        content.Children.Add(cancelBtn);
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 4, 6, 2) };
+        row.Children.Add(new TextBlock { Text = "名称:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0), Foreground = Brushes.White });
+        row.Children.Add(nameBox);
+        row.Children.Add(new TextBlock { Text = "类型:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0), Foreground = Brushes.White });
+        row.Children.Add(typeCombo);
+        row.Children.Add(okBtn);
+        row.Children.Add(cancelBtn);
+
+        var info = new TextBlock
+        {
+            Text = DescribeRect(rect),
+            Foreground = Brushes.LightGray,
+            FontSize = 11,
+            Margin = new Thickness(6, 0, 6, 4),
+        };
+        var content = new StackPanel();
+        content.Children.Add(row);
+        content.Children.Add(info);
 
         var border = new Border
         {
             Background = new SolidColorBrush(Color.FromArgb(235, 30, 30, 30)),
             BorderBrush = Brushes.White,
             BorderThickness = new Thickness(1),
+            Cursor = Cursors.SizeAll,
             Child = content,
         };
 
-        double left = Math.Min(rect.Right + 8, Math.Max(0, RootCanvas.ActualWidth - 360));
-        double top = Math.Max(0, Math.Min(rect.Top, Math.Max(0, RootCanvas.ActualHeight - 60)));
-        Canvas.SetLeft(border, left);
-        Canvas.SetTop(border, top);
+        // 拖拽：按住空白处（不是输入框/按钮/下拉）才能挪，否则会把控件的点击吃掉
+        border.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.Source is TextBox or ComboBox or Button) return;
+            _panelDragging = true;
+            _panelDragStart = e.GetPosition(RootCanvas);
+            _panelOriginStart = new Point(Canvas.GetLeft(border), Canvas.GetTop(border));
+            border.CaptureMouse();
+            e.Handled = true;
+        };
+        border.MouseMove += (_, e) =>
+        {
+            if (!_panelDragging) return;
+            var p = e.GetPosition(RootCanvas);
+            PlacePanel(border, _panelOriginStart.X + (p.X - _panelDragStart.X), _panelOriginStart.Y + (p.Y - _panelDragStart.Y));
+        };
+        border.MouseLeftButtonUp += (_, e) =>
+        {
+            if (!_panelDragging) return;
+            _panelDragging = false;
+            border.ReleaseMouseCapture();
+            e.Handled = true;
+        };
+
         RootCanvas.Children.Add(border);
         _newBoxPanel = border;
         _pendingRect = rect;
+
+        // 先量自身尺寸再定位：右侧放不下就翻到框左边，最后夹进画布，绝不溢出窗口
+        border.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double pw = border.DesiredSize.Width, ph = border.DesiredSize.Height;
+        double left = rect.Right + 8;
+        if (left + pw > RootCanvas.ActualWidth) left = Math.Max(0, rect.Left - pw - 8);
+        double top = Math.Min(rect.Top, Math.Max(0, RootCanvas.ActualHeight - ph));
+        PlacePanel(border, left, top);
 
         okBtn.Click += (_, _) =>
         {
@@ -312,6 +479,26 @@ public partial class CalibrationWindow : Window
 
         nameBox.Focus();
         nameBox.SelectAll();
+    }
+
+    /// <summary>把操作条摆到 (x,y) 并夹在画布内（左上角不越 0，右下不越画布）。</summary>
+    private void PlacePanel(FrameworkElement panel, double x, double y)
+    {
+        panel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double maxX = Math.Max(0, RootCanvas.ActualWidth - panel.DesiredSize.Width);
+        double maxY = Math.Max(0, RootCanvas.ActualHeight - panel.DesiredSize.Height);
+        Canvas.SetLeft(panel, Math.Clamp(x, 0, maxX));
+        Canvas.SetTop(panel, Math.Clamp(y, 0, maxY));
+    }
+
+    /// <summary>DIP 画布坐标 → 游戏窗口内的物理像素，拼成"坐标/尺寸/场景/分辨率"一行。</summary>
+    private string DescribeRect(Rect dip)
+    {
+        int px = (int)Math.Round(dip.X * _dpiX) - _gameRect.Left;
+        int py = (int)Math.Round(dip.Y * _dpiY) - _gameRect.Top;
+        int pw = (int)Math.Round(dip.Width * _dpiX);
+        int ph = (int)Math.Round(dip.Height * _dpiY);
+        return $"坐标 ({px}, {py})   尺寸 {pw} × {ph}   场景【{GameSceneIds.FromId(_sceneId).Label()}】   分辨率 {_gameRect.Width}×{_gameRect.Height}";
     }
 
     private void ClosePendingPanel()

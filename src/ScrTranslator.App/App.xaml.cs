@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using ScrTranslator.App.Auth;
 using ScrTranslator.App.Capture;
+using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
 using ScrTranslator.App.Secrets;
 using ScrTranslator.App.Services;
@@ -273,8 +274,33 @@ public partial class App : Application
         Calibration.CalibrationWindow? calibrationWindow = null;
         void OpenCalibration()
         {
+            // 校准的前提是"看得见游戏画面"：校准窗是半透明覆盖层，且要靠抓屏做场景检测。
+            // 游戏没开 / 在后台 / 最小化时框出来的东西全是凭空的 → 直接拒绝并说清原因。
+            var holder = _host!.Services.GetRequiredService<SettingsHolder>();
+            string proc = string.IsNullOrWhiteSpace(holder.Current.General.TargetProcess)
+                ? "StarCraft" : holder.Current.General.TargetProcess.Trim();
+            var hwnd = WindowFinder.FindByProcess(proc);
+            if (hwnd == IntPtr.Zero)
+            {
+                _trayService.ShowToast("无法校准", $"未找到游戏窗口（进程 {proc}）。请先启动 SC:R（窗口化/无边框）。");
+                return;
+            }
+            if (NativeMethods.IsIconic(hwnd))
+            {
+                _trayService.ShowToast("无法校准", "游戏处于最小化状态，请先还原窗口再按 F8。");
+                return;
+            }
+            if (NativeMethods.GetForegroundWindow() != hwnd)
+            {
+                _trayService.ShowToast("无法校准", "游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 F8。");
+                return;
+            }
+
             if (calibrationWindow is not null) { calibrationWindow.Activate(); return; }
-            calibrationWindow = new Calibration.CalibrationWindow(roisPath, log, probe.ReloadRois, probe.CurrentSceneId);
+            calibrationWindow = new Calibration.CalibrationWindow(
+                roisPath, log, probe.ReloadRois, probe.CurrentSceneId,
+                _host.Services.GetRequiredService<SceneRecognizer>(),
+                _host.Services.GetRequiredService<LayoutPresetStore>());
             calibrationWindow.Closed += (_, _) => calibrationWindow = null;
             calibrationWindow.Show();
             calibrationWindow.Activate();
