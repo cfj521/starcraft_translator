@@ -22,7 +22,7 @@
 1. SC:R 须以**窗口化/无边框**运行，独占全屏会盖住悬浮窗——代码与文档都要体现这一前提。
 2. 悬浮窗必须**点击穿透**（`WS_EX_TRANSPARENT|WS_EX_LAYERED`），不能抢游戏焦点。
 3. **玩家 ID 默认不翻译**，但这是**可配置项** `Translation.TranslatePlayerId`（默认 false，可用热键 F7 切换）；房间列表按列区分，ID 列据此开关决定。
-4. 翻译提供方 **OpenAI 订阅 + 阿里云 DashScope 单活跃可切换**（托盘/配置选定）；命中术语表/缓存直出，省费用。**两级编排（快态→终态原地替换）是 Phase 3 目标，Phase 2 为单级**。
+4. 翻译提供方 **OpenAI 订阅 + 阿里云 DashScope 单活跃可切换**（托盘/配置选定）；命中术语表/缓存直出，省费用。**翻译为单级：一批未命中只发一次请求**（曾实现过"两级=快引擎临时态→主力定稿原地替换"，因任务很窄、低价模型单发已够好而移除；勿再引入）。
 5. API Key / OAuth token 本地 **DPAPI 加密**存储（`SecretStore`），除翻译/OAuth 请求外不上传数据。
 6. **纯读屏**——不注入游戏进程、不改游戏文件、不读游戏内存（降低封号风险）。
 7. **场景名一律 `browsing` / `room` / `ingame`**（枚举 `GameScene`、`rois.json` 键、提示词、文档同一套）；`other`=游戏前台但不属三场景，此态**不翻译**。老校准文件的 `custom_games_listing`/`waiting_room`/`in_game` 由 `GameSceneIds.Normalize` 兼容。

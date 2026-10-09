@@ -36,7 +36,7 @@
 
 ## Phase 3 — LLM 两级翻译 + 术语表 + 缓存 🧠
 **目标**：翻译质量到位。
-- [x] 两级编排：快态（DashScope qwen-flash）临时态 → 质量态（Active 引擎）最终态原地替换（视觉区分：临时灰斜体/最终白）。默认关闭(opt-in)，托盘可开。
+- [x] ~~两级编排：快态（DashScope qwen-flash）临时态 → 质量态（Active 引擎）最终态原地替换~~ —— **已于 Phase 6 整体移除**（见下）。当年确实做完并默认 opt-in 关闭，后来判定这个窄任务不值得双请求。
 - [x] system prompt 注入术语表 + 场景（`PromptBuilder`）
 - [x] 加载 `GLOSSARY.md`/数据文件，命中条目直出（Phase 2 已完成）
 - [x] LLM 节流/合并，防刷屏（复用变化检测+单飞+缓存存最终态；两级不加压）
@@ -84,6 +84,12 @@
 - [x] 切换场景时同步清空悬浮层（旧译文是按旧场景 ROI 定位的，留着既错位置又错内容）
 - [x] 轮询重做为两个正交节拍：`SceneDetectPollMs`=200ms（识别，便宜要勤）/ `TranslatePollMs`=500ms（OCR+LLM，贵）；废弃按"场景含不含聊天 ROI"二选一的设计（其他界面根本不翻译），捕获侧节流取两者较快值
 - [x] 单测 153/153（新增 53：键归一/指纹/识别四态/校验和/覆盖层合并 + 出厂文件回归）
+- [x] 单测 180→178：删 8 条 OCR 判定用例、删 5 条两级用例，新增场景识别/凭据体检/无韩文闸门等
+- [x] **移除两级翻译**：删 `TwoLevel/FastEngine/FastModel` 三字段、`TranslationStage`(Direct/Provisional/Final)、
+  `TieredTranslator` → `TranslationOrchestrator`（术语表 → 缓存 → 活跃 provider，一批一请求）、
+  悬浮层临时态灰斜体、托盘"两级翻译"菜单项、配置页两级开关与快引擎模型框。
+  理由：游戏聊天/房间名是很窄的翻译任务，低价模型单发即够好，两级只让每个未命中批次多打一次请求。
+  旧 settings.json 里的这三个字段自动忽略（有回归测试守着），`TwoLevel_FieldsAreGone` 防死功能复活
 - [ ] 校准窗增加"采集当前场景指纹"（现场补新分辨率/新场景参考的 UI）
 - [ ] 按识别到的种族选聊天 ROI（装饰板宽度随种族不同）
 - [ ] 实机验收：4K 下三场景 + 主菜单/加载来回切，看 `other` 态进出是否正确

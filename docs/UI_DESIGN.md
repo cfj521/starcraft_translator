@@ -75,15 +75,13 @@
 ```
 
 ### 3.2 翻译 Translation  ★（含"翻译玩家 ID"）
-> 实现对齐（Phase 2–4）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = 主引擎单选（DashScope / ChatGPT 订阅）**单活跃** + **两级翻译 opt-in 开关**；密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
+> 实现对齐（Phase 2–4）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = 主引擎单选（DashScope / ChatGPT 订阅）**单活跃、单级**；密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
 
 ```
 引擎（单活跃，托盘可快速切换）
   主引擎          (•) DashScope（阿里云）  ( ) ChatGPT（订阅）
                   [ 设置阿里 Key… ]        [ 登录 ChatGPT… ]
   模型            DashScope [ qwen-flash ]   ChatGPT [ gpt-5 ]
-  [ ] 两级翻译（opt-in）  快态(默认 DashScope qwen-flash) 先出临时译文
-                         → 主引擎精译后**原地替换**；临时灰斜体 / 终态白
 
 内容范围                                              ┌── 热键可绑
   [✓] 翻译聊天
@@ -154,7 +152,7 @@
   不透明度        [──────●──]  80%      ← 整条（文字+底衬）的统一透明度
   文字底衬        [──────●──]  80%      ← 每条译文一块圆角黑底的 alpha，0=不画；纯白字压不住浅色游戏画面（已实现）
   显示模式        ( ) 仅译文   (•) 原文+译文双行
-  临时态(快引擎)样式  [ 灰色/半透明 ]  最终态(LLM) [ 正常色 ]
+
 聊天悬浮
   最多保留        [ 6 ] 条历史
   单条停留        [ 8 ] 秒后淡出
@@ -215,7 +213,7 @@
 ## 6. 配置数据模型（与界面对应，实现对齐版）
 
 > 与代码一致：`src/ScrTranslator.Core/Settings/AppSettings.cs` + `Translation/TranslationSettings.cs` + `Roi/RoiModels.cs`。
-> **实际字段**（非早期设想）：无 `EngineMode(FastOnly/Hybrid/LlmOnly)`，改 `Active` 单选 + `TwoLevel` 开关；密钥字段**不在** `AppSettings` 内（走 `SecretStore`/DPAPI）。
+> **实际字段**（非早期设想）：无 `EngineMode(FastOnly/Hybrid/LlmOnly)`，也无两级开关——`Active` 单选、单级；密钥字段**不在** `AppSettings` 内（走 `SecretStore`/DPAPI）。
 
 ```csharp
 class AppSettings {
@@ -232,9 +230,7 @@ class TranslationSettings {
     string DashScopeModel;        // 默认 qwen-flash
     string ChatGptModel;          // 默认 gpt-5
     int TimeoutSeconds;           // 整轮(快+质量共用)超时，默认 10
-    bool TwoLevel;                // 两级编排 opt-in，默认 false
-    TranslationEngine FastEngine; // 快态引擎，默认 DashScope
-    string FastModel;             // 快态模型，默认 qwen-flash
+
     bool TranslateChat   = true;
     bool TranslateRoomName = true;
     bool TranslateMapInfo  = true;

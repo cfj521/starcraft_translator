@@ -11,7 +11,7 @@ using ScrTranslator.Core.Translation;
 namespace ScrTranslator.App;
 
 /// <summary>一条上屏文本：物理屏幕像素坐标（左上角）。Source=对应韩文原文，供"原文+译文双行"显示（可空）。</summary>
-public record OverlayItem(string Text, double ScreenLeft, double ScreenTop, bool Provisional = false, string? Source = null);
+public record OverlayItem(string Text, double ScreenLeft, double ScreenTop, string? Source = null);
 
 public partial class OverlayWindow : Window
 {
@@ -49,17 +49,15 @@ public partial class OverlayWindow : Window
         double plateAlpha = appearance.BackplateAlpha();
         foreach (var it in items)
         {
-            // 文字自身的 Opacity 只表示"相对整条的深浅"（临时态更淡），
-            // 用户设的整体不透明度统一加在外层底衬上，避免两者叠乘把文字压得过淡。
+            // 文字自身的 Opacity 只表示"相对整条的深浅"，用户设的整体不透明度统一加在外层底衬上，
+            // 避免两者叠乘把文字压得过淡。
             var tb = new TextBlock
             {
                 Text = it.Text,
                 FontFamily = family,
                 FontSize = appearance.FontSize,
                 FontWeight = FontWeights.Bold,
-                Foreground = it.Provisional ? new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD)) : Brushes.White,
-                FontStyle = it.Provisional ? FontStyles.Italic : FontStyles.Normal,
-                Opacity = it.Provisional ? 0.65 : 1.0,
+                Foreground = Brushes.White,
                 Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 6, ShadowDepth = 0, Opacity = 1 },
             };
             UIElement visual = tb;

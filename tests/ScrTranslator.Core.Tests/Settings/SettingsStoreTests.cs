@@ -7,13 +7,13 @@ public class SettingsStoreTests
     {
         var s = new AppSettings
         {
-            Translation = TranslationSettings.Default with { TwoLevel = true, TranslatePlayerId = true },
+            Translation = TranslationSettings.Default with { Active = TranslationEngine.ChatGpt, TranslatePlayerId = true },
             Ocr = new OcrSettings { TranslatePollMs = 250 },
         };
         var path = Path.GetTempFileName();
         SettingsStore.Save(s, path);
         var back = SettingsStore.Load(path);
-        Assert.True(back.Translation.TwoLevel);
+        Assert.Equal(TranslationEngine.ChatGpt, back.Translation.Active);
         Assert.True(back.Translation.TranslatePlayerId);
         Assert.Equal(250, back.Ocr.TranslatePollMs);
         Assert.Equal(8, back.Hotkeys.Count);
@@ -65,23 +65,25 @@ public class SettingsStoreTests
         Assert.DoesNotContain("refreshToken", json);
     }
 
-    [Fact] public void Load_LegacyPollFields_AreIgnored_AndDefaultsApply()
+    [Fact] public void Load_LegacyRemovedFields_AreIgnored_AndDefaultsApply()
     {
-        // 老 settings.json 里的 ChatPollMs/OtherPollMs 已随"两个正交节拍"的重构删除：
-        // 用户机器上的旧文件必须能照常加载（多余字段忽略），并拿到新默认值，而不是报错或丢配置。
+        // 两批已删字段：ChatPollMs/OtherPollMs（轮询重做为两个正交节拍）、
+        // TwoLevel/FastEngine/FastModel（两级翻译整体移除）。
+        // 用户机器上的旧 settings.json 必须照常加载：多余字段忽略、同文件其余配置不丢、新默认值生效。
         // 键名用 PascalCase——SettingsStore 没配命名策略，STJ 默认大小写敏感，磁盘上就是这个形状。
         var path = Path.GetTempFileName();
         File.WriteAllText(path, """
-            { "General": { "TargetProcess": "StarCraft" },
+            { "General": { "TargetProcess": "StarCraft", "DebugMode": true },
               "Ocr": { "ChatPollMs": 300, "OtherPollMs": 800 },
-              "Translation": { "TwoLevel": true } }
+              "Translation": { "TwoLevel": true, "FastEngine": 1, "FastModel": "qwen-flash", "TimeoutSeconds": 7 } }
             """);
 
         var back = SettingsStore.Load(path);
 
         Assert.Equal("StarCraft", back.General.TargetProcess);
-        Assert.True(back.Translation.TwoLevel);          // 同文件里的其他配置没被牵连丢失
-        Assert.Equal(200, back.Ocr.SceneDetectPollMs);   // 用新默认，而非旧值
+        Assert.True(back.General.DebugMode);              // 同文件里的其他配置没被牵连丢失
+        Assert.Equal(7, back.Translation.TimeoutSeconds); // 仍存在的字段照常读回
+        Assert.Equal(200, back.Ocr.SceneDetectPollMs);    // 已删字段 → 用新默认，而非旧值
         Assert.Equal(500, back.Ocr.TranslatePollMs);
     }
 }

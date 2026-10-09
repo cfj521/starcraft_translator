@@ -27,7 +27,7 @@ public sealed class Phase1Probe : IDisposable
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
     private RoiConfig _cfg;
-    private readonly TieredTranslator _tiered;
+    private readonly TranslationOrchestrator _orchestrator;
     private readonly SettingsHolder _settings;
     private readonly string _glossaryHint;
     private readonly string _roisJsonPath;
@@ -85,13 +85,13 @@ public sealed class Phase1Probe : IDisposable
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
     public Phase1Probe(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, FileLogger log, OverlayWindow overlay,
-        string roisJsonPath, TieredTranslator tiered, SettingsHolder settings, Glossary glossary, DebugWindow debug)
+        string roisJsonPath, TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug)
     {
         _capture = capture; _ocr = ocr; _scene = scene; _log = log; _overlay = overlay; _debug = debug;
         _roisJsonPath = roisJsonPath;
         _cfg = RoiStore.Load(roisJsonPath);
         RefreshRoiDerivedFlags();
-        _tiered = tiered; _settings = settings;
+        _orchestrator = orchestrator; _settings = settings;
         _glossaryCount = glossary.Entries.Count;
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
@@ -368,12 +368,12 @@ public sealed class Phase1Probe : IDisposable
             $"场景: {SceneDisplay(_activeScene, _activeRace)}  判定: {_lastRec.Summary}\n" +
             $"指纹: {scores}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
-            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  引擎: {t.Active}  两级: {(t.TwoLevel ? "on" : "off")}\n" +
+            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  引擎: {t.Active}\n" +
             $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  已校准场景={(_anySceneCalibrated ? "yes" : "no")}  busy={_busy}\n" +
             $"状态: {state}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
             (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
-            $"缓存: {_tiered.CacheCount}  术语表: {_glossaryCount}\n" +
+            $"缓存: {_orchestrator.CacheCount}  术语表: {_glossaryCount}\n" +
             $"参考: {refs}";
     }
 
@@ -551,41 +551,36 @@ public sealed class Phase1Probe : IDisposable
 
             var engine = _settings.Current.Translation.Active;
             var ctx = new TranslationContext(SceneId, _glossaryHint);
-            // 两级共用这一个超时预算(非每级各一份)：快态+质量态合计不超过 TimeoutSeconds。
-            // 快态本就很快,故实际质量态仍有充裕时间；超时被 TieredTranslator 视作降级并回落,不会卡死取帧。
             int timeout = Math.Max(1, _settings.Current.Translation.TimeoutSeconds);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
 
-            void Render(IReadOnlyList<LineTranslation> snap)
-            {
-                var items = new List<OverlayItem>(snap.Count);
-                foreach (var ln in snap)
-                {
-                    // **原文照抄的行不上屏**：provider 失败/超时时编排会回落原文，
-                    // 把它当译文显示出去，用户看到的就是"识别到韩文却没翻译"，比什么都不显示更误导。
-                    if (ln.Text == koLines[ln.Index]) continue;
-                    var (frameBounds, _) = metas[ln.Index];
-                    var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
-                    // Source=该行韩文原文：供悬浮层"原文+译文双行"模式使用（单行模式忽略）。
-                    items.Add(new OverlayItem(ln.Text, scr.X, scr.Y,
-                        ln.Stage == TranslationStage.Provisional, koLines[ln.Index]));
-                }
-                _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
-            }
-
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var outcome = await _tiered.TranslateAsync(koLines, ctx, Render, cts.Token);
+            var outcome = await _orchestrator.TranslateAsync(koLines, ctx, cts.Token);
             sw.Stop();
             _lastTranslateMs = sw.ElapsedMilliseconds; _lastAllResolved = outcome.AllResolved; _lastLineCount = koLines.Count;
+
+            // 上屏：逐行只渲染"真翻出来的"。
+            var items = new List<OverlayItem>(koLines.Count);
             for (int k = 0; k < koLines.Count; k++)
-                _log.Debug($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" engine={engine} 两级={_settings.Current.Translation.TwoLevel} {sw.ElapsedMilliseconds}ms");
+            {
+                string zh = outcome.Texts[k];
+                _log.Debug($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" → \"{zh}\" engine={engine} {sw.ElapsedMilliseconds}ms");
+                // **原文照抄的行不上屏**：provider 失败/超时时编排会回落原文，
+                // 把它当译文显示出去，用户看到的就是"识别到韩文却没翻译"，比什么都不显示更误导。
+                if (zh == koLines[k]) continue;
+                var (frameBounds, _) = metas[k];
+                var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
+                // Source=该行韩文原文：供悬浮层"原文+译文双行"模式使用（单行模式忽略）。
+                items.Add(new OverlayItem(zh, scr.X, scr.Y, koLines[k]));
+            }
+            _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
 
-            // 仅当无“总失败”行(AllResolved)才提交变化检测,否则下一帧同内容重试。
+            // 仅当整批都翻出来才提交变化检测，否则下一帧同内容重试。
             if (outcome.AllResolved) _lastJoined = joined;
-            _log.Debug($"[probe] 上屏完成 lines={koLines.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
+            _log.Debug($"[probe] 上屏完成 lines={koLines.Count} 显示={items.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
 
-            // 翻译失败：日志已在 TieredTranslator 的 onError 里逐条记过，这里只负责"让你知道"——
-            // 同一原因只气泡提示一次（否则每 1.7s 弹一次），原因变了再弹。
+            // 翻译失败：日志已在编排的 onError 里逐条记过，这里只负责"让你知道"——
+            // 同一原因只气泡提示一次（否则每拍弹一次），原因变了再弹。
             if (outcome.Error is not null && outcome.Error != _lastTranslateError)
                 Notice?.Invoke(ProbeNotice.TranslateFailed,
                     $"{outcome.Error}\n（{engine} 引擎；请检查 API Key / 登录状态，或换引擎）");

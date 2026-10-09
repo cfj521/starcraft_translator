@@ -13,12 +13,14 @@ public class TranslationSettingsTests
     }
 
     [Fact]
-    public void Default_TwoLevelDisabled_FastIsDashScopeFlash()
+    public void TwoLevel_FieldsAreGone()
     {
-        var s = TranslationSettings.Default;
-        Assert.False(s.TwoLevel);                                   // 默认关闭，防意外双请求
-        Assert.Equal(TranslationEngine.DashScope, s.FastEngine);
-        Assert.Equal("qwen-flash", s.FastModel);
+        // 两级翻译（快引擎临时态 + 主力定稿）已整体移除：这是个很窄的翻译任务，低价模型单发就够好，
+        // 两级只让每个未命中批次多打一次请求。这三个字段若被加回来，说明死功能被复活了。
+        var names = typeof(TranslationSettings).GetProperties().Select(p => p.Name).ToArray();
+        Assert.DoesNotContain("TwoLevel", names);
+        Assert.DoesNotContain("FastEngine", names);
+        Assert.DoesNotContain("FastModel", names);
     }
 
     [Fact]

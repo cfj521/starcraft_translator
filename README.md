@@ -6,14 +6,14 @@
 
 ## 一句话技术方案
 
-`抓取 SC:R 窗口画面 → 场景识别(图像指纹，判 browsing/room/ingame/其他) → 区域(ROI)裁剪 → 变化检测 → 韩文 OCR(PaddleOCR) → 翻译(术语表/缓存直出，否则 LLM；可选两级=快态先行、终态原地替换) → 透明置顶悬浮窗显示中文`
+`抓取 SC:R 窗口画面 → 场景识别(图像指纹，判 browsing/room/ingame/其他) → 区域(ROI)裁剪 → 变化检测 → 韩文 OCR(PaddleOCR) → 翻译(术语表/缓存命中直出，否则调当前活跃 LLM 引擎) → 透明置顶悬浮窗显示中文`
 
 ## 技术栈
 
 - **.NET 10 (LTS) + WPF**（透明置顶、点击穿透悬浮窗）
 - 屏幕捕获：`Windows.Graphics.Capture`（抓窗口，非独占全屏）
 - OCR：**PaddleOCR**（RapidOcrNet + 韩文 mobile ONNX 模型，随包分发，**无需系统韩文语言包**）
-- 翻译：**OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** 与 **阿里云 DashScope（OpenAI 兼容）** 单活跃可切换；术语表/LRU 缓存命中直出；可选两级编排（快态 qwen-flash 临时显示 → 质量态原地替换）。密钥走 DPAPI 本地加密。
+- 翻译：**OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** 与 **阿里云 DashScope（OpenAI 兼容）** 单活跃可切换；术语表/LRU 缓存命中直出（零请求），未命中一批一次请求。密钥走 DPAPI 本地加密。
 - 平台：**仅 Windows 10 1803+ / Windows 11**（WPF + Graphics.Capture 必须在 Windows 端编译运行）
 
 ## 文档导航
@@ -30,7 +30,7 @@
 
 ## 当前状态
 
-🚧 **Phase 0–6 代码完成**（开发分支 `phase4-multiregion-ui`，版本 0.4.0）：端到端管线可用——捕获 → **场景识别（图像指纹，非 OCR）** → 校准 ROI（多区域/列定义/按分辨率）→ PaddleOCR → 术语表/缓存/LLM 翻译（可选两级）→ 悬浮上屏；配置窗口六页、托盘、八个全局热键（可重绑/冲突检测/恢复默认）；异常恢复（窗口丢失自动重连/最小化清屏/分辨率切换提示）、开机自启、启动自动翻译、单文件打包（`tools/publish.ps1`）。Core 单测 153/153 绿。
+🚧 **Phase 0–6 代码完成**（开发分支 `phase4-multiregion-ui`，版本 0.4.0）：端到端管线可用——捕获 → **场景识别（图像指纹，非 OCR）** → 校准 ROI（多区域/列定义/按分辨率）→ PaddleOCR → 术语表/缓存/LLM 翻译（单级，一批一请求）→ 悬浮上屏；配置窗口六页、托盘、八个全局热键（可重绑/冲突检测/恢复默认）；异常恢复（窗口丢失自动重连/最小化清屏/分辨率切换提示）、开机自启、启动自动翻译、单文件打包（`tools/publish.ps1`）。Core 单测 178/178 绿。
 
 场景识别细节：三目标场景统一命名 `browsing`(寻找房间) / `room`(房间内) / `ingame`(游戏内，按种族分套参考) + 第四态 `other`(其他界面不翻译)。参考数据 `scene-refs.json` 由 `tools/SceneRefGen` 从 `docs/scenes pictures/` 截图生成，**不要手改**（带 sha256 校验，改了直接整份拒用）。
 

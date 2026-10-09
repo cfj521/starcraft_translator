@@ -116,21 +116,17 @@ public partial class App : Application
         builder.Services.AddSingleton(sp =>
         {
             var settings = sp.GetRequiredService<SettingsHolder>();
-            var dashClient = sp.GetRequiredService<OpenAiCompatibleChatClient>();
+            var dashScope = sp.GetRequiredService<DashScopeProvider>();       // 绑 Current.Translation.DashScopeModel
             var chatGpt = sp.GetRequiredService<ChatGptSubscriptionProvider>();
-            var dashQuality = sp.GetRequiredService<DashScopeProvider>();               // 绑 Current.Translation.DashScopeModel
-            var dashFast = new DashScopeProvider(dashClient, () => settings.Current.Translation.FastModel);
 
-            ITranslationProvider Quality() =>
-                settings.Current.Translation.Active == TranslationEngine.DashScope ? dashQuality : chatGpt;
-            ITranslationProvider Fast() =>
-                settings.Current.Translation.FastEngine == TranslationEngine.DashScope ? dashFast : chatGpt;
+            // 单活跃引擎：用 Func 每次现取，托盘/配置切引擎即时生效，不必重建本对象。
+            ITranslationProvider Active() =>
+                settings.Current.Translation.Active == TranslationEngine.DashScope ? dashScope : chatGpt;
 
-            return new TieredTranslator(
+            return new TranslationOrchestrator(
                 sp.GetRequiredService<Glossary>(),
                 sp.GetRequiredService<TranslationCache>(),
-                Fast, Quality,
-                () => settings.Current.Translation,
+                Active,
                 // provider 异常必须冒到日志：以前是 catch 掉直接回落原文，
                 // 症状就是"识别到韩文但显示的还是原文"，且无处可查原因（实测是空 API Key）。
                 msg => sp.GetRequiredService<FileLogger>().Error(msg));
@@ -150,7 +146,7 @@ public partial class App : Application
             sp.GetRequiredService<FileLogger>(),
             sp.GetRequiredService<OverlayWindow>(),
             roisPath,
-            sp.GetRequiredService<TieredTranslator>(),
+            sp.GetRequiredService<TranslationOrchestrator>(),
             sp.GetRequiredService<SettingsHolder>(),
             sp.GetRequiredService<Glossary>(),
             sp.GetRequiredService<DebugWindow>()));

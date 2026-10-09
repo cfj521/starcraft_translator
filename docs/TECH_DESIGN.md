@@ -47,15 +47,14 @@
                     └────────────────┬─────────────────┘
                                      │ OcrResult
                     ┌────────────────▼─────────────────┐
-                    │       TranslationService          │
-                    │  ① 术语表/缓存命中 → 直出          │
-                    │  ② FastProvider 异步 → 临时态      │
-                    │  ③ LlmProvider 异步 → 最终态       │
+                     │      TranslationOrchestrator      │
+                     │  ① 术语表/缓存命中 → 直出（零请求）  │
+                     │  ② 未命中整批 → 活跃 LLM 一次请求   │
                     └────────────────┬─────────────────┘
                                      │ TranslationResult (事件)
                     ┌────────────────▼─────────────────┐
                     │         OverlayRenderer           │  WPF 透明置顶+点击穿透
-                    │   贴近 ROI 显示中文(临时/最终态)   │
+                     │  贴近 ROI 显示中文(只渲染真翻出的行) │
                     └───────────────────────────────────┘
 
    Pipeline 编排以上循环；SceneRecognizer(3.9) / Settings / Calibration / Hotkey 为横切支撑。
@@ -111,7 +110,7 @@
   2. **术语表**：整句或分词命中 GLOSSARY → 直接映射（无网络）。
   3. **缓存**：`MemoryCache<原文, 译文>` 命中 → 直出。
   4. **翻译 provider**（`ITranslationProvider`，OpenAI 订阅 / 阿里云 DashScope 单活跃）批量调用 → 上屏中文。**Phase 2 为单级**（术语/缓存未命中即调当前活跃 provider）。
-  5. **两级编排（Phase 3 已落地，默认关闭）**：快态 provider（DashScope qwen-flash）临时态 → 质量态 provider（Active 引擎）最终态原地替换；术语经 `PromptBuilder` 注入 system prompt。见 `TieredTranslator`。缓存存最终态；快态永不入缓存。
+  5. **单级（原"两级编排"已移除）**：曾实现"快引擎出临时态（灰斜体）→ 主力引擎定稿原地替换"，但这是很窄的翻译任务（游戏聊天/房间名短句），低价模型单发就够好，两级只让每个未命中批次多打一次请求、并多一套临时态视觉与状态分支 → 整体删除（含 `TwoLevel/FastEngine/FastModel` 三字段、`TranslationStage`、托盘与配置页开关）。现由 `TranslationOrchestrator` 编排：术语表 → 缓存 → 活跃 provider，一批一次请求。
 - **LLM Prompt 要点**：系统提示设定"星际争霸韩服游戏聊天翻译"角色；附术语表；要求口语化、简短、保留游戏黑话语气；ID/数字/英文缩写不乱翻。
 - **限流**：LLM 请求合并/节流，避免刷屏时狂发请求。
 
@@ -121,7 +120,7 @@
   - 窗口：`AllowsTransparency=true`、`WindowStyle=None`、`Topmost=true`、`Background=Transparent`。
   - **点击穿透**：扩展样式加 `WS_EX_TRANSPARENT | WS_EX_LAYERED`（P/Invoke `SetWindowLong`）。
   - 跟随游戏窗口位置/大小（监听窗口移动，或定时校正）。
-  - 聊天区：滚动 `ItemsControl`，保留最近 N 条；临时态用半透明/灰色，最终态正常色。
+  - 聊天区：滚动 `ItemsControl`，保留最近 N 条。
   - 房间名列表：译文叠在对应行旁。
 
 ### 3.7 Pipeline / Orchestrator
@@ -197,7 +196,7 @@ starcraft_translator/
 | 悬浮跟随游戏窗口 | 监听窗口位置 / 定时同步 |
 | 韩文小字识别 | ROI 裁剪 + 预处理（放大/二值化）；PaddleOCR 升级 |
 | 黑话翻译质量 | 术语表 + LLM 上下文 prompt |
-| 刷屏性能/费用 | 变化检测 + 文本去重 + 缓存 + LLM 节流 + 两级 |
+| 刷屏性能/费用 | 变化检测 + 文本去重 + 缓存 + 术语表直出 + 一批一请求 |
 | ID 是否翻译 | 配置项 `TranslatePlayerId`(默认 false)+ 热键切换；RoomList 的 ID 列据此决定 |
 | 分辨率适配 | 相对坐标 / 按分辨率存多套 ROI |
 | 判断当前是哪个界面 | **图像指纹**：每场景两块静态区，块均值 RGB + 容差命中比例（见 3.9），不用 OCR |

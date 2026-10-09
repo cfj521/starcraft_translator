@@ -116,10 +116,8 @@ public partial class SettingsWindow : Window
 
         DashScopeEngineRadio.IsChecked = s.Translation.Active == TranslationEngine.DashScope;
         ChatGptEngineRadio.IsChecked = s.Translation.Active == TranslationEngine.ChatGpt;
-        TwoLevelCheck.IsChecked = s.Translation.TwoLevel;
         DashScopeModelBox.Text = s.Translation.DashScopeModel;
         ChatGptModelBox.Text = s.Translation.ChatGptModel;
-        FastModelBox.Text = s.Translation.FastModel;
         TranslateChatCheck.IsChecked = s.Translation.TranslateChat;
         TranslateRoomNameCheck.IsChecked = s.Translation.TranslateRoomName;
         TranslateMapInfoCheck.IsChecked = s.Translation.TranslateMapInfo;
@@ -207,14 +205,13 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>只重载 F7(TogglePlayerId)/托盘 SetEngine/ToggleTwoLevel 这三个可在本窗口打开期间"带外"改变的字段，
+    /// <summary>只重载 F7(切换玩家ID翻译)/托盘切引擎这两个可在本窗口打开期间"带外"改变的字段，
     /// 不重载其它控件——避免打断用户正在本窗口内编辑但尚未应用的其它字段。</summary>
     private void ReloadOutOfBandTranslationControls()
     {
         var t = _holder.Current.Translation;
         DashScopeEngineRadio.IsChecked = t.Active == TranslationEngine.DashScope;
         ChatGptEngineRadio.IsChecked = t.Active == TranslationEngine.ChatGpt;
-        TwoLevelCheck.IsChecked = t.TwoLevel;
         TranslatePlayerIdCheck.IsChecked = t.TranslatePlayerId;
     }
 
@@ -476,10 +473,8 @@ public partial class SettingsWindow : Window
         var translation = original.Translation with
         {
             Active = ChatGptEngineRadio.IsChecked == true ? TranslationEngine.ChatGpt : TranslationEngine.DashScope,
-            TwoLevel = TwoLevelCheck.IsChecked == true,
             DashScopeModel = OrDefault(DashScopeModelBox.Text, original.Translation.DashScopeModel),
             ChatGptModel = OrDefault(ChatGptModelBox.Text, original.Translation.ChatGptModel),
-            FastModel = OrDefault(FastModelBox.Text, original.Translation.FastModel),
             TranslateChat = TranslateChatCheck.IsChecked == true,
             TranslateRoomName = TranslateRoomNameCheck.IsChecked == true,
             TranslateMapInfo = TranslateMapInfoCheck.IsChecked == true,
