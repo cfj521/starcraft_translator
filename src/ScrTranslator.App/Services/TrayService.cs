@@ -94,15 +94,38 @@ public sealed class TrayService : IDisposable
         _trayIcon = new TaskbarIcon
         {
             ToolTipText = "星际翻译",
-            IconSource = new GeneratedIconSource
-            {
-                Text = "译",
-                Foreground = Brushes.White,
-            },
+            IconSource = LoadTrayIcon(),
             ContextMenu = menu,
         };
         _trayIcon.TrayLeftMouseDoubleClick += (_, _) => OpenSettings?.Invoke(); // 双击托盘图标 = 打开配置窗口
         _trayIcon.ForceCreate();
+    }
+
+    /// <summary>托盘图标：优先用随包 app.ico（与 exe 图标一致，한↓中）；缺失/解码失败回落生成式"译"字并补深色背景（原白字透明底=不可见 bug）。</summary>
+    private ImageSource LoadTrayIcon()
+    {
+        try
+        {
+            string ico = System.IO.Path.Combine(AppContext.BaseDirectory, "app.ico");
+            if (System.IO.File.Exists(ico))
+            {
+                var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad; // 不锁文件
+                bmp.UriSource = new Uri(ico);
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+            _log.Log("[tray] app.ico 缺失，回落生成图标");
+        }
+        catch (Exception ex) { _log.Log($"[tray] 加载 app.ico 失败，回落生成图标: {ex.Message}"); }
+        return new GeneratedIconSource
+        {
+            Text = "译",
+            Foreground = Brushes.White,
+            Background = new SolidColorBrush(Color.FromRgb(0x18, 0x40, 0x60)),
+        };
     }
 
     private async System.Threading.Tasks.Task OnLoginChatGptAsync()
