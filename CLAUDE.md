@@ -10,7 +10,7 @@
 - 开发计划（按 Phase 推进）：`docs/ROADMAP.md`
 - 韩文术语表：`docs/GLOSSARY.md`
 
-**当前进度**：Phase 0（骨架/悬浮窗）、Phase 1（捕获+ROI+PaddleOCR+上屏）、Phase 2（翻译层：两 provider 单活跃 + 缓存 + DPAPI + 术语表 + 托盘入口）、Phase 3（两级编排 opt-in，默认关闭）、**Phase 4（多区域门控/校准窗/配置窗六页/热键系统 RegisterAll+Rebind+冲突检测）代码全部完成**，在分支 `phase4-multiregion-ui`；Core 单测 92/92 绿。**实机 e2e 验收（真实 SC:R）待用户**。部分设置字段（轮询频率、图像预处理、变化灵敏度、开机自启、原文+译文显示）仅存盘未接线，标注"（后续生效）"——属 Phase 5 范围（性能调优/异常恢复/首次引导/打包）。
+**当前进度**：Phase 0–4 代码全部完成；**Phase 5 自动化部分完成**（分支 `phase4-multiregion-ui`）：轮询频率接线(ChatPollMs/OtherPollMs→PollInterval 即时生效)、首次引导(F9 失败原因气泡)、异常恢复(看门狗:窗口丢失自动重连/最小化清屏还原重译/分辨率切换提示)、开机自启(HKCU Run)+启动自动翻译、打包(`tools/publish.ps1` 单文件+`tools/make-icon.ps1` 图标+版本号 0.4.0)、假设置清理(OCR 预处理/灵敏度实测无收益已移除)。F9 语义升级为"等待游戏窗口"模式(ProbeStart.WaitingForWindow)。Core 单测 99/99 绿。**剩余：实机 e2e 验收（真实 SC:R，需用户）**——自启/等待/重连等仅代码验证未真实环境跑过。发布产物在 `publish/`（已 gitignore）。
 
 ## 技术栈与环境
 - **.NET 10 (LTS) + WPF**，目标框架 `net10.0-windows10.0.19041.0`，`UseWPF=true`。
