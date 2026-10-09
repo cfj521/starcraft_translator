@@ -222,7 +222,7 @@
                         <GroupBox Header="悬浮层">
                             <StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="字体（后续生效）" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="字体" Style="{StaticResource RowLabel}"/>
                                     <ComboBox x:Name="FontFamilyBox" Width="160" IsEditable="True">
                                         <ComboBoxItem Content="Microsoft YaHei"/>
                                         <ComboBoxItem Content="Microsoft YaHei UI"/>
@@ -240,7 +240,7 @@
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="显示模式" Style="{StaticResource RowLabel}"/>
                                     <RadioButton x:Name="OnlyTranslationRadio" GroupName="DisplayMode" Content="仅译文" Margin="0,0,16,0" VerticalAlignment="Center"/>
-                                    <RadioButton x:Name="BothRadio" GroupName="DisplayMode" Content="原文+译文双行（后续生效）" VerticalAlignment="Center"/>
+                                    <RadioButton x:Name="BothRadio" GroupName="DisplayMode" Content="原文+译文双行" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="临时态(快引擎)样式" Style="{StaticResource RowLabel}" Width="140"/>

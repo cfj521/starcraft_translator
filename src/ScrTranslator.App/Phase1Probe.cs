@@ -308,7 +308,9 @@ public sealed class Phase1Probe : IDisposable
                 {
                     var (frameBounds, _) = metas[ln.Index];
                     var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
-                    items.Add(new OverlayItem(ln.Text, scr.X, scr.Y, ln.Stage == TranslationStage.Provisional));
+                    // Source=该行韩文原文：供悬浮层"原文+译文双行"模式使用（单行模式忽略）。
+                    items.Add(new OverlayItem(ln.Text, scr.X, scr.Y,
+                        ln.Stage == TranslationStage.Provisional, koLines[ln.Index]));
                 }
                 _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
             }
