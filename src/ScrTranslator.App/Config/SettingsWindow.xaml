@@ -133,7 +133,7 @@
                         <GroupBox Header="识别引擎">
                             <TextBlock Text="PaddleOCR（韩文 mobile 模型，随包分发，无需系统语言包）" Margin="4"/>
                         </GroupBox>
-                        <GroupBox Header="轮询频率（后续生效）">
+                        <GroupBox Header="轮询频率（应用后即时生效；场景含聊天区取聊天值，否则取其它值；150–5000ms）">
                             <StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="聊天区" Style="{StaticResource RowLabel}"/>

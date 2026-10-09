@@ -16,7 +16,9 @@ public sealed class CaptureService : IDisposable
     private Direct3D11CaptureFramePool? _framePool;
     private GraphicsCaptureSession? _session;
     private DateTime _lastFrame = DateTime.MinValue;
-    private static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(400);
+    private volatile int _minIntervalMs = 400;
+    /// <summary>帧转换节流(毫秒)。由 Phase1Probe 每帧按设置(Ocr.ChatPollMs/OtherPollMs→PollInterval)刷新；volatile 保证捕获线程读到最新值。默认 400 保持旧行为。</summary>
+    public int MinIntervalMs { get => _minIntervalMs; set => _minIntervalMs = value; }
 
     // ── COM 互操作接口 ──────────────────────────────────────────────────────
 
@@ -81,7 +83,7 @@ public sealed class CaptureService : IDisposable
             if (frame is null) return;
 
             var now = DateTime.Now;
-            if (now - _lastFrame < MinInterval) return;   // 节流：取帧已释放(using),跳过转换
+            if ((now - _lastFrame).TotalMilliseconds < _minIntervalMs) return;   // 节流：取帧已释放(using),跳过转换
             _lastFrame = now;
 
             using var sbmp = await SoftwareBitmap.CreateCopyFromSurfaceAsync(

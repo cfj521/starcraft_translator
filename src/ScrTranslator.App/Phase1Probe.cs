@@ -4,6 +4,7 @@ using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
 using ScrTranslator.Core;
 using ScrTranslator.Core.Ocr;
+using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
 using SkiaSharp;
 using Windows.Graphics.Capture;
@@ -26,6 +27,7 @@ public sealed class Phase1Probe : IDisposable
     private int _busy; // 0=空闲 1=处理中
     private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
     private bool _roiAvailable; // Scene 是否存在且 bucket 非空，避免每帧重复判断/抛异常；构造时算一次，ReloadRois 可刷新
+    private bool _hasChatRoi;   // 场景级"含 Chat ROI"，决定轮询用 ChatPollMs 还是 OtherPollMs；构造/ReloadRois 时算
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
     private bool _paused; // F11 暂停/继续：暂停时跳过 OnFrame 处理，不动 CaptureService（与 F9 的 Start/Stop 互不干扰）
 
@@ -35,10 +37,19 @@ public sealed class Phase1Probe : IDisposable
         _capture = capture; _ocr = ocr; _log = log; _overlay = overlay;
         _roisJsonPath = roisJsonPath;
         _cfg = RoiStore.Load(roisJsonPath);
-        _roiAvailable = _cfg.Scenes.TryGetValue(Scene, out var buckets) && buckets.Count > 0;
+        RefreshRoiDerivedFlags();
         _tiered = tiered; _settings = settings;
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
+    }
+
+    /// <summary>从 _cfg 计算场景级派生标志（ROI 可用性 / 是否含 Chat ROI）。ctor 与 ReloadRois 共用。</summary>
+    private void RefreshRoiDerivedFlags()
+    {
+        _roiAvailable = _cfg.Scenes.TryGetValue(Scene, out var buckets) && buckets.Count > 0;
+        // 场景级（跨该场景所有分辨率 bucket）判定：只要可能出现聊天区就用聊天轮询值。
+        _hasChatRoi = _cfg.Scenes.TryGetValue(Scene, out var bs)
+            && bs.Any(b => b.Rois.Any(r => RoiTypes.Parse(r.Type) == RoiType.Chat));
     }
 
     /// <summary>重新从磁盘加载 rois.json：校准窗口保存后由 App.xaml.cs 调用，使运行中的探测无需重启即可用上新/首次校准的 ROI。
@@ -46,10 +57,10 @@ public sealed class Phase1Probe : IDisposable
     public void ReloadRois()
     {
         _cfg = RoiStore.Load(_roisJsonPath);
-        _roiAvailable = _cfg.Scenes.TryGetValue(Scene, out var buckets) && buckets.Count > 0;
+        RefreshRoiDerivedFlags();
         _roiMissingLogged = false;
         ResetChangeDetection();
-        _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable}");
+        _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable} _hasChatRoi={_hasChatRoi}");
     }
 
     public bool Start()
@@ -101,7 +112,11 @@ public sealed class Phase1Probe : IDisposable
     private async void OnFrame(SKBitmap frame)
     {
         if (_paused) { frame.Dispose(); return; }
-        if ((DateTime.Now - _lastShot).TotalMilliseconds < 400
+        // 轮询频率接线（Phase 5）：每帧实时读设置→场景含 Chat ROI 用 ChatPollMs，否则 OtherPollMs（钳制 150–5000ms）。
+        // 同时刷新捕获侧节流，保证"帧转换节流 ≤ 处理节流"，改设置即时生效无需重启。
+        int pollMs = PollInterval.Resolve(_settings.Current.Ocr, _hasChatRoi);
+        _capture.MinIntervalMs = pollMs;
+        if ((DateTime.Now - _lastShot).TotalMilliseconds < pollMs
             || Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
         {
             frame.Dispose();
