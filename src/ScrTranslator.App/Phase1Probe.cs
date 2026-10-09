@@ -11,6 +11,9 @@ using Windows.Graphics.Capture;
 
 namespace ScrTranslator.App;
 
+public sealed record ProbeStartInfo(ProbeStart Status, string ProcessName);
+public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed }
+
 public sealed class Phase1Probe : IDisposable
 {
     private readonly CaptureService _capture;
@@ -63,26 +66,43 @@ public sealed class Phase1Probe : IDisposable
         _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable} _hasChatRoi={_hasChatRoi}");
     }
 
-    public bool Start()
+    /// <summary>启动探测。返回具体失败原因供 UI 提示（首次引导：F9 后没反应要知道为什么）。</summary>
+    public ProbeStartInfo Start()
     {
+        string proc = string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
+            ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
         try
         {
             _log.Log("[probe] Start 被调用");
-            bool supported = GraphicsCaptureSession.IsSupported();
-            _log.Log($"[probe] GraphicsCapture.IsSupported={supported}");
-            string proc = string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
-                ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
+            if (!GraphicsCaptureSession.IsSupported())
+            {
+                _log.Log("[probe] GraphicsCapture.IsSupported=false");
+                return new ProbeStartInfo(ProbeStart.CaptureUnsupported, proc);
+            }
+            if (!_roiAvailable)
+            {
+                _log.Log("[probe] rois.json 无当前场景 ROI，请先校准");
+                return new ProbeStartInfo(ProbeStart.NoRoi, proc);
+            }
             var hwnd = WindowFinder.FindByProcess(proc);
             _log.Log($"[probe] FindByProcess({proc}) hwnd={hwnd}");
-            if (hwnd == IntPtr.Zero) { _log.Log($"[probe] 未找到 {proc} 窗口"); return false; }
-            if (!_capture.Start(hwnd)) { _log.Log("[probe] 捕获启动失败"); return false; }
+            if (hwnd == IntPtr.Zero)
+            {
+                _log.Log($"[probe] 未找到 {proc} 窗口");
+                return new ProbeStartInfo(ProbeStart.WindowNotFound, proc);
+            }
+            if (!_capture.Start(hwnd))
+            {
+                _log.Log("[probe] 捕获启动失败");
+                return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
+            }
             _log.Log("[probe] 已开始捕获");
-            return true;
+            return new ProbeStartInfo(ProbeStart.Ok, proc);
         }
         catch (Exception ex)
         {
             _log.Log($"[probe] Start 异常: {ex}");
-            return false;
+            return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
         }
     }
 

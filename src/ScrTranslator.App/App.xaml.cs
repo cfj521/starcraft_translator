@@ -131,8 +131,25 @@ public partial class App : Application
         bool running = false;
         void ToggleProbe()
         {
-            if (running) { probe.Stop(); running = false; }
-            else { running = probe.Start(); }
+            if (running)
+            {
+                probe.Stop();
+                running = false;
+                _trayService.ShowToast("翻译", "已关闭");
+                return;
+            }
+            var info = probe.Start(); // 首次引导：失败原因不再只进日志，托盘气泡直出
+            running = info.Status == ProbeStart.Ok;
+            string msg = info.Status switch
+            {
+                ProbeStart.Ok => "已开启",
+                ProbeStart.CaptureUnsupported => "无法开启：系统不支持窗口捕获（需 Win10 1803+，且非 WSL）",
+                ProbeStart.NoRoi => "尚未校准区域：按 F8 框选游戏聊天/房间区域后再按 F9",
+                ProbeStart.WindowNotFound => $"未找到游戏窗口（进程 {info.ProcessName}）：请先以窗口化/无边框模式启动游戏",
+                ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见 logs/phase1-ocr.log",
+                _ => "无法开启",
+            };
+            _trayService.ShowToast("翻译", msg);
         }
         void ToggleOverlay()
         {
