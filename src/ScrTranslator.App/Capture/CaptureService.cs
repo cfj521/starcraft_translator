@@ -117,7 +117,25 @@ public sealed class CaptureService : IDisposable
         using var reference = buf.CreateReference();
         var desc = buf.GetPlaneDescription(0);
         int stride = desc.Stride;
-        ((IMemoryBufferByteAccess)reference).GetBuffer(out byte* src, out uint cap);
+
+        // CsWinRT 把 reference 包成 WinRT.IInspectable，直接 (IMemoryBufferByteAccess)reference 强转会抛
+        // InvalidCastException。必须显式对底层 IUnknown 做 QueryInterface 拿到该 COM 接口的 RCW。
+        byte* src; uint cap;
+        IntPtr unk = Marshal.GetIUnknownForObject(reference);
+        try
+        {
+            Guid iid = typeof(IMemoryBufferByteAccess).GUID;
+            int hr = Marshal.QueryInterface(unk, ref iid, out IntPtr byteAccess);
+            if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+            try
+            {
+                var acc = (IMemoryBufferByteAccess)Marshal.GetTypedObjectForIUnknown(byteAccess, typeof(IMemoryBufferByteAccess));
+                acc.GetBuffer(out src, out cap);
+            }
+            finally { Marshal.Release(byteAccess); }
+        }
+        finally { Marshal.Release(unk); }
+
         byte* dst = (byte*)sk.GetPixels();
         int rowBytes = w * 4;
         for (int y = 0; y < h; y++)
