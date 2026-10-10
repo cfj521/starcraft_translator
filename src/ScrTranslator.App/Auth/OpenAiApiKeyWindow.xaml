@@ -8,7 +8,7 @@
         ShowInTaskbar="False">
     <StackPanel Margin="16">
         <TextBlock Text="OpenAI API Key：" Margin="0,0,0,8"/>
-        <PasswordBox x:Name="KeyBox" Height="26"/>
+        <PasswordBox x:Name="KeyBox"/>
         <TextBlock Margin="0,10,0,0">
             <Hyperlink NavigateUri="https://platform.openai.com/api-keys" RequestNavigate="OnKeyLinkNavigate">到 OpenAI 平台获取 API Key</Hyperlink>
         </TextBlock>

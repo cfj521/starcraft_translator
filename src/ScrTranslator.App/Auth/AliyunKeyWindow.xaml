@@ -8,9 +8,9 @@
         ShowInTaskbar="False">
     <StackPanel Margin="16">
         <TextBlock Text="阿里云 AccessKeyId（免费 100 万字符/月）：" Margin="0,0,0,4"/>
-        <TextBox x:Name="AccessKeyIdBox" Height="26" Margin="0,0,0,10"/>
+        <TextBox x:Name="AccessKeyIdBox" Margin="0,0,0,10"/>
         <TextBlock Text="阿里云 AccessKeySecret：" Margin="0,0,0,4"/>
-        <PasswordBox x:Name="AccessKeySecretBox" Height="26"/>
+        <PasswordBox x:Name="AccessKeySecretBox"/>
         <TextBlock Margin="0,10,0,0">
             <Hyperlink NavigateUri="https://ram.console.aliyun.com/manage/ak" RequestNavigate="OnKeyLinkNavigate">到阿里云 RAM 控制台获取 AccessKey</Hyperlink>
         </TextBlock>
