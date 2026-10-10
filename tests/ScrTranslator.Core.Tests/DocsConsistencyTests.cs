@@ -42,7 +42,7 @@ public class DocsConsistencyTests
         "tools/LayoutCheck", "ReplaceRoi", "RemoveRoi", "MoveRoi", "HitColumn",
         // 翻译与闸门
         "TranslationOrchestrator", "KoreanText", "ContainsHangul", "ShouldTranslate",
-        "TranslationProviderEntry", "TencentMtProvider", "AliyunMtProvider",
+        "TranslationProviderEntry", "AliyunMtProvider",
         "RateLimitCooldown", "RateLimitException", "RateLimited", "LineStabilizer",
         // 节拍与外观
         "SceneDetectPollMs", "TranslatePollMs", "CaptureFloor", "BackplateOpacity",

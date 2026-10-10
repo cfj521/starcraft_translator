@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -16,7 +17,7 @@ public record OverlayItem(string Text, double ScreenLeft, double ScreenTop, stri
 public partial class OverlayWindow : Window
 {
     private readonly SettingsHolder _settings;
-    /// <summary>用户是否要显示悬浮层（F10/托盘切换的意图）。实际可见性由探测按"游戏是否前台"叠加计算。</summary>
+    /// <summary>用户是否要显示悬浮层（常规页开关的意图）。实际可见性由探测按"游戏是否前台"叠加计算。</summary>
     public bool EnabledByUser { get; set; } = true;
 
     public OverlayWindow(SettingsHolder settings)
@@ -57,7 +58,7 @@ public partial class OverlayWindow : Window
                 FontFamily = family,
                 FontSize = appearance.FontSize,
                 FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
+                Foreground = ResolveFontColor(appearance.FontColor),
                 Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 6, ShadowDepth = 0, Opacity = 1 },
             };
             UIElement visual = tb;
@@ -92,15 +93,46 @@ public partial class OverlayWindow : Window
         }
     }
 
-    /// <summary>字体名解析：空/非法一律回落微软雅黑（WPF 对未知 FamilyName 不抛错但渲染回落系统默认，宁可显式兜底）。</summary>
+    /// <summary>Kostar 字体随构建拷贝到输出目录（与 exe 同级），族名 Kostar。
+    /// 用纯族名 "Kostar" 选中，实际经文件路径加载——不用 pack URI 内嵌：实测 WPF 对 .g.resources 里的
+    /// .ttf 取得到资源流却不加载为字体（FamilyNames 回落 Arial），文件 URI 方式则正常解析出 Kostar。</summary>
+    private static FontFamily KostarFamily()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "Kostar.ttf");
+        if (File.Exists(path))
+        {
+            try { return new FontFamily(new Uri(path, UriKind.Absolute).AbsoluteUri + "#Kostar"); }
+            catch { /* 落到下方兜底 */ }
+        }
+        return new FontFamily("Microsoft YaHei");
+    }
+
+    /// <summary>字体名解析：内置 Kostar 走输出目录文件 URI；空/非法一律回落微软雅黑
+    /// （WPF 对未知 FamilyName 不抛错但渲染回落系统默认，宁可显式兜底）。</summary>
     private static FontFamily ResolveFontFamily(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return new FontFamily("Microsoft YaHei");
+        if (string.Equals(name, "Kostar", StringComparison.OrdinalIgnoreCase))
+            return KostarFamily();
         try
         {
             var f = new FontFamily(name);
             return f.FamilyNames.Count > 0 || !name.Contains(' ') ? f : new FontFamily("Microsoft YaHei");
         }
         catch { return new FontFamily("Microsoft YaHei"); }
+    }
+
+    /// <summary>字体颜色解析：WPF 命名色（"White"/"Yellow"）或 hex（"#FF0000"）。空/非法一律回落白色，
+    /// 与字体解析同策略——宁可显式兜底也不让渲染抛错。ColorConverter 无 Try 变体，用 ConvertFromString+catch。</summary>
+    private static Brush ResolveFontColor(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return Brushes.White;
+        try
+        {
+            if (ColorConverter.ConvertFromString(name) is Color col)
+                return new SolidColorBrush(col);
+        }
+        catch { /* 落到兜底 */ }
+        return Brushes.White;
     }
 }

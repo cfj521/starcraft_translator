@@ -8,7 +8,7 @@ namespace ScrTranslator.App;
 /// <summary>
 /// 独立的 DEBUG 诊断窗口：左上角约 9×7cm，直角，置顶，纯信息展示。
 /// 永久点击穿透（IsHitTestVisible=False + WS_EX_TRANSPARENT）→ 不接收鼠标、绝不抢游戏焦点。
-/// 复制改由全局热键 Ctrl+F6 完成（App 拷 probe 的诊断快照到剪贴板），故本窗无需任何可交互控件。
+/// 复制改由全局热键 Ctrl+F8 完成（App 拷 probe 的诊断快照到剪贴板），故本窗无需任何可交互控件。
 /// 可见性由 Phase1Probe 的定时器按"游戏是否前台 + General.DebugMode"计算（用 Visibility，不 Show/Hide）。
 /// </summary>
 public partial class DebugWindow : Window

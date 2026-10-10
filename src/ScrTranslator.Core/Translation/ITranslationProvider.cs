@@ -24,6 +24,13 @@ public sealed record ProviderStatus(ProviderState State, string Detail)
     public static ProviderStatus RateLimited(string detail) => new(ProviderState.RateLimited, detail);
 }
 
+/// <summary>provider 调用 API 被判"免费额度已耗尽"时抛它。
+/// provider 抛前已自标记 <see cref="ProviderState.QuotaExhausted"/>，编排器捕获后跳过本 provider、回退下一个。</summary>
+public sealed class ProviderQuotaExhaustedException : Exception
+{
+    public ProviderQuotaExhaustedException(string msg) : base(msg) { }
+}
+
 /// <summary>翻译 provider 的统一接口。池内每个 provider（免费机器翻译 / LLM）都实现它。
 /// 编排器按池顺序逐个 <see cref="GetStatus"/> 过滤可用项，再 <see cref="TranslateAsync"/>，失败回退下一个。</summary>
 public interface ITranslationProvider

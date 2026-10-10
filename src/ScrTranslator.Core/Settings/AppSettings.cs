@@ -27,8 +27,14 @@ public sealed record OcrSettings
 }
 public sealed record AppearanceSettings
 {
-    public string FontFamily { get; init; } = "Microsoft YaHei";
+    /// <summary>悬浮层字体族名。默认 Kostar = 内嵌的原版 SC:R 字体（拉丁复刻原字体、谚文全套、无中文，
+    /// 中文回退系统默认字体，与游戏内观感一致）。经 pack URI 引用，见 OverlayWindow.ResolveFontFamily。</summary>
+    public string FontFamily { get; init; } = "Kostar";
     public int FontSize { get; init; } = 18;
+    /// <summary>译文文字颜色（WPF 可解析的英文色名或 hex）。默认 #13FF1D = 从游戏对局内聊天截图
+    /// （docs\scenes pictures\ingame-w-1.png）采样的聊天正文绿色核心值（最亮像素 19,255,29）。
+    /// 存英文色名/hex 而非中文——ColorConverter 不认中文色名。解析见 OverlayWindow.ResolveFontColor。</summary>
+    public string FontColor { get; init; } = "#13FF1D";
     public double Opacity { get; init; } = 0.8;
 
     /// <summary>文字底衬（每条译文一块圆角黑底）的不透明度。默认 0.8。
@@ -50,14 +56,14 @@ public static class HotkeyKeys
 }
 public static class HotkeyDefaults
 {
-    /// <summary>全部热键：F9 开/关翻译、F10 区域校准设置、F11 设置、F8 切 DEBUG 面板、Ctrl+F8 复制诊断。
+    /// <summary>全部热键：F9 开/关翻译、Ctrl+F9 区域校准设置、F10 设置、F8 切 DEBUG 面板、Ctrl+F8 复制诊断。
     /// 用户可重绑到 F6–F12（可加 Ctrl/Alt/Shift）。悬浮层显隐 / 翻译玩家ID / 暂停 已改为纯配置项，不再占热键。</summary>
     public static IReadOnlyDictionary<string, HotkeyBinding> Map { get; } =
         new Dictionary<string, HotkeyBinding>
         {
             ["ToggleTranslate"] = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9),
-            ["Calibrate"]       = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10),
-            ["OpenConfig"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F11),
+            ["Calibrate"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F9),
+            ["OpenConfig"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10),
             ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8),
             ["CopyDebug"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F8),
         };

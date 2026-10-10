@@ -22,9 +22,12 @@ public class SettingsStoreTests
         var path = Path.GetTempFileName();
         SettingsStore.Save(s, path);
         var back = SettingsStore.Load(path);
-        Assert.Equal(2, back.Translation.Providers.Count);
+        // 老池（ChatGPT/DashScope）缺新加的 OpenAI API 模式，加载时迁移补到末尾（启用态），故 2→3
+        Assert.Equal(3, back.Translation.Providers.Count);
         Assert.Equal(TranslationProviderEntry.ChatGpt, back.Translation.Providers[0].Id);
         Assert.False(back.Translation.Providers[1].Enabled);   // DashScope 被禁用的状态保留
+        Assert.Equal(TranslationProviderEntry.OpenAiApi, back.Translation.Providers[2].Id); // 迁移补上的新 provider
+        Assert.True(back.Translation.Providers[2].Enabled);    // 默认启用
         Assert.True(back.Translation.TranslatePlayerId);
         Assert.Equal(250, back.Ocr.TranslatePollMs);
         Assert.Equal(5, back.Hotkeys.Count);
@@ -38,7 +41,7 @@ public class SettingsStoreTests
     [Fact] public void Load_CorruptJson_ReturnsDefault()
     {
         var path = Path.GetTempFileName(); File.WriteAllText(path, "{ not valid json ");
-        Assert.Equal(4, SettingsStore.Load(path).Translation.Providers.Count); // 损坏 JSON → 默认池
+        Assert.Equal(4, SettingsStore.Load(path).Translation.Providers.Count); // 损坏 JSON → 默认池（含 OpenAI API 模式，已移除腾讯云）
     }
 
     [Fact] public void Load_OldConfig_MissingNewHotkey_MergedFromDefaults_KeepsCustom()
@@ -77,12 +80,13 @@ public class SettingsStoreTests
         """;
         var path = Path.GetTempFileName(); File.WriteAllText(path, json);
         var back = SettingsStore.Load(path);
-        // 三个已删功能被清掉；ToggleDebug(F6)→F8、Calibrate(F8)→F10；ToggleTranslate 保持。
+        // 三个已删功能被清掉；ToggleDebug(F6)→F8、Calibrate(F8)→F10→Ctrl+F9（一次到最新）；ToggleTranslate 保持。
         Assert.False(back.Hotkeys.ContainsKey("ToggleOverlay"));
         Assert.False(back.Hotkeys.ContainsKey("TogglePlayerId"));
         Assert.False(back.Hotkeys.ContainsKey("TogglePause"));
         Assert.Equal(HotkeyKeys.VK_F8, back.Hotkeys["ToggleDebug"].Vk);
-        Assert.Equal(HotkeyKeys.VK_F10, back.Hotkeys["Calibrate"].Vk);
+        Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["Calibrate"].Vk);
+        Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["Calibrate"].Modifiers);
         Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk);
         Assert.Equal(5, back.Hotkeys.Count);
         // 幂等：再存再读一次，结果不变。
@@ -90,7 +94,7 @@ public class SettingsStoreTests
         var again = SettingsStore.Load(path);
         Assert.Equal(5, again.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F8, again.Hotkeys["ToggleDebug"].Vk);
-        Assert.Equal(HotkeyKeys.VK_F10, again.Hotkeys["Calibrate"].Vk);
+        Assert.Equal(HotkeyKeys.VK_F9, again.Hotkeys["Calibrate"].Vk);
     }
 
     [Fact] public void Saved_Json_ContainsNoSecretKeyField()

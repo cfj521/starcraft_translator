@@ -23,6 +23,14 @@
     </Content>
   </ItemGroup>
 
+  <!-- 内置字体：Kostar = 原版 SC:R 游戏字体（拉丁复刻原字体 + 全套谚文，无中文）。
+       随构建拷贝到输出目录，悬浮层运行时按文件路径构造 FontFamily（见 OverlayWindow.ResolveFontFamily）。
+       为何不用 pack URI 内嵌：实测 WPF 对 .g.resources 里的 .ttf 取得到流却不加载为字体（回落 Arial），
+       文件路径方式则正常，故走 Content 拷贝 + 文件 URI。 -->
+  <ItemGroup>
+    <Content Include="..\..\resources\Kostar.ttf" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>

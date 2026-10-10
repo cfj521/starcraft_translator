@@ -133,7 +133,18 @@
         </Setter>
     </Style>
 
-    <Style TargetType="PasswordBox" BasedOn="{StaticResource {x:Type TextBox}}">
+    <!-- PasswordBox 不继承 TextBox（二者都是 Control 的直接子类），不能 BasedOn TextBox 样式——
+         派生样式 TargetType 必须是基样式 TargetType 的派生类，否则 Seal 时抛"只能根据 PasswordBox 的 Style"。
+         故独立定义，属性与 TextBox 对齐。-->
+    <Style TargetType="PasswordBox">
+        <Setter Property="FontFamily" Value="{StaticResource FluentFont}"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+        <Setter Property="Background" Value="{StaticResource ControlBackgroundBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource ControlBorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="6,3"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="PasswordBox">
@@ -146,6 +157,9 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Background" Value="{StaticResource HoverBackgroundBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -242,12 +256,18 @@
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter Margin="0,12,0,0"/>
                         </Border>
-                        <!-- 标题：骑在顶部边框线上，背景切掉边框（左侧多留间隔） -->
-                        <Border Background="{StaticResource CardBackgroundBrush}" Padding="14,0"
+                        <!-- 标题：完全透明，骑在顶部边框线上。只有一条 2px 窗口底色细带精确切掉
+                             文字正下方的 1px 边框线（经典 fieldset 断线）——细带左缘从圆角结束处
+                             （x=8）起，盖到文字右缘。卡片上方与文字背后都不再画任何背景 -->
+                        <Border Background="Transparent" Padding="14,0"
                                 Margin="0,-9,0,0" HorizontalAlignment="Left" VerticalAlignment="Top">
-                            <ContentPresenter ContentSource="Header"
-                                              TextElement.FontSize="14"
-                                              TextElement.Foreground="{StaticResource TextPrimaryBrush}"/>
+                            <Grid>
+                                <Border Margin="-6,0,0,0" Height="2" VerticalAlignment="Center"
+                                        Background="{StaticResource WindowBackgroundBrush}"/>
+                                <ContentPresenter ContentSource="Header"
+                                                  TextElement.FontSize="14"
+                                                  TextElement.Foreground="{StaticResource TextPrimaryBrush}"/>
+                            </Grid>
                         </Border>
                     </Grid>
                 </ControlTemplate>

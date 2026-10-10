@@ -18,13 +18,16 @@
         </Style>
     </Window.Resources>
     <DockPanel Margin="8">
-        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-            <Button x:Name="ApplyButton" Content="应用" Width="80" Margin="0,0,8,0" Click="OnApplyClick"/>
-            <Button x:Name="OkButton" Content="确定" Width="80" Margin="0,0,8,0" Click="OnOkClick" IsDefault="True"/>
-            <Button x:Name="CancelButton" Content="取消" Width="80" Click="OnCancelClick" IsCancel="True"/>
-        </StackPanel>
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <!-- 恢复默认＝按页操作，左对齐且自适应宽度（装得下 9 个字）；确定/取消＝对话框主操作，靠右 -->
+            <Button x:Name="RestoreDefaultsButton" DockPanel.Dock="Left" Content="恢复当前页默认值" Margin="0,0,8,0" Click="OnRestoreDefaultsClick"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="OkButton" Content="确定" Width="80" Margin="0,0,8,0" Click="OnOkClick" IsDefault="True"/>
+                <Button x:Name="CancelButton" Content="取消" Width="80" Click="OnCancelClick" IsCancel="True"/>
+            </StackPanel>
+        </DockPanel>
 
-        <TabControl TabStripPlacement="Left">
+        <TabControl x:Name="PagesTab" TabStripPlacement="Left" SelectionChanged="OnTabSelectionChanged">
 
             <!-- ══════════════════ 常规 ══════════════════ -->
             <TabItem Header="常规">
@@ -35,7 +38,6 @@
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="目标进程" Style="{StaticResource RowLabel}"/>
                                     <TextBox x:Name="TargetProcessBox" Width="180"/>
-                                    <Button x:Name="RedetectButton" Content="重新检测" Margin="8,0,0,0" Click="OnRedetectClick"/>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="当前状态" Style="{StaticResource RowLabel}"/>
@@ -47,20 +49,23 @@
                         </GroupBox>
                         <GroupBox Header="启动">
                             <StackPanel>
-                                <CheckBox x:Name="AutoStartCheck" Content="开机自启（保存时写 HKCU Run 键；开发期指向 Debug exe）" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="StartMinimizedCheck" Content="启动后最小化到托盘（程序无主窗口，此行为恒为真）" IsEnabled="False" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="AutoTranslateCheck" Content="启动游戏时自动开启翻译（程序启动即开启，等待游戏窗口出现自动续译）" Margin="0,2,0,2"/>
-                            </StackPanel>
-                        </GroupBox>
-                        <GroupBox Header="调试">
-                            <StackPanel>
-                                <CheckBox x:Name="DebugModeCheck" Content="DEBUG 模式：左上角显示诊断面板（场景识别/帧/ROI/翻译状态）（F8）" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="AutoStartCheck" Content="开机自启" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="AutoTranslateCheck" Content="启动程序自动开始翻译" Margin="0,2,0,2"/>
                             </StackPanel>
                         </GroupBox>
                         <GroupBox Header="语言">
                             <StackPanel>
-                                <TextBlock Text="界面语言：简体中文（固定）" Margin="0,2,0,2"/>
-                                <TextBlock Text="源语言 → 目标：韩文 → 简体中文（固定）" Margin="0,2,0,2"/>
+                                <!-- 界面语言：下拉框（目前仅简体中文一项，预留多语言扩展） -->
+                                <StackPanel Style="{StaticResource Row}">
+                                    <TextBlock Text="界面语言" Style="{StaticResource RowLabel}"/>
+                                    <ComboBox x:Name="UiLanguageBox" Width="120">
+                                        <ComboBoxItem Content="简体中文" IsSelected="True"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <StackPanel Style="{StaticResource Row}">
+                                    <TextBlock Text="翻译" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="韩文 → 简体中文" VerticalAlignment="Center"/>
+                                </StackPanel>
                             </StackPanel>
                         </GroupBox>
                     </StackPanel>
@@ -71,13 +76,13 @@
             <TabItem Header="翻译">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
-                        <GroupBox Header="Provider 池（拖动调整顺序；从上到下取第一个「启用且可用」的，不可用/额度耗尽/翻译失败就跳下一个）">
+                        <GroupBox Header="翻译提供商">
                             <StackPanel>
                                 <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,6"
-                                           Text="默认顺序＝先免费机器翻译、后 LLM。勾选＝启用，拖动手柄＝调整优先级；某行不可用或额度用尽时自动跳到下一行。"/>
-                                <ListView x:Name="ProviderListView" Height="172" Margin="0,0,0,6"
+                                           Text="ⓘ 可拖拽调整顺序。取用顺序从上到下，建议优先使用机翻。额度不足或不可用时逐级下跳"/>
+                                <ListView x:Name="ProviderListView" Height="212" Margin="0,0,0,6"
                                           AllowDrop="True" DragOver="OnProviderListDragOver" Drop="OnProviderListDrop"
-                                          MouseLeftButtonDown="OnProviderListMouseDown">
+                                          PreviewMouseLeftButtonDown="OnProviderListMouseDown">
                                     <!-- 列表内文本统一小一号（13）：覆盖全局 14 号的隐式 TextBlock 样式 -->
                                     <ListView.Resources>
                                         <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
@@ -97,27 +102,32 @@
                                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                                     <TextBlock Text="⠿" Foreground="Gray" Margin="0,0,4,0" VerticalAlignment="Center"/>
                                                     <TextBlock Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                    <!-- 模型名输入框：仅 LLM 行（ChatGPT/DashScope，ShowModel=True）显示，放在名称之后。
+                                                         圆角 Border 包住 + TextBox 无边框透明（白底由 Border 提供）。不设固定高度（全局 Fluent 样式会给 TextBox 加 Padding=6,3，固定 Height 会把文字裁掉只剩顶部） -->
+                                                    <Border VerticalAlignment="Center" Margin="0,0,8,0" Background="White" BorderBrush="#C0C0C0" BorderThickness="1" CornerRadius="4" Padding="4,0">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding ShowModel}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <TextBox Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}" Width="100" Padding="1,1" BorderThickness="0" Background="Transparent" VerticalAlignment="Center"/>
+                                                    </Border>
                                                     <Border CornerRadius="3" Background="#F0F0F0" Padding="6,1" VerticalAlignment="Center">
                                                         <TextBlock Text="{Binding Kind}" Foreground="Gray"/>
                                                     </Border>
                                                 </StackPanel>
                                                 <TextBlock Grid.Column="2" Text="{Binding Status}" Foreground="#B8860B" VerticalAlignment="Center" Margin="8,0,8,0"/>
-                                                <Button Grid.Column="3" Content="配置…" Width="64" VerticalAlignment="Stretch" Tag="{Binding Id}" Click="OnProviderConfigureClick"/>
+                                                <!-- 登录账号 tooltip：仅 ChatGPT「订阅登录」按钮显示，且已登录后才出现（StatusTooltip 未登录时为空=不显示） -->
+                                                <Button Grid.Column="3" Content="{Binding ConfigButtonText}" VerticalAlignment="Stretch" Tag="{Binding Id}" ToolTip="{Binding StatusTooltip}" Click="OnProviderConfigureClick"/>
                                             </Grid>
                                         </DataTemplate>
                                     </ListView.ItemTemplate>
                                 </ListView>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <Button x:Name="ResetProviderOrderButton" Content="恢复默认顺序" Width="120" Click="OnResetProviderOrderClick"/>
-                                </StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="DashScope 模型" Style="{StaticResource RowLabel}"/>
-                                    <TextBox x:Name="DashScopeModelBox" Width="180"/>
-                                </StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="ChatGPT 模型" Style="{StaticResource RowLabel}"/>
-                                    <TextBox x:Name="ChatGptModelBox" Width="180"/>
-                                </StackPanel>
                             </StackPanel>
                         </GroupBox>
 
@@ -126,41 +136,37 @@
                                 <CheckBox x:Name="TranslateChatCheck" Content="翻译聊天" Margin="0,2,0,2"/>
                                 <CheckBox x:Name="TranslateRoomNameCheck" Content="翻译房间名" Margin="0,2,0,2"/>
                                 <CheckBox x:Name="TranslateMapInfoCheck" Content="翻译地图信息" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="TranslatePlayerIdCheck" Content="翻译玩家 ID（默认关）" Margin="0,2,0,2"/>
-                                <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"
-                                           Text="ⓘ 玩家 ID 多为专有名词，通常不翻译。开启后&quot;房间名列表&quot;里的 ID 列也会被翻译。"/>
+                                <CheckBox x:Name="TranslatePlayerIdCheck" Content="翻译玩家 ID" Margin="0,2,0,2"/>
                             </StackPanel>
                         </GroupBox>
 
                         <GroupBox Header="质量与省流">
                             <StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
-                                    <CheckBox x:Name="GlossaryEnabledCheck" Content="启用术语表（星际黑话，始终生效）" IsChecked="True" IsEnabled="False" VerticalAlignment="Center"/>
+                                    <CheckBox x:Name="GlossaryEnabledCheck" Content="启用术语表" IsChecked="True" IsEnabled="False" VerticalAlignment="Center"/>
                                     <Button x:Name="EditGlossaryButton" Content="编辑术语表…" Margin="12,0,0,0" Click="OnEditGlossaryClick"/>
                                 </StackPanel>
-                                <CheckBox x:Name="CacheEnabledCheck" Content="启用翻译缓存（进程内 LRU，容量固定，无 TTL）" IsChecked="True" IsEnabled="False" Margin="0,4,0,4"/>
-                                <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,4"
-                                           Text="LLM 节流（429 限流冷却）：已实现，静默 —— 被限流的 provider 自动冷却（Retry-After 或指数退避）并让位给池内下一个，冷却结束自动恢复；详见 日志 页。"/>
+                                <CheckBox x:Name="CacheEnabledCheck" Content="启用翻译缓存" IsChecked="True" IsEnabled="False" Margin="0,4,0,4"/>
                             </StackPanel>
                         </GroupBox>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
-            <!-- ══════════════════ OCR ══════════════════ -->
-            <TabItem Header="OCR">
+            <!-- ══════════════════ 识别 ══════════════════ -->
+            <TabItem Header="识别">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
                         <GroupBox Header="识别引擎">
-                            <TextBlock Text="PaddleOCR（韩文 mobile 模型，随包分发，无需系统语言包）" Margin="4"/>
+                            <TextBlock Text="PaddleOCR（韩文 mobile 模型，无需系统语言包）" Margin="4"/>
                         </GroupBox>
-                        <GroupBox Header="轮询节拍（应用后即时生效；100–5000ms）">
+                        <GroupBox Header="轮询周期（100~5000ms）">
                             <StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="场景检测" Style="{StaticResource RowLabel}"/>
                                     <TextBlock Text="每" VerticalAlignment="Center"/>
                                     <TextBox x:Name="SceneDetectPollBox" Width="60" Margin="4,0,4,0"/>
-                                    <TextBlock Text="ms 识别一次（只比几块静态区，很快；默认 200）" VerticalAlignment="Center"/>
+                                    <TextBlock Text="ms 识别一次（默认 200）" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="翻译" Style="{StaticResource RowLabel}"/>
@@ -170,8 +176,6 @@
                                 </StackPanel>
                             </StackPanel>
                         </GroupBox>
-                        <TextBlock Text="预处理与变化检测：由 PaddleOCR 内置管线与精确文本比对处理，实测无需额外开关（原占位设置已移除）。"
-                                   Foreground="Gray" Margin="4,8,4,0" TextWrapping="Wrap"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -180,14 +184,18 @@
             <TabItem Header="区域">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
-                        <Grid Margin="0,0,0,6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock x:Name="RegionHintText" Text="尚未加载" VerticalAlignment="Center"/>
-                            <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准 (F10)" Click="OnEnterCalibrationClick"/>
-                        </Grid>
+                        <StackPanel Margin="0,0,0,6">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="RegionHintText" Text="尚未加载" VerticalAlignment="Center"/>
+                                <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准" Click="OnEnterCalibrationClick"/>
+                            </Grid>
+                            <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"
+                                       Text="ⓘ 程序预设了1920x1080、2560x1440、3840x2160 三种分辨率的区域定位，若您的屏幕分辨率不在其中，程序会提供最近您当前分辨率的区域数据，然后请自行校准。"/>
+                        </StackPanel>
 
                         <Grid Margin="0,0,0,4">
                             <Grid.ColumnDefinitions>
@@ -196,12 +204,12 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="已定义区域（坐标为像素坐标）：" FontWeight="Bold" VerticalAlignment="Center"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <Button x:Name="EditRoiButton" Content="编辑选中" Click="OnEditRoiClick"/>
-                                <Button x:Name="DeleteRoiButton" Content="删除选中" Margin="8,0,0,0" Click="OnDeleteRoiClick"/>
+                                <Button x:Name="EditRoiButton" Content="编辑选中" IsEnabled="False" Click="OnEditRoiClick"/>
+                                <Button x:Name="DeleteRoiButton" Content="删除选中" Margin="8,0,0,0" IsEnabled="False" Click="OnDeleteRoiClick"/>
                             </StackPanel>
                         </Grid>
                         <ListView x:Name="RoiListView" Height="200" Margin="0,0,0,4"
-                                  MouseDoubleClick="OnRoiListDoubleClick">
+                                  MouseDoubleClick="OnRoiListDoubleClick" SelectionChanged="OnRoiListSelectionChanged">
                             <!-- 列表内文本统一小一号（13）：覆盖全局 14 号的隐式 TextBlock 样式 -->
                             <ListView.Resources>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
@@ -223,8 +231,6 @@
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,10"
-                                   Text="ⓘ 双击或选中后点&quot;编辑选中&quot;即可改坐标；预设的修改写入 %APPDATA%\ScrTranslator\layout-overrides.json，删掉该文件即恢复出厂值。拖框请用&quot;进入校准&quot;。"/>
 
                         <Grid Margin="0,0,0,4">
                             <Grid.ColumnDefinitions>
@@ -233,11 +239,11 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="房间列表列区域：" FontWeight="Bold" VerticalAlignment="Center"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <Button x:Name="EditColumnButton" Content="编辑选中" Click="OnEditColumnClick"/>
-                                <Button x:Name="DeleteColumnButton" Content="删除选中" Margin="8,0,0,0" Click="OnDeleteColumnClick"/>
+                                <Button x:Name="EditColumnButton" Content="编辑选中" IsEnabled="False" Click="OnEditColumnClick"/>
+                                <Button x:Name="DeleteColumnButton" Content="删除选中" Margin="8,0,0,0" IsEnabled="False" Click="OnDeleteColumnClick"/>
                             </StackPanel>
                         </Grid>
-                        <ListView x:Name="ColumnsListView" Height="140" MouseDoubleClick="OnColumnListDoubleClick">
+                        <ListView x:Name="ColumnsListView" Height="140" MouseDoubleClick="OnColumnListDoubleClick" SelectionChanged="OnColumnListSelectionChanged">
                             <!-- 列表内文本统一小一号（13）：覆盖全局 14 号的隐式 TextBlock 样式 -->
                             <ListView.Resources>
                                 <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
@@ -256,8 +262,6 @@
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,8,0,0"
-                                   Text="ⓘ 每列的 Y 与高跟随所属列表框，只有 X 与宽可改；&quot;翻译玩家 ID&quot;开关仍由「翻译」页决定。"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -287,9 +291,8 @@
                                 </GridView>
                             </ListView.View>
                         </ListView>
-                        <Button x:Name="ResetHotkeysButton" Content="恢复默认热键" Width="120" HorizontalAlignment="Left" Margin="0,10,0,0" Click="OnResetHotkeysClick"/>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,8,0,0"
-                                   Text="点「修改」后按下新组合键即可录制（Esc 取消）；冲突会提示并放弃，成功则立即生效并保存。"/>
+                                   Text="ⓘ 仅允许 Ctrl / Shift / Alt + F6 ~ F12 的热键注册"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -303,6 +306,8 @@
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="字体" Style="{StaticResource RowLabel}"/>
                                     <ComboBox x:Name="FontFamilyBox" Width="160" IsEditable="True">
+                                        <!-- Kostar = 内嵌原版 SC:R 字体（默认）：拉丁复刻原字体 + 谚文，无中文（中文回退系统字体） -->
+                                        <ComboBoxItem Content="Kostar"/>
                                         <ComboBoxItem Content="Microsoft YaHei"/>
                                         <ComboBoxItem Content="Microsoft YaHei UI"/>
                                         <ComboBoxItem Content="SimHei"/>
@@ -310,6 +315,22 @@
                                     </ComboBox>
                                     <TextBlock Text="字号" Style="{StaticResource RowLabel}" Width="50" Margin="16,0,8,0"/>
                                     <TextBox x:Name="FontSizeBox" Width="50"/>
+                                </StackPanel>
+                                <StackPanel Style="{StaticResource Row}">
+                                    <TextBlock Text="字体颜色" Style="{StaticResource RowLabel}"/>
+                                    <!-- 调色板：点色块选色。第一格=游戏对局聊天正文绿 #13FF1D（默认，采样自 ingame-w-1.png）；
+                                         其余含房间列表采样色（白 #F3F3F3）与常用色。Tag 存真实 hex，选中态用蓝框标示 -->
+                                    <WrapPanel x:Name="FontColorPalette" VerticalAlignment="Center">
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#13FF1D" Margin="2" Cursor="Hand" Tag="#13FF1D" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#F3F3F3" Margin="2" Cursor="Hand" Tag="#F3F3F3" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#FFFFFF" Margin="2" Cursor="Hand" Tag="#FFFFFF" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#FFFF00" Margin="2" Cursor="Hand" Tag="#FFFF00" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#00FFFF" Margin="2" Cursor="Hand" Tag="#00FFFF" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#FFA500" Margin="2" Cursor="Hand" Tag="#FFA500" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#FF6347" Margin="2" Cursor="Hand" Tag="#FF6347" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#FF0000" Margin="2" Cursor="Hand" Tag="#FF0000" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                        <Border Width="22" Height="22" CornerRadius="4" Background="#FFB6C1" Margin="2" Cursor="Hand" Tag="#FFB6C1" MouseLeftButtonUp="OnFontColorSwatchClick" BorderBrush="#808080" BorderThickness="1"/>
+                                    </WrapPanel>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="不透明度" Style="{StaticResource RowLabel}"/>
@@ -320,20 +341,6 @@
                                     <TextBlock Text="文字底衬" Style="{StaticResource RowLabel}"/>
                                     <Slider x:Name="BackplateSlider" Width="200" Minimum="0" Maximum="1" ValueChanged="OnBackplateChanged"/>
                                     <TextBlock x:Name="BackplateValueText" Text="80%" Margin="8,0,0,0" VerticalAlignment="Center"/>
-                                    <TextBlock Text="（黑底不透明度，0=不显示底衬；压不住浅色画面时调高）" Foreground="Gray" Margin="8,0,0,0" VerticalAlignment="Center"/>
-                                </StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="显示模式" Style="{StaticResource RowLabel}"/>
-                                    <RadioButton x:Name="OnlyTranslationRadio" GroupName="DisplayMode" Content="仅译文" Margin="0,0,16,0" VerticalAlignment="Center"/>
-                                    <RadioButton x:Name="BothRadio" GroupName="DisplayMode" Content="原文+译文双行" VerticalAlignment="Center"/>
-                                </StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="临时态(快引擎)样式" Style="{StaticResource RowLabel}" Width="140"/>
-                                    <TextBlock Text="灰色/半斜体 0.65 透明（只读，改色留后续）" VerticalAlignment="Center"/>
-                                </StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="最终态(精译)样式" Style="{StaticResource RowLabel}" Width="140"/>
-                                    <TextBlock Text="正常白色（只读）" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </StackPanel>
                         </GroupBox>
@@ -344,8 +351,7 @@
             <!-- ══════════════════ 日志 ══════════════════ -->
             <TabItem Header="日志">
                 <DockPanel Margin="8">
-                    <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" Foreground="Gray" TextWrapping="Wrap"
-                               Text="本次运行以来的全部日志。开启 DEBUG 模式（F8）后，DEBUG 级诊断也在这里显示。所有事件不再弹气泡，统一在此查看。"/>
+                    <Button DockPanel.Dock="Top" x:Name="ExportLogButton" Content="导出日志" HorizontalAlignment="Right" Width="80" Margin="0,0,0,6" Click="OnExportLogClick"/>
                     <ListBox x:Name="LogListBox" FontFamily="Consolas, Cascadia Mono, Microsoft YaHei" FontSize="12"
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"/>
@@ -354,18 +360,22 @@
 
             <!-- ══════════════════ 关于 ══════════════════ -->
             <TabItem Header="关于">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="12">
-                        <TextBlock x:Name="VersionText" Text="版本 —" FontWeight="Bold" FontSize="14" Margin="0,0,0,12"/>
-                        <TextBlock Text="许可：内部项目，未开源" Margin="0,0,0,12"/>
-                        <TextBlock Text="第三方组件：" FontWeight="Bold" Margin="0,8,0,4"/>
-                        <TextBlock TextWrapping="Wrap"
+                <DockPanel Margin="12">
+                    <!-- DEBUG 模式开关（从常规页移来，放右上角） -->
+                    <CheckBox x:Name="DebugModeCheck" DockPanel.Dock="Top" HorizontalAlignment="Right" Content="DEBUG模式" Margin="0,0,0,8"/>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock x:Name="VersionText" Text="版本 —" FontWeight="Bold" FontSize="14" Margin="0,0,0,16"/>
+                            <TextBlock Text="许可：内部项目，未开源" Margin="0,0,0,16" LineHeight="24"/>
+                        <TextBlock Text="第三方组件：" FontWeight="Bold" Margin="0,10,0,6"/>
+                        <TextBlock TextWrapping="Wrap" LineHeight="24" Margin="0,0,0,6"
                                    Text="H.NotifyIcon.Wpf（系统托盘）、RapidOcrNet + PaddleOCR 韩文 mobile 模型（OCR）、SkiaSharp（图像处理）、Microsoft.Extensions.Hosting（DI 组合根）、System.Security.Cryptography.ProtectedData（DPAPI）、CsWinRT / Windows.Graphics.Capture（屏幕捕获）。"/>
-                        <TextBlock Text="使用须知：" FontWeight="Bold" Margin="0,12,0,4"/>
-                        <TextBlock TextWrapping="Wrap"
+                        <TextBlock Text="使用须知：" FontWeight="Bold" Margin="0,16,0,6"/>
+                        <TextBlock TextWrapping="Wrap" LineHeight="24"
                                    Text="• 请以「窗口化/无边框」模式运行《星际争霸：重制版》，独占全屏会遮挡悬浮窗，悬浮窗也不可交互（点击穿透）。&#10;• 本软件纯读屏：仅截取屏幕画面做 OCR 识别 + 翻译显示，不注入游戏进程、不修改游戏文件、不读取游戏内存。&#10;• 任何第三方叠加层工具理论上都存在被反作弊/官方规则误判的风险，请自行评估后使用；作者不对因使用本软件导致的任何账号处罚负责。"/>
-                    </StackPanel>
-                </ScrollViewer>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
             </TabItem>
 
         </TabControl>

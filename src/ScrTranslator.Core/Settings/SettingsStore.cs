@@ -1,4 +1,6 @@
+using System.Linq;
 using System.Text.Json;
+using ScrTranslator.Core.Translation;
 namespace ScrTranslator.Core.Settings;
 
 /// <summary>settings.json 读写(只存非密钥；密钥走 SecretStore/DPAPI)。缺文件/损坏→默认,不崩。</summary>
@@ -14,8 +16,8 @@ public static class SettingsStore
     private static readonly string[] RemovedHotkeyFuncs = { "ToggleOverlay", "TogglePlayerId", "TogglePause" };
 
     /// <summary>热键迁移（幂等）：
-    /// ① 删除已退役功能；② ToggleDebug/Calibrate 若仍是旧默认（F6/F8）升到新默认（F8/F10），
-    /// 用户已改成别的键则不动。每次 Load 都跑，跑过之后再跑是空操作。</summary>
+    /// ① 删除已退役功能；② 旧默认升新默认——ToggleDebug F6→F8、Calibrate F8→F10→Ctrl+F9、
+    /// OpenConfig F11→F10；用户已改成别的键则不动。每次 Load 都跑，跑过之后再跑是空操作。</summary>
     private static void MigrateHotkeys(Dictionary<string, HotkeyBinding> hk)
     {
         foreach (var f in RemovedHotkeyFuncs) hk.Remove(f);
@@ -23,6 +25,10 @@ public static class SettingsStore
             hk["ToggleDebug"] = new HotkeyBinding(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8);
         if (hk.TryGetValue("Calibrate", out var c) && c.Vk == HotkeyKeys.VK_F8 && c.Modifiers == HotkeyKeys.MOD_NONE)
             hk["Calibrate"] = new HotkeyBinding(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10);
+        if (hk.TryGetValue("Calibrate", out var c2) && c2.Vk == HotkeyKeys.VK_F10 && c2.Modifiers == HotkeyKeys.MOD_NONE)
+            hk["Calibrate"] = new HotkeyBinding(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F9);
+        if (hk.TryGetValue("OpenConfig", out var o) && o.Vk == HotkeyKeys.VK_F11 && o.Modifiers == HotkeyKeys.MOD_NONE)
+            hk["OpenConfig"] = new HotkeyBinding(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10);
     }
 
     public static void Save(AppSettings settings, string path)
@@ -40,7 +46,12 @@ public static class SettingsStore
             var merged = new Dictionary<string, HotkeyBinding>(HotkeyDefaults.Map);
             foreach (var kv in s.Hotkeys) merged[kv.Key] = kv.Value;
             MigrateHotkeys(merged);
-            return s with { Hotkeys = merged };
+            // provider 迁移：先滤掉已退役的腾讯云机翻（免费额度已下线、QPS 将归零），老配置池里若还有这一行就清掉。
+            var providers = s.Translation.Providers.Where(p => p.Id != "tencent").ToList();
+            // 老配置池里没有新加的 OpenAI API 模式则补上，让既有用户也能看到/启用这一行。
+            if (providers.All(p => p.Id != TranslationProviderEntry.OpenAiApi))
+                providers.Add(new TranslationProviderEntry(TranslationProviderEntry.OpenAiApi, true));
+            return s with { Hotkeys = merged, Translation = s.Translation with { Providers = providers } };
         }
         catch { return new AppSettings(); } // 损坏/反序列化失败 → 默认
     }

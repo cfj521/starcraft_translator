@@ -85,6 +85,36 @@ public class ProvidersTests
     }
 
     [Fact]
+    public async Task OpenAiApi_TranslatesBatch_AndName()
+    {
+        var stub = new StubHttpMessageHandler("{\"choices\":[{\"message\":{\"content\":\"[1] 甲\\n[2] 乙\"}}]}");
+        var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://api.openai.com/v1", () => "sk-test");
+        var p = new OpenAiApiProvider(client, () => "gpt-4o", () => "sk-test");
+        var r = await p.TranslateAsync(new[]{"가","나"}, Ctx, CancellationToken.None);
+        Assert.Equal(new[]{"甲","乙"}, r);
+        Assert.Equal("openai_api", p.Name);
+    }
+
+    [Fact]
+    public void OpenAiApi_NoKey_IsNoCreds()
+    {
+        var client = new OpenAiCompatibleChatClient(new HttpClient(new StubHttpMessageHandler("{}")), "https://api.openai.com/v1", () => "sk-test");
+        var p = new OpenAiApiProvider(client, () => "gpt-4o", () => "");
+        Assert.Equal(ProviderState.NoCredentials, p.GetStatus().State);
+        Assert.False(p.GetStatus().Usable);
+        Assert.Contains("OpenAI API Key", p.GetStatus().Detail);
+    }
+
+    [Fact]
+    public void OpenAiApi_WithKey_IsAvailable()
+    {
+        var client = new OpenAiCompatibleChatClient(new HttpClient(new StubHttpMessageHandler("{}")), "https://api.openai.com/v1", () => "sk-test");
+        var p = new OpenAiApiProvider(client, () => "gpt-4o", () => "sk-test");
+        Assert.Equal(ProviderState.Available, p.GetStatus().State);
+        Assert.True(p.GetStatus().Usable);
+    }
+
+    [Fact]
     public async Task ChatGpt_429_ThrowsRateLimit_AndEntersCooldown()
     {
         var stub = new StubHttpMessageHandler("limited", HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(2));

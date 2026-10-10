@@ -26,8 +26,8 @@
   ▶ 翻译: 开启            (F9)        ← 点击切换 开/关
   ▢ 悬浮层: 显示                        ← 点击切换 显/隐（纯托盘，无热键）
   ─────────────────────────
-  ✎ 进入校准…             (F10)
-  ⚙ 配置…                 (Ctrl+F9)
+  ✎ 进入校准…         (Ctrl+F9)
+  ⚙ 配置…                     (F10)
   ─────────────────────────
   状态: 已连接 SC:R 窗口 (1920×1080)   ← 灰色，仅显示
   ─────────────────────────
@@ -121,7 +121,7 @@ Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密�
 `%APPDATA%\ScrTranslator\layout-overrides.json` 覆盖）。两类条目同表展示、同表可编辑。
 
 ```
-当前分辨率 3840×2160                        [ 进入校准 (F8) ]        ← 右对齐同一行
+当前分辨率 3840×2160                        [ 进入校准 (Ctrl+F9) ]  ← 右对齐同一行
 
 已定义区域（坐标为像素坐标）：                [ 编辑选中 ] [ 删除选中 ]  ← 右对齐同一行
 ┌──────────┬──────────┬────────────────────┬──────────┬───────────┬───────────┐
@@ -157,10 +157,10 @@ Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密�
 功能                     当前热键        操作
 ────────────────────────────────────────────
 开/关 翻译                F9            [ 修改 ]
-进入校准                  F10           [ 修改 ]
-打开配置                  Ctrl+F9       [ 修改 ]
+进入校准                  Ctrl+F9       [ 修改 ]
+打开配置                  F10           [ 修改 ]
 切换 DEBUG 面板           F8            [ 修改 ]
-复制诊断信息              Ctrl+F6       [ 修改 ]
+复制诊断信息              Ctrl+F8       [ 修改 ]
                           [ 恢复默认热键 ]
 点[修改]后按下新组合键即可录制；冲突会高亮提示。可绑范围 F6–F12（可加 Ctrl/Alt/Shift）。
 ```
@@ -192,10 +192,10 @@ Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密�
 | 功能 | 默认热键 | 说明 |
 |------|----------|------|
 | 开/关 翻译 | `F9` | 总开关，等于托盘"翻译" |
-| 进入校准 | `F10` | 切到校准窗口框选区域 |
-| 打开配置 | `Ctrl+F9` | 打开配置窗口 |
+| 进入校准 | `Ctrl+F9` | 切到校准窗口框选区域 |
+| 打开配置 | `F10` | 打开配置窗口 |
 | 切换 DEBUG 面板 | `F8` | 左上角显示/隐藏诊断面板（场景识别/帧/ROI/翻译状态） |
-| 复制诊断信息 | `Ctrl+F6` | 把面板同源的诊断快照拷到剪贴板（面板纯展示、永久点击穿透，不抢焦点） |
+| 复制诊断信息 | `Ctrl+F8` | 把面板同源的诊断快照拷到剪贴板（面板纯展示、永久点击穿透，不抢焦点） |
 
 规则：
 - 热键可在 **3.5 热键** 页自定义；录制式绑定，检测冲突。可绑范围 **F6–F12**（可加 Ctrl/Alt/Shift）。
@@ -271,7 +271,7 @@ class AppSettings {
     TranslationSettings Translation;
     OcrSettings Ocr;              // SceneDetectPollMs=200 / TranslatePollMs=500（两个正交节拍；旧 ChatPollMs/OtherPollMs 与预处理/灵敏度字段均已移除，见 §3.3 注）
     AppearanceSettings Appearance;// FontFamily / FontSize / Opacity / BackplateOpacity(文字底衬 0.8) / ShowOriginalAndTranslation
-    Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F9/F10/Ctrl+F9/F8/Ctrl+F6
+    Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F9/Ctrl+F9/F10/F8/Ctrl+F8
     // ROI 配置单独存 rois.json（RoiStore），按 场景 → 分辨率 bucket 分组，RoomList 可含列定义
 // 界面布局预设另有两层：出厂 layout-presets.json（exe 旁，只读，量测产物）
 //   + 覆盖层 %APPDATA%\ScrTranslator\layout-overrides.json（配置页改预设时落这里）

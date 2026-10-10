@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Windows;
+using System.Windows.Navigation;
 using ScrTranslator.App.Secrets;
 
 namespace ScrTranslator.App.Auth;
@@ -30,5 +32,12 @@ public partial class AliyunKeyWindow : Window
     {
         DialogResult = false;
         Close();
+    }
+
+    /// <summary>点"获取密钥"超链接 → 用默认浏览器打开阿里云 RAM AccessKey 管理页。</summary>
+    private void OnKeyLinkNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        try { Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true }); }
+        catch { /* 无默认浏览器等异常时静默，不影响密钥填写 */ }
     }
 }

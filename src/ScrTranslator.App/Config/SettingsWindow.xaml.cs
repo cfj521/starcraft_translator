@@ -57,16 +57,27 @@ public partial class SettingsWindow : Window
                                     bool Preset, string Name, string TopLeft, string Size);
     private sealed record HotkeyRow(string Key, string Function, string Current);
 
-    /// <summary>provider 池的一行。Enabled/Status 走 INotifyPropertyChanged 让列表实时刷新。</summary>
+    /// <summary>provider 池的一行。Enabled/Status/StatusTooltip/Model 走 INotifyPropertyChanged 让列表实时刷新。
+    /// ShowModel 控制该行是否显示模型输入框（仅 ChatGPT/DashScope 两个 LLM 行）。</summary>
     private sealed class ProviderRow : System.ComponentModel.INotifyPropertyChanged
     {
         public string Id { get; init; } = "";
         public string Name { get; init; } = "";
         public string Kind { get; init; } = "";
+        // settable（非 init）：LoadProviderPool 在对象创建后按 provider 类型补设
+        public bool ShowModel { get; set; }
+        /// <summary>配置按钮文字，按凭据类型区分：订阅登录（ChatGPT）/ 配置KEY（API KEY 类）。</summary>
+        public string ConfigButtonText { get; set; } = "配置";
         private bool _enabled = true;
         private string _status = "";
+        private string _statusTooltip = "";
+        private string _model = "";
         public bool Enabled { get => _enabled; set { _enabled = value; OnChanged(nameof(Enabled)); } }
         public string Status { get => _status; set { _status = value; OnChanged(nameof(Status)); } }
+        /// <summary>「订阅登录」按钮的悬浮提示（ChatGPT 行已登录时显示登录账号，未登录为空=不显示）。</summary>
+        public string StatusTooltip { get => _statusTooltip; set { _statusTooltip = value; OnChanged(nameof(StatusTooltip)); } }
+        /// <summary>该行使用的模型名（ChatGPT/DashScope 行可编辑）。</summary>
+        public string Model { get => _model; set { _model = value; OnChanged(nameof(Model)); } }
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
         private void OnChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
@@ -108,6 +119,7 @@ public partial class SettingsWindow : Window
         _oauth = oauth;
         _log = log;
         _openCalibration = openCalibration;
+        _log.Log("[settings] 配置窗口打开");
         _onStateChanged = onStateChanged;
         _onRoisChanged = onRoisChanged;
         _layoutFactoryPath = Path.Combine(AppContext.BaseDirectory, LayoutPresetStore.DefaultFileName);
@@ -126,14 +138,17 @@ public partial class SettingsWindow : Window
         {
             LoadRoiList(); // 从校准窗口返回时刷新区域页
             ReloadOutOfBandTranslationControls(); // F7/托盘可能在本窗口打开期间改了这三项，重新前台时同步，避免"应用"用陈旧值覆盖
+            RefreshStatusText(); // "重新检测"按钮移除后，靠窗口激活时刷新连接状态（游戏窗口本身由 2s 看门狗自动探测）
         };
         Closed += OnWindowClosed;
+        Loaded += (_, _) => AlignRestoreButtonWithContent(); // 布局完成后量标签栏宽，对齐"恢复默认"按钮
     }
 
     // 若用户在"录制中"（已点修改、尚未按键/Esc）关闭本窗口，PreviewKeyDown 订阅本会一直挂着；
     // 这里兜底注销，避免 handler 残留、_recordingFunc 悬空。
     private void OnWindowClosed(object? sender, EventArgs e)
     {
+        _log.Log("[settings] 配置窗口关闭");
         _log.LogWritten -= OnLogWritten; // 窗口关了不再追加快照，避免 handler 悬空
         if (_recordingFunc is null) return;
         PreviewKeyDown -= OnRecordKeyDown;
@@ -183,20 +198,47 @@ public partial class SettingsWindow : Window
         return null;
     }
 
+    /// <summary>把当前日志页全部行存成 txt 文件（用户自选路径）。日志项均为字符串行。</summary>
+    private void OnExportLogClick(object sender, RoutedEventArgs e)
+    {
+        if (LogListBox.Items.Count == 0)
+        {
+            MessageBox.Show(this, "暂无日志可导出。", "导出日志", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出日志",
+            Filter = "文本文件 (*.txt)|*.txt",
+            FileName = $"ScrTranslator_{DateTime.Now:yyyyMMdd_HHmmss}.txt",
+        };
+        if (dlg.ShowDialog(this) != true) return;
+        try
+        {
+            var lines = new List<string>();
+            foreach (var item in LogListBox.Items)
+                lines.Add(item?.ToString() ?? "");
+            File.WriteAllLines(dlg.FileName, lines);
+            _log.Log($"[settings] 日志已导出到 {dlg.FileName}（{lines.Count} 行）");
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"[settings] 导出日志失败: {ex.Message}");
+            MessageBox.Show(this, $"导出日志失败：{ex.Message}", "导出日志", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     // ── 加载 ─────────────────────────────────────────────────────────────
 
     private void LoadFromSettings(AppSettings s)
     {
         TargetProcessBox.Text = s.General.TargetProcess;
         AutoStartCheck.IsChecked = s.General.AutoStart;
-        StartMinimizedCheck.IsChecked = s.General.StartMinimized;
         AutoTranslateCheck.IsChecked = s.General.AutoTranslateOnLaunch;
         DebugModeCheck.IsChecked = s.General.DebugMode;
         RefreshStatusText();
 
-        LoadProviderPool(s.Translation.Providers);
-        DashScopeModelBox.Text = s.Translation.DashScopeModel;
-        ChatGptModelBox.Text = s.Translation.ChatGptModel;
+        LoadProviderPool(s.Translation);
         TranslateChatCheck.IsChecked = s.Translation.TranslateChat;
         TranslateRoomNameCheck.IsChecked = s.Translation.TranslateRoomName;
         TranslateMapInfoCheck.IsChecked = s.Translation.TranslateMapInfo;
@@ -207,10 +249,9 @@ public partial class SettingsWindow : Window
 
         FontFamilyBox.Text = s.Appearance.FontFamily;
         FontSizeBox.Text = s.Appearance.FontSize.ToString();
+        SelectFontColor(s.Appearance.FontColor);
         OpacitySlider.Value = s.Appearance.Opacity;
         BackplateSlider.Value = s.Appearance.BackplateOpacity;
-        OnlyTranslationRadio.IsChecked = !s.Appearance.ShowOriginalAndTranslation;
-        BothRadio.IsChecked = s.Appearance.ShowOriginalAndTranslation;
 
         LoadRoiList();
         LoadHotkeyList(s.Hotkeys);
@@ -228,42 +269,74 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>按 settings 里存的池顺序/启用态重建列表行，并刷新每行状态。</summary>
-    private void LoadProviderPool(IReadOnlyList<TranslationProviderEntry> providers)
+    private void LoadProviderPool(TranslationSettings t)
     {
         _providerRows.Clear();
-        foreach (var entry in providers)
+        foreach (var entry in t.Providers)
         {
             var (name, kind) = ProviderMeta(entry.Id);
-            _providerRows.Add(new ProviderRow { Id = entry.Id, Enabled = entry.Enabled, Name = name, Kind = kind });
+            var row = new ProviderRow { Id = entry.Id, Enabled = entry.Enabled, Name = name, Kind = kind };
+            switch (entry.Id)
+            {
+                case TranslationProviderEntry.ChatGpt:
+                    row.ShowModel = true;
+                    row.Model = t.ChatGptModel;
+                    row.ConfigButtonText = "订阅登录"; // 订阅授权登录，非 KEY
+                    break;
+                case TranslationProviderEntry.DashScope:
+                    row.ShowModel = true;
+                    row.Model = t.DashScopeModel;
+                    row.ConfigButtonText = "配置KEY"; // DashScope API Key
+                    break;
+                case TranslationProviderEntry.OpenAiApi:
+                    row.ShowModel = true;
+                    row.Model = t.OpenAiApiModel;
+                    row.ConfigButtonText = "配置KEY"; // OpenAI API Key（sk-...）
+                    break;
+                case TranslationProviderEntry.Aliyun:
+                    row.ConfigButtonText = "配置KEY"; // AccessKeyId + AccessKeySecret
+                    break;
+            }
+            _providerRows.Add(row);
         }
         ProviderListView.ItemsSource = _providerRows;
+        // 诊断级：池顺序+启用态是"翻译取哪个 provider"的直接依据，只在 DEBUG 模式记（加载/重绑/恢复默认都会触发，业务级会刷屏）
+        _log.Debug($"[settings] 加载 provider 池：{string.Join(" → ", _providerRows.Select(r => $"{r.Name}({(r.Enabled ? "启用" : "停用")})"))}");
         RefreshProviderStatuses();
     }
 
-    /// <summary>provider id → 展示名 + 类别（免费机器翻译 / LLM）。</summary>
+    /// <summary>provider id → 展示名 + 类别（免费机器翻译 / LLM）。OpenAI/阿里云 LLM 行不带括号副标题。</summary>
     private static (string Name, string Kind) ProviderMeta(string id) => id switch
     {
-        TranslationProviderEntry.Tencent => ("腾讯云机器翻译", "免费"),
         TranslationProviderEntry.Aliyun => ("阿里云机器翻译", "免费"),
-        TranslationProviderEntry.ChatGpt => ("OpenAI LLM（ChatGPT 订阅）", "LLM"),
-        TranslationProviderEntry.DashScope => ("阿里云 LLM（DashScope）", "LLM"),
+        TranslationProviderEntry.ChatGpt => ("OpenAI LLM（订阅）", "LLM"),
+        TranslationProviderEntry.DashScope => ("阿里云 LLM", "LLM"),
+        TranslationProviderEntry.OpenAiApi => ("OpenAI LLM（API）", "LLM"),
         _ => (id, "未知"),
     };
 
-    /// <summary>从密钥/OAuth 实时算出每行状态（可用/未配置/未登录）。额度耗尽的判定在 provider 运行时做，这里只反映凭据态。</summary>
+    /// <summary>从密钥/OAuth 实时算出每行状态（可用/未配置/未登录）。额度耗尽的判定在 provider 运行时做，这里只反映凭据态。
+    /// ChatGPT 行的登录账号不直接显示在状态列，改放「订阅登录」按钮的 tooltip（已登录后显示，未登录为空）。</summary>
     private void RefreshProviderStatuses()
     {
         var sec = _secretStore.Load();
         var (loggedIn, email, plan) = _oauth.Status();
         foreach (var row in _providerRows)
+        {
             row.Status = row.Id switch
             {
-                TranslationProviderEntry.Tencent => sec.Tencent.IsSet ? "可用" : "未配置",
                 TranslationProviderEntry.Aliyun => sec.Aliyun.IsSet ? "可用" : "未配置",
-                TranslationProviderEntry.ChatGpt => loggedIn ? $"已登录 {email}({plan})" : "未登录",
+                TranslationProviderEntry.ChatGpt => loggedIn ? "已登录" : "未登录",
                 TranslationProviderEntry.DashScope => string.IsNullOrWhiteSpace(sec.DashScopeApiKey) ? "未配置" : "可用",
+                TranslationProviderEntry.OpenAiApi => string.IsNullOrWhiteSpace(sec.OpenAiApiKey) ? "未配置" : "可用",
                 _ => "—",
             };
+            // 只有「订阅登录」按钮（ChatGPT 行）的 tooltip 有内容（登录账号）；其余行的 tooltip 置 null——
+            // 绑 null 不弹框，绑空串会弹一个空 tooltip 框。
+            row.StatusTooltip = row.Id == TranslationProviderEntry.ChatGpt && loggedIn
+                ? $"{email}（{plan}）"
+                : null;
+        }
     }
 
     /// <summary>
@@ -277,6 +350,8 @@ public partial class SettingsWindow : Window
             var cfg = RoiStore.Load(_roisJsonPath);
             var (curW, curH) = PrimaryScreenPixels();
             string curRes = $"{curW}x{curH}";
+            // 预设参考分辨率：精确命中则用自身，否则取最接近的预设档（当前分辨率不在预设里时仍有参考行，列表不空）
+            string refRes = ClosestPresetResolution(curW, curH, _layout.Presets.Select(p => p.Resolution));
             var rows = new List<RoiRow>();
             var colRows = new List<ColumnRow>();
 
@@ -311,9 +386,11 @@ public partial class SettingsWindow : Window
             }
 
             // --- 布局预设（聊天框 / 房间列表网格）---
+            // 预设按"最接近的预设分辨率"匹配（refRes），而非当前分辨率精确匹配：
+            // 当前分辨率不在预设里时仍展示最近档，给用户校准参考，避免整表空白。
             foreach (var p in _layout.Presets)
             {
-                if (p.Resolution != curRes) continue;
+                if (p.Resolution != refRes) continue;
                 string sceneLabel = GameSceneIds.FromId(p.Scene).Label();
                 if (p.Chat is { } chat)
                     rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, $"{p.Scene}·聊天(预设)", "聊天",
@@ -362,6 +439,22 @@ public partial class SettingsWindow : Window
         return (1, 1);
     }
 
+    /// <summary>当前分辨率最接近的预设分辨率（精确命中则返回自身）。
+    /// 当前分辨率不在预设里时返回最近的那一档，让区域表仍有参考行可供校准，而不是整表空白。</summary>
+    private static string ClosestPresetResolution(int curW, int curH, IEnumerable<string> presetResolutions)
+    {
+        string best = "";
+        int bestDist = int.MaxValue;
+        foreach (var res in presetResolutions.Distinct())
+        {
+            var (pw, ph) = ParseResolution(res);
+            int dx = curW - pw, dy = curH - ph;
+            int dist = dx * dx + dy * dy; // 欧氏距离平方，免开方
+            if (dist < bestDist) { bestDist = dist; best = res; }
+        }
+        return best;
+    }
+
     private static int Px(double rel, int total) => (int)Math.Round(rel * total);
 
     private static string TypeLabel(RoiType t) => t switch
@@ -396,6 +489,22 @@ public partial class SettingsWindow : Window
         for (var d = e.OriginalSource as DependencyObject; d is not null; d = VisualTreeHelper.GetParent(d))
             if (d is GridViewColumnHeader) return true;
         return false;
+    }
+
+    /// <summary>主表选中态 → 编辑/删除按钮可用性。无选中项时按钮置灰，点不到。</summary>
+    private void OnRoiListSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        bool hasSel = RoiListView.SelectedItem is not null;
+        EditRoiButton.IsEnabled = hasSel;
+        DeleteRoiButton.IsEnabled = hasSel;
+    }
+
+    /// <summary>列表表选中态 → 编辑/删除按钮可用性。无选中项时按钮置灰，点不到。</summary>
+    private void OnColumnListSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        bool hasSel = ColumnsListView.SelectedItem is not null;
+        EditColumnButton.IsEnabled = hasSel;
+        DeleteColumnButton.IsEnabled = hasSel;
     }
 
     /// <summary>编辑选中区域：预设行走覆盖层，校准行走 rois.json。</summary>
@@ -616,6 +725,9 @@ public partial class SettingsWindow : Window
             rows.Add(new HotkeyRow(key, label, current));
         }
         HotkeyListView.ItemsSource = rows;
+        // 区域页"进入校准"按钮显示当前绑定的热键（而非写死的 F10）
+        if (EnterCalibrationButton is not null && hotkeys.TryGetValue("Calibrate", out var cal))
+            EnterCalibrationButton.Content = $"进入校准 ({FormatHotkey(cal)})";
     }
 
     private static string FuncLabel(string func) =>
@@ -643,22 +755,25 @@ public partial class SettingsWindow : Window
 
     // ── 交互 ─────────────────────────────────────────────────────────────
 
-    private void OnRedetectClick(object sender, RoutedEventArgs e) => RefreshStatusText();
-
     /// <summary>每行的「配置…」：按 provider id 路由到对应的密钥输入窗 / ChatGPT 登录。完成后刷新各行状态。</summary>
     private void OnProviderConfigureClick(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button btn || btn.Tag is not string id) return;
+        if (sender is not Button btn || btn.Tag is not string id)
+        {
+            _log.Log($"[settings] 配置按钮点击但未识别：sender 类型={sender?.GetType().Name}");
+            return;
+        }
+        _log.Log($"[settings] 点「配置」按钮 provider={id}");
         switch (id)
         {
-            case TranslationProviderEntry.Tencent:
-                new TencentKeyWindow(_secretStore) { Owner = this }.ShowDialog();
-                break;
             case TranslationProviderEntry.Aliyun:
-                new AliyunKeyWindow(_secretStore) { Owner = this }.ShowDialog();
+                LogKeyDialogResult("阿里云", new AliyunKeyWindow(_secretStore) { Owner = this }.ShowDialog());
                 break;
             case TranslationProviderEntry.DashScope:
-                new DashScopeKeyWindow(_secretStore) { Owner = this }.ShowDialog();
+                LogKeyDialogResult("DashScope", new DashScopeKeyWindow(_secretStore) { Owner = this }.ShowDialog());
+                break;
+            case TranslationProviderEntry.OpenAiApi:
+                LogKeyDialogResult("OpenAI API", new OpenAiApiKeyWindow(_secretStore) { Owner = this }.ShowDialog());
                 break;
             case TranslationProviderEntry.ChatGpt:
                 _ = LoginChatGptAsync(); // 浏览器登录是异步的，不阻塞关闭对话框后的状态刷新
@@ -667,21 +782,41 @@ public partial class SettingsWindow : Window
         RefreshProviderStatuses(); // 密钥/登录变化后刷新每行的状态显示
     }
 
-    /// <summary>ChatGPT 订阅登录（浏览器 PKCE 授权）。成功则让静止画面立即用登录态重译。</summary>
+    /// <summary>记密钥输入窗的关闭结果（已保存/已取消/X关闭）。排查"点了没反应"的钥匙：
+    /// 若上面记了"点配置按钮"却永远没有这行，说明 ShowDialog 没返回（窗口没弹出或被阻塞）。</summary>
+    private void LogKeyDialogResult(string provider, bool? dialogResult)
+    {
+        string result = dialogResult == true ? "已保存" : dialogResult == false ? "已取消" : "X关闭";
+        _log.Log($"[settings] {provider} 密钥窗关闭：{result}");
+    }
+
+    /// <summary>ChatGPT 订阅登录（浏览器 PKCE 授权）。成功则让静止画面立即用登录态重译。
+    /// 关授权页/超时＝Cancelled（关页后同样收不到回调、只会等到超时，故二者无法区分；仅记详细日志、不弹框）；
+    /// 端口占用/网络等＝Failed（弹框报失败）。</summary>
     private async Task<bool> LoginChatGptAsync()
     {
         var chatgptRow = _providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.ChatGpt);
         if (chatgptRow is not null) chatgptRow.Status = "登录中…（浏览器完成授权）";
         try
         {
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
-            bool ok = await _oauth.LoginAsync(cts.Token);
-            _log.Log($"[settings] ChatGPT 登录 {(ok ? "成功" : "失败/未完成")}");
-            if (ok) _onStateChanged?.Invoke(); // 登录成功后让静止画面立即用登录态重译
-            if (!ok)
-                MessageBox.Show(this, "ChatGPT 登录未完成或失败（可能：端口 1455 被占用、超时、网络问题或未在浏览器完成授权）。请重试；详情见 logs/app.log。",
-                    "登录失败", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return ok;
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(1));
+            var result = await _oauth.LoginAsync(cts.Token);
+            if (result == LoginResult.Success)
+            {
+                _log.Log("[settings] ChatGPT 登录成功");
+                _onStateChanged?.Invoke(); // 登录成功后让静止画面立即用登录态重译
+                return true;
+            }
+            if (result == LoginResult.Cancelled)
+            {
+                // 等待 1 分钟内未收到浏览器回调（关页/未完成，二者无法区分）。不弹框，只记详细日志指引重试。
+                _log.Log("[settings] ChatGPT 登录未完成：等待 1 分钟内未收到浏览器回调（用户可能关闭了授权页，或未在时限内完成授权）。如需登录，重新点「订阅登录」会再次打开授权页。");
+                return false;
+            }
+            _log.Log("[settings] ChatGPT 登录失败（可能：端口 1455 被占用、网络问题，或授权页被拒）");
+            MessageBox.Show(this, "ChatGPT 登录失败（可能：端口 1455 被占用、网络问题，或授权页被拒）。请重试；详情见日志。",
+                "登录失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
         }
         catch (Exception ex)
         {
@@ -697,12 +832,18 @@ public partial class SettingsWindow : Window
 
     // ── provider 池：拖动排序 ────────────────────────────────────────────
 
+    /// <summary>拖拽源＝光标下的行。用隧道事件 PreviewMouseLeftButtonDown 启动：冒泡事件会被
+    /// ListViewItem 的选中逻辑抢先标记 Handled，导致列表级 handler 不跑、DoDragDrop 没启动。</summary>
     private void OnProviderListMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton != MouseButton.Left || ProviderListView.SelectedItem is not ProviderRow) return;
-        // 点在行内按钮（如"配置…"）上时不启动拖动：DoDragDrop 的模态循环会吞掉按钮的 Click，对应页面就打不开了
-        if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null) return;
-        DragDrop.DoDragDrop(ProviderListView, ProviderListView.SelectedItem, DragDropEffects.Move);
+        if (e.ChangedButton != MouseButton.Left) return;
+        var src = e.OriginalSource as DependencyObject;
+        // 点在行内按钮/勾选框/模型输入框上时不启动拖动：DoDragDrop 的模态循环会吞掉它们的 Click/Toggle/Focus，对应功能就用不了
+        if (FindAncestor<Button>(src) is not null || FindAncestor<CheckBox>(src) is not null || FindAncestor<TextBox>(src) is not null) return;
+        // 直接抓光标下的行作为拖拽源：不必先选中再拖
+        if (FindAncestor<ListViewItem>(src)?.DataContext is not ProviderRow row) return;
+        ProviderListView.SelectedItem = row;
+        DragDrop.DoDragDrop(ProviderListView, row, DragDropEffects.Move);
     }
 
     private void OnProviderListDragOver(object sender, DragEventArgs e)
@@ -720,7 +861,12 @@ public partial class SettingsWindow : Window
         e.Handled = true;
     }
 
-    private void OnProviderListDrop(object sender, DragEventArgs e) => e.Handled = true;
+    private void OnProviderListDrop(object sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        // 诊断级：拖拽排序改变 provider 优先级，只在 DEBUG 模式记（拖拽过程会高频触发 DragOver，业务级会刷屏）
+        _log.Debug($"[settings] provider 顺序已调整：{string.Join(" → ", _providerRows.Select(r => r.Name))}");
+    }
 
     /// <summary>从光标下的最深元素沿视觉树往上找最近的 ListViewItem。</summary>
     private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
@@ -731,17 +877,6 @@ public partial class SettingsWindow : Window
             node = VisualTreeHelper.GetParent(node);
         }
         return null;
-    }
-
-    private void OnResetProviderOrderClick(object sender, RoutedEventArgs e)
-    {
-        _providerRows.Clear();
-        foreach (var entry in TranslationSettings.DefaultProviders)
-        {
-            var (name, kind) = ProviderMeta(entry.Id);
-            _providerRows.Add(new ProviderRow { Id = entry.Id, Enabled = entry.Enabled, Name = name, Kind = kind });
-        }
-        RefreshProviderStatuses();
     }
 
     private void OnEditGlossaryClick(object sender, RoutedEventArgs e)
@@ -758,7 +893,11 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void OnEnterCalibrationClick(object sender, RoutedEventArgs e) => _openCalibration();
+    private void OnEnterCalibrationClick(object sender, RoutedEventArgs e)
+    {
+        _log.Log("[settings] 进入区域校准");
+        _openCalibration(); // 具体能否校准/结果由 App 的 OpenCalibration 记日志
+    }
 
     // ── 热键录制/重绑 ────────────────────────────────────────────────────
 
@@ -820,6 +959,7 @@ public partial class SettingsWindow : Window
 
         _holder.Current = _holder.Current with { Hotkeys = prospective };
         SaveHotkeys();
+        _log.Log($"[settings] 热键已重绑：{FuncLabel(func)} = {FormatHotkey(binding)}");
         StopRecording();
     }
 
@@ -845,12 +985,14 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void OnResetHotkeysClick(object sender, RoutedEventArgs e)
+    /// <summary>热键恢复默认：即时重绑 + 写盘 + 写回 Holder（热键是活绑定的，不经确定/取消）。</summary>
+    private void ResetHotkeysToDefaults()
     {
         _hotkeyService.ResetToDefaults(HotkeyDefaults.Map);
         _holder.Current = _holder.Current with { Hotkeys = HotkeyDefaults.Map };
         SaveHotkeys();
         LoadHotkeyList(_holder.Current.Hotkeys);
+        _log.Log("[settings] 热键已恢复默认");
     }
 
     private void SaveHotkeys()
@@ -877,9 +1019,165 @@ public partial class SettingsWindow : Window
             BackplateValueText.Text = e.NewValue.ToString("P0");
     }
 
-    // ── 应用/确定/取消 ───────────────────────────────────────────────────
+    /// <summary>调色板选中态：当前被选中的色块（蓝框标示）。null＝未选。</summary>
+    private Border? _selectedFontSwatch;
+    /// <summary>色块默认边框（未选中）。</summary>
+    private static readonly Brush SwatchDefaultBrush = new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80));
+    /// <summary>色块选中边框（蓝）。</summary>
+    private static readonly Brush SwatchSelectedBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD7));
 
-    private void OnApplyClick(object sender, RoutedEventArgs e) => ApplyChanges();
+    /// <summary>点色块选色：清旧框、给新块画蓝框。（Border 无 Click 事件，用 MouseLeftButtonUp）</summary>
+    private void OnFontColorSwatchClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border swatch) return;
+        ClearFontSwatchSelection();
+        _selectedFontSwatch = swatch;
+        swatch.BorderBrush = SwatchSelectedBrush;
+        swatch.BorderThickness = new Thickness(2);
+    }
+
+    /// <summary>清掉当前选中色块的蓝框（还原默认灰框）。</summary>
+    private void ClearFontSwatchSelection()
+    {
+        if (_selectedFontSwatch is not null)
+        {
+            _selectedFontSwatch.BorderBrush = SwatchDefaultBrush;
+            _selectedFontSwatch.BorderThickness = new Thickness(1);
+            _selectedFontSwatch = null;
+        }
+    }
+
+    /// <summary>把设置里存的字体颜色选到调色板对应色块。按 Tag（真实 hex）匹配，
+    /// 无匹配项（如老配置里的非法值）则不选中，由 <see cref="SelectedFontColor"/> 兜底回默认。</summary>
+    private void SelectFontColor(string colorName)
+    {
+        if (FontColorPalette is null) return;
+        ClearFontSwatchSelection();
+        foreach (var child in FontColorPalette.Children)
+        {
+            if (child is Border b && string.Equals(b.Tag as string, colorName, StringComparison.OrdinalIgnoreCase))
+            {
+                b.BorderBrush = SwatchSelectedBrush;
+                b.BorderThickness = new Thickness(2);
+                _selectedFontSwatch = b;
+                return;
+            }
+        }
+    }
+
+    /// <summary>读调色板当前选中色块的 Tag（真实色值）；未选返回 null（由调用方兜底）。</summary>
+    private string? SelectedFontColor() => _selectedFontSwatch?.Tag as string;
+
+    // ── 恢复默认 / 确定 / 取消 ───────────────────────────────────────────
+
+    /// <summary>按当前页签恢复该页默认值。日志/关于页不显示此按钮（见 OnTabSelectionChanged）。</summary>
+    /// <summary>把"恢复默认"按钮左缘对齐到内容区（GroupBox）左缘。
+    /// 按钮贴在底栏左缘（x=窗口边距），而 GroupBox 在标签栏右侧（x=边距+标签栏宽+内容边距8），
+    /// 故给按钮补 标签栏宽+8 的左边距。标签栏宽在运行时量出（视觉树里 IsItemsHost 容器）。</summary>
+    private void AlignRestoreButtonWithContent()
+    {
+        if (RestoreDefaultsButton is null) return;
+        double tabStrip = MeasureTabStripWidth(PagesTab);
+        RestoreDefaultsButton.Margin = new Thickness(tabStrip + 8, 0, 8, 0);
+    }
+
+    /// <summary>递归找 TabControl 里 IsItemsHost 的 Panel（标签栏，TabPanel 派生自它），返回其宽；找不到返回 0。</summary>
+    private static double MeasureTabStripWidth(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is Panel p && p.IsItemsHost)
+                return p.ActualWidth;
+            double w = MeasureTabStripWidth(child);
+            if (w > 0) return w;
+        }
+        return 0;
+    }
+
+    private void OnRestoreDefaultsClick(object sender, RoutedEventArgs e)
+    {
+        if (PagesTab.SelectedItem is not TabItem item) return;
+        string page = item.Header?.ToString() ?? "";
+        if (MessageBox.Show(this, $"确定将「{page}」页恢复为默认值？", "恢复默认",
+                MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
+        RestorePageDefaults(page);
+    }
+
+    /// <summary>切页时控制"恢复默认"按钮显隐：日志/关于页无默认值可恢复，隐藏。</summary>
+    private void OnTabSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (RestoreDefaultsButton is null) return;
+        if (PagesTab.SelectedItem is not TabItem item) return;
+        string page = item.Header?.ToString() ?? "";
+        RestoreDefaultsButton.Visibility = page is "日志" or "关于" ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>按页名恢复该页默认值。表单页（常规/翻译/OCR/外观）只重置控件，需点「确定」才写盘；
+    /// 热键即时重绑、区域即时落盘（二者本就不经确定/取消）。</summary>
+    private void RestorePageDefaults(string page)
+    {
+        _log.Log($"[settings] 恢复「{page}」页默认值");
+        var d = new AppSettings(); // 全部默认值
+        switch (page)
+        {
+            case "常规":
+                TargetProcessBox.Text = d.General.TargetProcess;
+                AutoStartCheck.IsChecked = d.General.AutoStart;
+                AutoTranslateCheck.IsChecked = d.General.AutoTranslateOnLaunch;
+                DebugModeCheck.IsChecked = d.General.DebugMode;
+                break;
+            case "翻译":
+                LoadProviderPool(d.Translation); // 含 LLM 行的模型名重置
+                TranslateChatCheck.IsChecked = d.Translation.TranslateChat;
+                TranslateRoomNameCheck.IsChecked = d.Translation.TranslateRoomName;
+                TranslateMapInfoCheck.IsChecked = d.Translation.TranslateMapInfo;
+                TranslatePlayerIdCheck.IsChecked = d.Translation.TranslatePlayerId;
+                break;
+            case "识别":
+                SceneDetectPollBox.Text = d.Ocr.SceneDetectPollMs.ToString();
+                TranslatePollBox.Text = d.Ocr.TranslatePollMs.ToString();
+                break;
+            case "区域":
+                RestoreRegionDefaults();
+                break;
+            case "热键":
+                ResetHotkeysToDefaults();
+                break;
+            case "外观":
+                FontFamilyBox.Text = d.Appearance.FontFamily;
+                FontSizeBox.Text = d.Appearance.FontSize.ToString();
+                SelectFontColor(d.Appearance.FontColor);
+                OpacitySlider.Value = d.Appearance.Opacity;
+                BackplateSlider.Value = d.Appearance.BackplateOpacity;
+                break;
+        }
+    }
+
+    /// <summary>区域页恢复默认：删除全部用户自定义区域（rois.json 清空），并恢复出厂预设
+    /// （删掉覆盖层文件即恢复出厂值）。与单个删除不同，这里是一次性全清，需用户确认后才执行。</summary>
+    private void RestoreRegionDefaults()
+    {
+        try
+        {
+            RoiStore.Save(new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>()), _roisJsonPath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"删除用户区域失败：{ex.Message}", "恢复默认", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        try
+        {
+            if (File.Exists(_layoutOverridesPath)) File.Delete(_layoutOverridesPath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"恢复预设出厂值失败：{ex.Message}", "恢复默认", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        ReloadLayoutStore();
+        LoadRoiList();
+        _onRoisChanged?.Invoke();
+    }
 
     private void OnOkClick(object sender, RoutedEventArgs e)
     {
@@ -896,6 +1194,7 @@ public partial class SettingsWindow : Window
         try
         {
             SettingsStore.Save(settings, _settingsPath);
+            _log.Log("[settings] 设置已保存（settings.json）");
         }
         catch (Exception ex)
         {
@@ -915,21 +1214,26 @@ public partial class SettingsWindow : Window
     {
         var original = _holder.Current;
 
+        // StartMinimized 不再有 UI 控件（恒为真，程序无主窗口），沿用当前值不覆盖。
         var general = original.General with
         {
             TargetProcess = OrDefault(TargetProcessBox.Text, original.General.TargetProcess),
             AutoStart = AutoStartCheck.IsChecked == true,
-            StartMinimized = StartMinimizedCheck.IsChecked == true,
             AutoTranslateOnLaunch = AutoTranslateCheck.IsChecked == true,
             DebugMode = DebugModeCheck.IsChecked == true,
         };
 
+        // 模型名从对应行读取（ChatGPT/DashScope/OpenAI API 行的 Model 字段；行缺失时用当前值兜底）
+        string chatGptModel = OrDefault(_providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.ChatGpt)?.Model, original.Translation.ChatGptModel);
+        string dashScopeModel = OrDefault(_providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.DashScope)?.Model, original.Translation.DashScopeModel);
+        string openAiApiModel = OrDefault(_providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.OpenAiApi)?.Model, original.Translation.OpenAiApiModel);
         var translation = original.Translation with
         {
             // 池的顺序 + 每行启用态直接回写。拖动排序、勾选/取消都落在这里。
             Providers = _providerRows.Select(r => new TranslationProviderEntry(r.Id, r.Enabled)).ToList(),
-            DashScopeModel = OrDefault(DashScopeModelBox.Text, original.Translation.DashScopeModel),
-            ChatGptModel = OrDefault(ChatGptModelBox.Text, original.Translation.ChatGptModel),
+            DashScopeModel = dashScopeModel,
+            ChatGptModel = chatGptModel,
+            OpenAiApiModel = openAiApiModel,
             TranslateChat = TranslateChatCheck.IsChecked == true,
             TranslateRoomName = TranslateRoomNameCheck.IsChecked == true,
             TranslateMapInfo = TranslateMapInfoCheck.IsChecked == true,
@@ -946,13 +1250,15 @@ public partial class SettingsWindow : Window
         {
             FontFamily = OrDefault(FontFamilyBox.Text, original.Appearance.FontFamily),
             FontSize = ParseIntOr(FontSizeBox.Text, original.Appearance.FontSize),
+            FontColor = SelectedFontColor() ?? original.Appearance.FontColor,
             Opacity = OpacitySlider.Value,
             BackplateOpacity = BackplateSlider.Value,
-            ShowOriginalAndTranslation = BothRadio.IsChecked == true,
+            // 显示模式已移除，恒为"仅译文"（ShowOriginalAndTranslation 保持 false）
+            ShowOriginalAndTranslation = false,
         };
 
-        // Hotkeys：录制/重绑走 OnRecordKeyDown/OnResetHotkeysClick 各自即时 Rebind+Save+写回 Holder，
-        // 不经由本页应用/确定/取消——with 未显式覆盖 Hotkeys，故沿用 original(=当前 Holder，天然包含最新重绑结果)。
+        // Hotkeys：录制/重绑/恢复默认走 OnRecordKeyDown/ResetHotkeysToDefaults 各自即时 Rebind+Save+写回 Holder，
+        // 不经由本页确定/取消——with 未显式覆盖 Hotkeys，故沿用 original(=当前 Holder，天然包含最新重绑结果)。
         return original with { General = general, Translation = translation, Ocr = ocr, Appearance = appearance };
     }
 

@@ -84,7 +84,7 @@ public partial class App : Application
         string roisPath = Path.Combine(Path.GetDirectoryName(settingsPath)!, "rois.json");
         string legacyRois = Path.Combine(baseDir, "rois.json");
         if (!File.Exists(roisPath) && File.Exists(legacyRois))
-            try { File.Copy(legacyRois, roisPath); } catch { /* 迁移失败则按无校准处理，F10 重建即可 */ }
+            try { File.Copy(legacyRois, roisPath); } catch { /* 迁移失败则按无校准处理，Ctrl+F9 重建即可 */ }
 
         // 场景识别参考（两层，故意分文件）：
         //  出厂层 exe 旁 scene-refs.json，由 tools/SceneRefGen 生成，带 sha256 校验，程序只读；
@@ -100,9 +100,13 @@ public partial class App : Application
             Path.Combine(baseDir, LayoutPresetStore.DefaultFileName),
             Path.Combine(Path.GetDirectoryName(roisPath)!, LayoutPresetStore.OverridesFileName)));
 
-        builder.Services.AddSingleton<SecretStore>();
+        // 注入 FileLogger：secrets.dat 读/写失败、OAuth 登录/刷新失败这些"静默吞异常"点从此有痕可查。
+        builder.Services.AddSingleton(sp => new SecretStore(sp.GetRequiredService<FileLogger>()));
         builder.Services.AddSingleton(new HttpClient());
-        builder.Services.AddSingleton<OpenAiOAuth>();
+        builder.Services.AddSingleton(sp => new OpenAiOAuth(
+            sp.GetRequiredService<SecretStore>(),
+            sp.GetRequiredService<HttpClient>(),
+            sp.GetRequiredService<FileLogger>()));
         builder.Services.AddSingleton<ITokenSource>(sp => sp.GetRequiredService<OpenAiOAuth>());
         // 可变，托盘切引擎改 .Current；启动时从磁盘加载，防 Save-without-Load。
         builder.Services.AddSingleton(new SettingsHolder { Current = SettingsStore.Load(settingsPath) });
@@ -118,13 +122,19 @@ public partial class App : Application
             sp.GetRequiredService<OpenAiCompatibleChatClient>(),
             () => sp.GetRequiredService<SettingsHolder>().Current.Translation.DashScopeModel,
             () => sp.GetRequiredService<SecretStore>().Load().DashScopeApiKey)); // 第三个参数供 GetStatus 判 key 是否已配
+        // OpenAI API Key 模式：与 DashScope 同款 OpenAiCompatibleChatClient，仅 baseUrl 指向官方 api.openai.com/v1。
+        // client 内联在此（不另注册单例），否则 GetRequiredService<OpenAiCompatibleChatClient> 会二义。
+        builder.Services.AddSingleton<ITranslationProvider>(sp => new OpenAiApiProvider(
+            new OpenAiCompatibleChatClient(
+                sp.GetRequiredService<HttpClient>(),
+                "https://api.openai.com/v1",
+                () => sp.GetRequiredService<SecretStore>().Load().OpenAiApiKey),
+            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.OpenAiApiModel,
+            () => sp.GetRequiredService<SecretStore>().Load().OpenAiApiKey)); // 第三个参数供 GetStatus 判 key 是否已配
         builder.Services.AddSingleton<ITranslationProvider>(sp => new ChatGptSubscriptionProvider(
             sp.GetRequiredService<CodexResponsesClient>(),
             sp.GetRequiredService<ITokenSource>(),
             () => sp.GetRequiredService<SettingsHolder>().Current.Translation.ChatGptModel));
-        builder.Services.AddSingleton<ITranslationProvider>(sp => new TencentMtProvider(
-            sp.GetRequiredService<HttpClient>(),
-            () => { var t = sp.GetRequiredService<SecretStore>().Load().Tencent; return (t.SecretId, t.SecretKey); }));
         builder.Services.AddSingleton<ITranslationProvider>(sp => new AliyunMtProvider(
             sp.GetRequiredService<HttpClient>(),
             () => { var a = sp.GetRequiredService<SecretStore>().Load().Aliyun; return (a.AccessKeyId, a.AccessKeySecret); }));
@@ -224,7 +234,7 @@ public partial class App : Application
                 ProbeStart.Ok => "已开启",
                 ProbeStart.WaitingForWindow => $"未找到游戏窗口（进程 {info.ProcessName}），转入等待：窗口出现后自动开始翻译（游戏需窗口化/无边框）",
                 ProbeStart.CaptureUnsupported => "无法开启：系统不支持窗口捕获（需 Win10 1803+，且非 WSL）",
-                ProbeStart.NoRoi => "尚未校准区域：按 F10 框选游戏聊天/房间区域后再按 F9",
+                ProbeStart.NoRoi => "尚未校准区域：按 Ctrl+F9 框选游戏聊天/房间区域后再按 F9",
                 ProbeStart.WindowNotFound => $"{info.ProcessName} 窗口查找异常：请确认游戏已以窗口化/无边框模式启动",
                 ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见日志",
                 _ => "无法开启",
@@ -260,7 +270,7 @@ public partial class App : Application
                       "请确认 exe 旁存在 scene-refs.json（或重跑 tools/SceneRefGen 生成）");
         }
 
-        // 校准窗口：单例（已开则激活），F10/托盘"进入校准…"打开。窗口关闭后置空以便下次可重新 new（WPF Window 一次性）。
+        // 校准窗口：单例（已开则激活），Ctrl+F9/托盘"进入校准…"打开。窗口关闭后置空以便下次可重新 new（WPF Window 一次性）。
         Calibration.CalibrationWindow? calibrationWindow = null;
         void OpenCalibration()
         {
@@ -277,12 +287,12 @@ public partial class App : Application
             }
             if (NativeMethods.IsIconic(hwnd))
             {
-                log.Info("[app] 无法校准：游戏处于最小化状态，请先还原窗口再按 F10。");
+                log.Info("[app] 无法校准：游戏处于最小化状态，请先还原窗口再按 Ctrl+F9。");
                 return;
             }
             if (NativeMethods.GetForegroundWindow() != hwnd)
             {
-                log.Info("[app] 无法校准：游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 F10。");
+                log.Info("[app] 无法校准：游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 Ctrl+F9。");
                 return;
             }
 
@@ -341,7 +351,7 @@ public partial class App : Application
             log.Info($"[app] DEBUG 模式: {(newVal ? "开（全量诊断日志+面板）" : "关（仅业务日志）")}");
         }
 
-        // 复制诊断快照（Ctrl+F6）：把面板同源文本拷到剪贴板，无需面板可点/不抢焦点。
+        // 复制诊断快照（Ctrl+F8）：把面板同源文本拷到剪贴板，无需面板可点/不抢焦点。
         void CopyDebug()
         {
             try { Clipboard.SetText(probe.GetDebugSnapshot()); log.Info("[app] 诊断快照已复制到剪贴板（Ctrl+F8）"); }

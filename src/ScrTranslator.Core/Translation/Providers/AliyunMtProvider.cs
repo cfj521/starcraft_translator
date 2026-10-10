@@ -30,14 +30,15 @@ public sealed class AliyunMtProvider : ITranslationProvider
     {
         if (lines.Count == 0) return Array.Empty<string>();
         var (id, key) = _creds();
-        var source = string.Join("\n", lines); // 阿里云 Translate 单文本；换行分隔、按行拆回
+        var source = string.Join("\n", lines); // 阿里云 TranslateGeneral 单文本；换行分隔、按行拆回
         var signed = AliyunMtSigner.Sign(new Dictionary<string, string>
         {
-            ["Action"] = "Translate",
+            ["Action"] = "TranslateGeneral",
             ["SourceText"] = source,
             ["SourceLanguage"] = "ko",
             ["TargetLanguage"] = "zh",
             ["FormatType"] = "text",
+            ["Scene"] = "general",
         }, id, key);
 
         string query = string.Join("&", signed.Select(kv => $"{AliyunMtSigner.PercentEncode(kv.Key)}={AliyunMtSigner.PercentEncode(kv.Value)}"));
@@ -56,13 +57,13 @@ public sealed class AliyunMtProvider : ITranslationProvider
         return split.Length == lines.Count ? split : lines; // 行数对不上 → 整批回落原文
     }
 
-    /// <summary>解析成功响应的 Translated 字段。异常/缺失返回 null。</summary>
+    /// <summary>解析成功响应的 Data.Translated 字段（RPC TranslateGeneral 返回）。异常/缺失返回 null。</summary>
     internal static string? ParseResponse(string body)
     {
         try
         {
             using var doc = JsonDocument.Parse(body);
-            return doc.RootElement.GetProperty("Translated").GetString();
+            return doc.RootElement.GetProperty("Data").GetProperty("Translated").GetString();
         }
         catch (Exception) { return null; }
     }

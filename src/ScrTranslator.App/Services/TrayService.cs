@@ -31,10 +31,10 @@ public sealed class TrayService : IDisposable
         _probeItem = new MenuItem { Header = "开启翻译 F9" };
         _probeItem.Click += (_, _) => ToggleProbe?.Invoke();
 
-        var calibrateItem = new MenuItem { Header = "区域校准设置 F10" };
+        var calibrateItem = new MenuItem { Header = "区域校准设置 Ctrl+F9" };
         calibrateItem.Click += (_, _) => OpenCalibration?.Invoke();
 
-        var settingsItem = new MenuItem { Header = "设置 F11" };
+        var settingsItem = new MenuItem { Header = "设置 F10" };
         settingsItem.Click += (_, _) => OpenSettings?.Invoke();
 
         var exitItem = new MenuItem { Header = "退出" };

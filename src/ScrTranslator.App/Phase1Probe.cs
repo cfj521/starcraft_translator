@@ -82,7 +82,7 @@ public sealed class Phase1Probe : IDisposable
     private long _lastFrameCount; private int _zeroFrameTicks; private bool _noFrameNotified;
     private int _processed; private int _lastProcessed; private int _stallTicks; private bool _stallNotified;
 
-    // ── DEBUG 面板 + 窗口显隐（F6/常规页开关 + 游戏前台门控，250ms 刷新）──
+    // ── DEBUG 面板 + 窗口显隐（F8/常规页开关 + 游戏前台门控，250ms 刷新）──
     private readonly DebugWindow _debug;
     private DispatcherTimer? _debugTimer;
     private int _glossaryCount;
@@ -390,7 +390,7 @@ public sealed class Phase1Probe : IDisposable
     /// 调试窗口显示时顺带刷新文本。</summary>
     private void ApplyWindowVisibility()
     {
-        // 诊断级日志开关与 DEBUG 面板同步（单一真源=General.DebugMode，覆盖 F6/配置页/托盘所有切换路径）。
+        // 诊断级日志开关与 DEBUG 面板同步（单一真源=General.DebugMode，覆盖 F8/配置页/托盘所有切换路径）。
         _log.DebugEnabled = _settings.Current.General.DebugMode;
         bool gameActive = IsGameForeground();
         var overlayTarget = gameActive && _overlay.EnabledByUser ? System.Windows.Visibility.Visible : System.Windows.Visibility.Hidden;
@@ -409,7 +409,7 @@ public sealed class Phase1Probe : IDisposable
         return game != IntPtr.Zero && NativeMethods.GetForegroundWindow() == game;
     }
 
-    /// <summary>当前诊断快照文本（供 Ctrl+F6 复制到剪贴板；与面板同源）。</summary>
+    /// <summary>当前诊断快照文本（供 Ctrl+F8 复制到剪贴板；与面板同源）。</summary>
     public string GetDebugSnapshot() => BuildDebugText();
 
     private string BuildDebugText()
