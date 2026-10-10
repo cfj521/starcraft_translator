@@ -315,8 +315,8 @@ public partial class SettingsWindow : Window
         _ => (id, "未知"),
     };
 
-    /// <summary>从密钥/OAuth 实时算出每行状态（可用/未配置/未登录）。额度耗尽的判定在 provider 运行时做，这里只反映凭据态。
-    /// ChatGPT 行的登录账号不直接显示在状态列，改放「订阅登录」按钮的 tooltip（已登录后显示，未登录为空）。</summary>
+    /// <summary>从密钥/OAuth 实时算出每行状态（已配置/未配置/未登录）。只反映「凭据是否填了」，**不代表密钥有效**——
+    /// 密钥不对时该 provider 运行时翻译失败，报错记日志，编排器跳到池内下一个。ChatGPT 行的登录账号不直接显示在状态列，改放「订阅登录」按钮的 tooltip（已登录后显示，未登录为空）。</summary>
     private void RefreshProviderStatuses()
     {
         var sec = _secretStore.Load();
@@ -325,10 +325,10 @@ public partial class SettingsWindow : Window
         {
             row.Status = row.Id switch
             {
-                TranslationProviderEntry.Aliyun => sec.Aliyun.IsSet ? "可用" : "未配置",
+                TranslationProviderEntry.Aliyun => sec.Aliyun.IsSet ? "已配置" : "未配置",
                 TranslationProviderEntry.ChatGpt => loggedIn ? "已登录" : "未登录",
-                TranslationProviderEntry.DashScope => string.IsNullOrWhiteSpace(sec.DashScopeApiKey) ? "未配置" : "可用",
-                TranslationProviderEntry.OpenAiApi => string.IsNullOrWhiteSpace(sec.OpenAiApiKey) ? "未配置" : "可用",
+                TranslationProviderEntry.DashScope => string.IsNullOrWhiteSpace(sec.DashScopeApiKey) ? "未配置" : "已配置",
+                TranslationProviderEntry.OpenAiApi => string.IsNullOrWhiteSpace(sec.OpenAiApiKey) ? "未配置" : "已配置",
                 _ => "—",
             };
             // 只有「订阅登录」按钮（ChatGPT 行）的 tooltip 有内容（登录账号）；其余行的 tooltip 置 null——
