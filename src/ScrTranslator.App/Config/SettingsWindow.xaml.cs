@@ -893,6 +893,13 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>点「关于」页的 GitHub 仓库超链接 → 用默认浏览器打开仓库首页。</summary>
+    private void OnRepoLinkNavigate(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
+    {
+        try { Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true }); }
+        catch { /* 无默认浏览器等异常时静默 */ }
+    }
+
     private void OnEnterCalibrationClick(object sender, RoutedEventArgs e)
     {
         _log.Log("[settings] 进入区域校准");

@@ -75,16 +75,16 @@
 ```
 
 ### 3.2 翻译 Translation  ★（含"翻译玩家 ID"）
-> 实现对齐（Phase 2–6）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = **provider 池列表**（4 provider：腾讯云/阿里云免费机器翻译 ＋ OpenAI 订阅 / 阿里云 DashScope LLM），**可拖拽排序、每行启用/禁用**，从上到下取第一个「启用且可用」，不可用或额度耗尽跳下一个（先免费后 LLM）。**单级**。密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
+> 实现对齐（Phase 2–6）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = **provider 池列表**（4 provider：阿里云免费机器翻译 ＋ OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM），**可拖拽排序、每行启用/禁用**，从上到下取第一个「启用且可用」，不可用或额度耗尽跳下一个（先免费后 LLM）。**单级**。密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
 
 ```
 Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密钥/登录）
-  [✓] 腾讯云机器翻译   [免费]   可用          [ 配置… ]
   [✓] 阿里云机器翻译   [免费]   未配置        [ 配置… ]
   [✓] OpenAI LLM(ChatGPT 订阅)  [LLM]  未登录    [ 配置… ]
   [✓] 阿里云 LLM(DashScope)  [LLM]  未配置      [ 配置… ]
+  [✓] OpenAI LLM(API)  [LLM]  未配置      [ 配置… ]
         [ 恢复默认顺序 ]
-  模型            DashScope [ qwen-flash ]   ChatGPT [ gpt-5 ]
+  模型            DashScope [ qwen3.8-flash ]   ChatGPT [ gpt-6-luna ]   OpenAI API [ gpt-6-luna ]
 
 内容范围
   [✓] 翻译聊天
@@ -280,9 +280,10 @@ class AppSettings {
 }
 
 class TranslationSettings {
-    IReadOnlyList<TranslationProviderEntry> Providers;  // 有序 provider 池（默认 腾讯→阿里云→OpenAI LLM→阿里云 LLM；原 TranslationEngine Active 已移除）
-    string DashScopeModel;        // 默认 qwen-flash
-    string ChatGptModel;          // 默认 gpt-5
+    IReadOnlyList<TranslationProviderEntry> Providers;  // 有序 provider 池（默认 阿里云→OpenAI LLM(订阅)→阿里云 LLM(DashScope)→OpenAI LLM(API)；原 TranslationEngine Active 已移除）
+    string DashScopeModel;        // 默认 qwen3.8-flash
+    string ChatGptModel;          // 默认 gpt-6-luna
+    string OpenAiApiModel;        // 默认 gpt-6-luna
     int TimeoutSeconds;           // 整轮(快+质量共用)超时，默认 10
 
     bool TranslateChat   = true;
