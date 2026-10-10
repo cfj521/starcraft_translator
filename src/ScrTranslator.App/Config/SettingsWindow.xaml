@@ -58,7 +58,7 @@
                         </GroupBox>
                         <GroupBox Header="调试">
                             <StackPanel>
-                                <CheckBox x:Name="DebugModeCheck" Content="DEBUG 模式：左上角显示诊断面板（场景识别/帧/ROI/翻译状态）（F6）" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="DebugModeCheck" Content="DEBUG 模式：左上角显示诊断面板（场景识别/帧/ROI/翻译状态）（F8）" Margin="0,2,0,2"/>
                             </StackPanel>
                         </GroupBox>
                         <GroupBox Header="语言">
@@ -75,19 +75,38 @@
             <TabItem Header="翻译">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
-                        <GroupBox Header="引擎">
+                        <GroupBox Header="Provider 池（拖动调整顺序；从上到下取第一个「启用且可用」的，不可用/额度耗尽/翻译失败就跳下一个）">
                             <StackPanel>
+                                <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,6"
+                                           Text="默认顺序＝先免费机器翻译、后 LLM。勾选＝启用，拖动手柄＝调整优先级；某行不可用或额度用尽时自动跳到下一行。"/>
+                                <ListView x:Name="ProviderListView" Height="172" Margin="0,0,0,6"
+                                          AllowDrop="True" DragOver="OnProviderListDragOver" Drop="OnProviderListDrop"
+                                          MouseLeftButtonDown="OnProviderListMouseDown">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <TextBlock Text="⠿" Foreground="Gray" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                    <Border CornerRadius="3" Background="#F0F0F0" Padding="6,1" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Kind}" Foreground="Gray"/>
+                                                    </Border>
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="2" Text="{Binding Status}" Foreground="#B8860B" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                                                <Button Grid.Column="3" Content="配置…" Width="64" Tag="{Binding Id}" Click="OnProviderConfigureClick"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
                                 <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="主引擎" Style="{StaticResource RowLabel}"/>
-                                    <RadioButton x:Name="DashScopeEngineRadio" GroupName="Engine" Content="DashScope（阿里云）" Margin="0,0,16,0" VerticalAlignment="Center"/>
-                                    <RadioButton x:Name="ChatGptEngineRadio" GroupName="Engine" Content="ChatGPT（订阅）" VerticalAlignment="Center"/>
-                                </StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <Button x:Name="DashScopeKeyButton" Content="设置阿里云 Key…" Width="140" Click="OnSetDashScopeKeyClick"/>
-                                </StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <Button x:Name="ChatGptLoginButton" Content="登录 ChatGPT…" Width="140" Click="OnLoginChatGptClick"/>
-                                    <TextBlock x:Name="ChatGptStatusText" Text="未登录" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    <Button x:Name="ResetProviderOrderButton" Content="恢复默认顺序" Width="120" Click="OnResetProviderOrderClick"/>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="DashScope 模型" Style="{StaticResource RowLabel}"/>
@@ -105,9 +124,9 @@
                                 <CheckBox x:Name="TranslateChatCheck" Content="翻译聊天" Margin="0,2,0,2"/>
                                 <CheckBox x:Name="TranslateRoomNameCheck" Content="翻译房间名" Margin="0,2,0,2"/>
                                 <CheckBox x:Name="TranslateMapInfoCheck" Content="翻译地图信息" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="TranslatePlayerIdCheck" Content="翻译玩家 ID（默认关，F7）" Margin="0,2,0,2"/>
+                                <CheckBox x:Name="TranslatePlayerIdCheck" Content="翻译玩家 ID（默认关）" Margin="0,2,0,2"/>
                                 <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"
-                                           Text="ⓘ 玩家 ID 多为专有名词，通常不翻译。开启后&quot;房间名列表&quot;里的 ID 列也会被翻译。可用热键 F7 随时切换。"/>
+                                           Text="ⓘ 玩家 ID 多为专有名词，通常不翻译。开启后&quot;房间名列表&quot;里的 ID 列也会被翻译。"/>
                             </StackPanel>
                         </GroupBox>
 
@@ -165,7 +184,7 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock x:Name="RegionHintText" Text="尚未加载" VerticalAlignment="Center"/>
-                            <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准 (F8)" Click="OnEnterCalibrationClick"/>
+                            <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准 (F10)" Click="OnEnterCalibrationClick"/>
                         </Grid>
 
                         <Grid Margin="0,0,0,4">

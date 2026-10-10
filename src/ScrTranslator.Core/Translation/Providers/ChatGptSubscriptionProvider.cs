@@ -5,6 +5,10 @@ public sealed class ChatGptSubscriptionProvider : ITranslationProvider
     public ChatGptSubscriptionProvider(CodexResponsesClient client, ITokenSource tokens, Func<string> modelGetter)
     { _client = client; _tokens = tokens; _model = modelGetter; }
     public string Name => "chatgpt";
+    public ProviderStatus GetStatus() =>
+        _tokens.IsLoggedIn()
+            ? ProviderStatus.Ok()
+            : ProviderStatus.NoCreds("未登录 ChatGPT 订阅");
     public async Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> lines, TranslationContext ctx, CancellationToken ct)
     {
         if (lines.Count == 0) return Array.Empty<string>();

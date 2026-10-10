@@ -6,7 +6,11 @@ public class TranslationSettingsTests
     public void Default_HasSaneValues()
     {
         var s = TranslationSettings.Default;
-        Assert.Equal(TranslationEngine.DashScope, s.Active);
+        // 默认池顺序：腾讯云 → 阿里云 → OpenAI LLM → 阿里云LLM（先免费机器翻译、后 LLM）
+        Assert.Equal(new[] { TranslationProviderEntry.Tencent, TranslationProviderEntry.Aliyun,
+                             TranslationProviderEntry.ChatGpt, TranslationProviderEntry.DashScope },
+            s.Providers.Select(p => p.Id).ToArray());
+        Assert.All(s.Providers, p => Assert.True(p.Enabled));
         Assert.False(string.IsNullOrWhiteSpace(s.DashScopeModel));
         Assert.False(string.IsNullOrWhiteSpace(s.ChatGptModel));
         Assert.InRange(s.TimeoutSeconds, 5, 30);

@@ -22,6 +22,7 @@ public sealed class OpenAiOAuth : ITokenSource
         var t = _store.Load().OpenAi;
         return (!string.IsNullOrEmpty(t.AccessToken), t.Email, t.PlanType);
     }
+    public bool IsLoggedIn() => Status().loggedIn;
     public void Logout() { var d = _store.Load(); d.OpenAi = new OpenAiTokens(); _store.Save(d); }
 
     public async Task<(string, string)> GetAsync(CancellationToken ct)

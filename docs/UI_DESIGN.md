@@ -24,9 +24,9 @@
   SC:R Translator              ●  (图标: 绿=翻译开 / 灰=关)
   ─────────────────────────
   ▶ 翻译: 开启            (F9)        ← 点击切换 开/关
-  ▢ 悬浮层: 显示          (F10)
+  ▢ 悬浮层: 显示                        ← 点击切换 显/隐（纯托盘，无热键）
   ─────────────────────────
-  ✎ 进入校准…             (F8)
+  ✎ 进入校准…             (F10)
   ⚙ 配置…                 (Ctrl+F9)
   ─────────────────────────
   状态: 已连接 SC:R 窗口 (1920×1080)   ← 灰色，仅显示
@@ -75,21 +75,24 @@
 ```
 
 ### 3.2 翻译 Translation  ★（含"翻译玩家 ID"）
-> 实现对齐（Phase 2–4）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = 主引擎单选（DashScope / ChatGPT 订阅）**单活跃、单级**；密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
+> 实现对齐（Phase 2–6）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = **provider 池列表**（4 provider：腾讯云/阿里云免费机器翻译 ＋ OpenAI 订阅 / 阿里云 DashScope LLM），**可拖拽排序、每行启用/禁用**，从上到下取第一个「启用且可用」，不可用或额度耗尽跳下一个（先免费后 LLM）。**单级**。密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
 
 ```
-引擎（单活跃，托盘可快速切换）
-  主引擎          (•) DashScope（阿里云）  ( ) ChatGPT（订阅）
-                  [ 设置阿里 Key… ]        [ 登录 ChatGPT… ]
+Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密钥/登录）
+  [✓] 腾讯云机器翻译   [免费]   可用          [ 配置… ]
+  [✓] 阿里云机器翻译   [免费]   未配置        [ 配置… ]
+  [✓] OpenAI LLM(ChatGPT 订阅)  [LLM]  未登录    [ 配置… ]
+  [✓] 阿里云 LLM(DashScope)  [LLM]  未配置      [ 配置… ]
+        [ 恢复默认顺序 ]
   模型            DashScope [ qwen-flash ]   ChatGPT [ gpt-5 ]
 
-内容范围                                              ┌── 热键可绑
+内容范围
   [✓] 翻译聊天
   [✓] 翻译房间名
   [✓] 翻译地图信息
-  [ ] 翻译玩家 ID            (默认关闭)         (F7) ┘
+  [ ] 翻译玩家 ID            (默认关闭)   ← 纯配置项，无热键
         ⓘ 玩家 ID 多为专有名词，通常不翻译。开启后"房间名列表"
-          里的 ID 列也会被翻译。可用热键 F7 随时切换。
+          里的 ID 列也会被翻译。
 
 质量与省流
   [✓] 启用术语表 (星际黑话)        [ 编辑术语表… ]   ← 命中直出，无网络（始终启用）
@@ -155,15 +158,12 @@
 功能                     当前热键        操作
 ────────────────────────────────────────────
 开/关 翻译                F9            [ 修改 ]
-显/隐 悬浮层              F10           [ 修改 ]
-进入校准                  F8            [ 修改 ]
+进入校准                  F10           [ 修改 ]
 打开配置                  Ctrl+F9       [ 修改 ]
-切换"翻译玩家 ID"         F7            [ 修改 ]
-暂停/继续                 F11           [ 修改 ]
-切换 DEBUG 面板           F6            [ 修改 ]
+切换 DEBUG 面板           F8            [ 修改 ]
 复制诊断信息              Ctrl+F6       [ 修改 ]
-                                 [ 恢复默认热键 ]
-点[修改]后按下新组合键即可录制；冲突会高亮提示。
+                          [ 恢复默认热键 ]
+点[修改]后按下新组合键即可录制；冲突会高亮提示。可绑范围 F6–F12（可加 Ctrl/Alt/Shift）。
 ```
 
 ### 3.6 外观 Appearance
@@ -193,24 +193,22 @@
 | 功能 | 默认热键 | 说明 |
 |------|----------|------|
 | 开/关 翻译 | `F9` | 总开关，等于托盘"翻译" |
-| 显/隐 悬浮层 | `F10` | 临时隐藏译文看原画面 |
-| 进入校准 | `F8` | 切到校准窗口框选区域 |
+| 进入校准 | `F10` | 切到校准窗口框选区域 |
 | 打开配置 | `Ctrl+F9` | 打开配置窗口 |
-| **切换"翻译玩家 ID"** | `F7` | 直接开关 ID 翻译，无需进配置 |
-| 暂停/继续 | `F11` | 暂停捕获与翻译（省资源） |
-| 切换 DEBUG 面板 | `F6` | 左上角显示/隐藏诊断面板（场景识别/帧/ROI/翻译状态） |
+| 切换 DEBUG 面板 | `F8` | 左上角显示/隐藏诊断面板（场景识别/帧/ROI/翻译状态） |
 | 复制诊断信息 | `Ctrl+F6` | 把面板同源的诊断快照拷到剪贴板（面板纯展示、永久点击穿透，不抢焦点） |
 
 规则：
-- 热键可在 **3.5 热键** 页自定义；录制式绑定，检测冲突。
-- 与游戏自身快捷键尽量错开（SC:R 常用 F1–F4 编队，故默认用 F7–F11）。
-- 切换类热键触发后，托盘图标/悬浮层给短暂提示（如 "玩家ID翻译: 开"）。
+- 热键可在 **3.5 热键** 页自定义；录制式绑定，检测冲突。可绑范围 **F6–F12**（可加 Ctrl/Alt/Shift）。
+- 与游戏自身快捷键尽量错开（SC:R 常用 F1–F5 编队，故默认从 F8 起）。
+- 切换类热键触发后，托盘图标给短暂提示（如 "DEBUG 面板: 开"）。
+- 悬浮层显隐 / 翻译玩家 ID / 暂停 已改为纯配置项，不再占热键。
 
 ---
 
 ## 5. 校准窗口 Calibration
 
-### 5.0 进入前置（F8）
+### 5.0 进入前置（F10）
 
 校准窗是**半透明覆盖层**，且要靠抓屏做场景检测 —— 看不见游戏画面时框出来的东西全是凭空的。
 所以 `App.xaml.cs OpenCalibration()` 先挡一道，任一不满足就托盘气泡说明原因、**不进校准**：
@@ -218,8 +216,8 @@
 | 情况 | 提示 |
 |------|------|
 | 找不到目标进程窗口 | "未找到游戏窗口（进程 StarCraft）。请先启动 SC:R（窗口化/无边框）。" |
-| 游戏已最小化 | "游戏处于最小化状态，请先还原窗口再按 F8。" |
-| 游戏不是前台窗口 | "游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 F8。" |
+| 游戏已最小化 | "游戏处于最小化状态，请先还原窗口再按 F10。" |
+| 游戏不是前台窗口 | "游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 F10。" |
 
 ### 5.1 场景自己检测，不依赖 F9
 
@@ -266,7 +264,7 @@
 ## 6. 配置数据模型（与界面对应，实现对齐版）
 
 > 与代码一致：`src/ScrTranslator.Core/Settings/AppSettings.cs` + `Translation/TranslationSettings.cs` + `Roi/RoiModels.cs`。
-> **实际字段**（非早期设想）：无 `EngineMode(FastOnly/Hybrid/LlmOnly)`，也无两级开关——`Active` 单选、单级；密钥字段**不在** `AppSettings` 内（走 `SecretStore`/DPAPI）。
+> **实际字段**（非早期设想）：无 `EngineMode(FastOnly/Hybrid/LlmOnly)`，也无两级开关——**provider 池**（`Providers` 有序列表，可拖拽排序/启用禁用）、单级；原单活跃 `Active`（`TranslationEngine`）已改 provider 池；密钥字段**不在** `AppSettings` 内（走 `SecretStore`/DPAPI）。
 
 ```csharp
 class AppSettings {
@@ -274,7 +272,7 @@ class AppSettings {
     TranslationSettings Translation;
     OcrSettings Ocr;              // SceneDetectPollMs=200 / TranslatePollMs=500（两个正交节拍；旧 ChatPollMs/OtherPollMs 与预处理/灵敏度字段均已移除，见 §3.3 注）
     AppearanceSettings Appearance;// FontFamily / FontSize / Opacity / BackplateOpacity(文字底衬 0.8) / ShowOriginalAndTranslation
-    Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F7–F11/Ctrl+F9
+    Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F9/F10/Ctrl+F9/F8/Ctrl+F6
     // ROI 配置单独存 rois.json（RoiStore），按 场景 → 分辨率 bucket 分组，RoomList 可含列定义
 // 界面布局预设另有两层：出厂 layout-presets.json（exe 旁，只读，量测产物）
 //   + 覆盖层 %APPDATA%\ScrTranslator\layout-overrides.json（配置页改预设时落这里）
@@ -283,7 +281,7 @@ class AppSettings {
 }
 
 class TranslationSettings {
-    TranslationEngine Active;     // DashScope | ChatGpt（单活跃）
+    IReadOnlyList<TranslationProviderEntry> Providers;  // 有序 provider 池（默认 腾讯→阿里云→OpenAI LLM→阿里云 LLM；原 TranslationEngine Active 已移除）
     string DashScopeModel;        // 默认 qwen-flash
     string ChatGptModel;          // 默认 gpt-5
     int TimeoutSeconds;           // 整轮(快+质量共用)超时，默认 10
@@ -291,7 +289,7 @@ class TranslationSettings {
     bool TranslateChat   = true;
     bool TranslateRoomName = true;
     bool TranslateMapInfo  = true;
-    bool TranslatePlayerId = false;  // ★ 对应"翻译玩家ID"开关 / F7
+    bool TranslatePlayerId = false;  // ★ 对应"翻译玩家ID"开关（纯配置项，无热键）
 }
 ```
 

@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using ScrTranslator.App.Auth;
 using ScrTranslator.App.Capture;
 using ScrTranslator.App.Interop;
@@ -44,6 +45,8 @@ public partial class SettingsWindow : Window
     private string _layoutFactoryPath = "";
     private string _layoutOverridesPath = "";
     private readonly HotkeyService _hotkeyService;
+    /// <summary>provider 池的行（顺序即优先级）。拖动改顺序、勾选改启用；「应用/确定」时回写成 TranslationSettings.Providers。</summary>
+    private readonly System.Collections.ObjectModel.ObservableCollection<ProviderRow> _providerRows = new();
 
     /// <summary>区域表的一行。Preset=true 表示这是出厂/覆盖层预设（改它写 layout-overrides.json）；
     /// PresetPart 标明改的是预设的哪一块（chat / roomList），校准行为空串。</summary>
@@ -54,17 +57,28 @@ public partial class SettingsWindow : Window
                                     bool Preset, string Name, string TopLeft, string Size);
     private sealed record HotkeyRow(string Key, string Function, string Current);
 
+    /// <summary>provider 池的一行。Enabled/Status 走 INotifyPropertyChanged 让列表实时刷新。</summary>
+    private sealed class ProviderRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string Id { get; init; } = "";
+        public string Name { get; init; } = "";
+        public string Kind { get; init; } = "";
+        private bool _enabled = true;
+        private string _status = "";
+        public bool Enabled { get => _enabled; set { _enabled = value; OnChanged(nameof(Enabled)); } }
+        public string Status { get => _status; set { _status = value; OnChanged(nameof(Status)); } }
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        private void OnChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
+
     // 录制中的功能名；非 null 表示正在等待下一次按键组合。
     private string? _recordingFunc;
 
     private static readonly (string Key, string Label)[] HotkeyOrder =
     {
         ("ToggleTranslate", "开/关 翻译"),
-        ("ToggleOverlay", "显/隐 悬浮层"),
         ("Calibrate", "进入校准"),
         ("OpenConfig", "打开配置"),
-        ("TogglePlayerId", "切换“翻译玩家 ID”"),
-        ("TogglePause", "暂停/继续"),
         ("ToggleDebug", "切换 DEBUG 面板"),
         ("CopyDebug", "复制诊断信息"),
     };
@@ -134,15 +148,13 @@ public partial class SettingsWindow : Window
         DebugModeCheck.IsChecked = s.General.DebugMode;
         RefreshStatusText();
 
-        DashScopeEngineRadio.IsChecked = s.Translation.Active == TranslationEngine.DashScope;
-        ChatGptEngineRadio.IsChecked = s.Translation.Active == TranslationEngine.ChatGpt;
+        LoadProviderPool(s.Translation.Providers);
         DashScopeModelBox.Text = s.Translation.DashScopeModel;
         ChatGptModelBox.Text = s.Translation.ChatGptModel;
         TranslateChatCheck.IsChecked = s.Translation.TranslateChat;
         TranslateRoomNameCheck.IsChecked = s.Translation.TranslateRoomName;
         TranslateMapInfoCheck.IsChecked = s.Translation.TranslateMapInfo;
         TranslatePlayerIdCheck.IsChecked = s.Translation.TranslatePlayerId;
-        RefreshChatGptStatus();
 
         SceneDetectPollBox.Text = s.Ocr.SceneDetectPollMs.ToString();
         TranslatePollBox.Text = s.Ocr.TranslatePollMs.ToString();
@@ -169,10 +181,43 @@ public partial class SettingsWindow : Window
             : $"● 已连接 ({rect.Width}×{rect.Height})";
     }
 
-    private void RefreshChatGptStatus()
+    /// <summary>按 settings 里存的池顺序/启用态重建列表行，并刷新每行状态。</summary>
+    private void LoadProviderPool(IReadOnlyList<TranslationProviderEntry> providers)
     {
+        _providerRows.Clear();
+        foreach (var entry in providers)
+        {
+            var (name, kind) = ProviderMeta(entry.Id);
+            _providerRows.Add(new ProviderRow { Id = entry.Id, Enabled = entry.Enabled, Name = name, Kind = kind });
+        }
+        ProviderListView.ItemsSource = _providerRows;
+        RefreshProviderStatuses();
+    }
+
+    /// <summary>provider id → 展示名 + 类别（免费机器翻译 / LLM）。</summary>
+    private static (string Name, string Kind) ProviderMeta(string id) => id switch
+    {
+        TranslationProviderEntry.Tencent => ("腾讯云机器翻译", "免费"),
+        TranslationProviderEntry.Aliyun => ("阿里云机器翻译", "免费"),
+        TranslationProviderEntry.ChatGpt => ("OpenAI LLM（ChatGPT 订阅）", "LLM"),
+        TranslationProviderEntry.DashScope => ("阿里云 LLM（DashScope）", "LLM"),
+        _ => (id, "未知"),
+    };
+
+    /// <summary>从密钥/OAuth 实时算出每行状态（可用/未配置/未登录）。额度耗尽的判定在 provider 运行时做，这里只反映凭据态。</summary>
+    private void RefreshProviderStatuses()
+    {
+        var sec = _secretStore.Load();
         var (loggedIn, email, plan) = _oauth.Status();
-        ChatGptStatusText.Text = loggedIn ? $"已登录: {email}({plan})" : "未登录";
+        foreach (var row in _providerRows)
+            row.Status = row.Id switch
+            {
+                TranslationProviderEntry.Tencent => sec.Tencent.IsSet ? "可用" : "未配置",
+                TranslationProviderEntry.Aliyun => sec.Aliyun.IsSet ? "可用" : "未配置",
+                TranslationProviderEntry.ChatGpt => loggedIn ? $"已登录 {email}({plan})" : "未登录",
+                TranslationProviderEntry.DashScope => string.IsNullOrWhiteSpace(sec.DashScopeApiKey) ? "未配置" : "可用",
+                _ => "—",
+            };
     }
 
     /// <summary>
@@ -483,13 +528,11 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>只重载 F7(切换玩家ID翻译)/托盘切引擎这两个可在本窗口打开期间"带外"改变的字段，
+    /// <summary>只重载可在本窗口打开期间"带外"改变的字段（玩家ID翻译），
     /// 不重载其它控件——避免打断用户正在本窗口内编辑但尚未应用的其它字段。</summary>
     private void ReloadOutOfBandTranslationControls()
     {
         var t = _holder.Current.Translation;
-        DashScopeEngineRadio.IsChecked = t.Active == TranslationEngine.DashScope;
-        ChatGptEngineRadio.IsChecked = t.Active == TranslationEngine.ChatGpt;
         TranslatePlayerIdCheck.IsChecked = t.TranslatePlayerId;
     }
 
@@ -524,11 +567,13 @@ public partial class SettingsWindow : Window
         if ((b.Modifiers & HotkeyKeys.MOD_SHIFT) != 0) parts.Add("Shift");
         parts.Add(b.Vk switch
         {
+            HotkeyKeys.VK_F6 => "F6",
             HotkeyKeys.VK_F7 => "F7",
             HotkeyKeys.VK_F8 => "F8",
             HotkeyKeys.VK_F9 => "F9",
             HotkeyKeys.VK_F10 => "F10",
             HotkeyKeys.VK_F11 => "F11",
+            HotkeyKeys.VK_F12 => "F12",
             _ => $"VK{b.Vk:X2}",
         });
         return string.Join("+", parts);
@@ -538,16 +583,33 @@ public partial class SettingsWindow : Window
 
     private void OnRedetectClick(object sender, RoutedEventArgs e) => RefreshStatusText();
 
-    private void OnSetDashScopeKeyClick(object sender, RoutedEventArgs e)
+    /// <summary>每行的「配置…」：按 provider id 路由到对应的密钥输入窗 / ChatGPT 登录。完成后刷新各行状态。</summary>
+    private void OnProviderConfigureClick(object sender, RoutedEventArgs e)
     {
-        var win = new DashScopeKeyWindow(_secretStore) { Owner = this };
-        win.ShowDialog();
+        if (sender is not Button btn || btn.Tag is not string id) return;
+        switch (id)
+        {
+            case TranslationProviderEntry.Tencent:
+                new TencentKeyWindow(_secretStore) { Owner = this }.ShowDialog();
+                break;
+            case TranslationProviderEntry.Aliyun:
+                new AliyunKeyWindow(_secretStore) { Owner = this }.ShowDialog();
+                break;
+            case TranslationProviderEntry.DashScope:
+                new DashScopeKeyWindow(_secretStore) { Owner = this }.ShowDialog();
+                break;
+            case TranslationProviderEntry.ChatGpt:
+                _ = LoginChatGptAsync(); // 浏览器登录是异步的，不阻塞关闭对话框后的状态刷新
+                break;
+        }
+        RefreshProviderStatuses(); // 密钥/登录变化后刷新每行的状态显示
     }
 
-    private async void OnLoginChatGptClick(object sender, RoutedEventArgs e)
+    /// <summary>ChatGPT 订阅登录（浏览器 PKCE 授权）。成功则让静止画面立即用登录态重译。</summary>
+    private async Task<bool> LoginChatGptAsync()
     {
-        ChatGptLoginButton.IsEnabled = false;
-        ChatGptStatusText.Text = "登录中…（浏览器完成授权）";
+        var chatgptRow = _providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.ChatGpt);
+        if (chatgptRow is not null) chatgptRow.Status = "登录中…（浏览器完成授权）";
         try
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
@@ -557,17 +619,65 @@ public partial class SettingsWindow : Window
             if (!ok)
                 MessageBox.Show(this, "ChatGPT 登录未完成或失败（可能：端口 1455 被占用、超时、网络问题或未在浏览器完成授权）。请重试；详情见 logs/app.log。",
                     "登录失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return ok;
         }
         catch (Exception ex)
         {
             _log.Error($"[settings] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
             MessageBox.Show(this, $"ChatGPT 登录出错：{ex.Message}", "登录失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
         finally
         {
-            RefreshChatGptStatus();
-            ChatGptLoginButton.IsEnabled = true;
+            RefreshProviderStatuses();
         }
+    }
+
+    // ── provider 池：拖动排序 ────────────────────────────────────────────
+
+    private void OnProviderListMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left && ProviderListView.SelectedItem is ProviderRow)
+            DragDrop.DoDragDrop(ProviderListView, ProviderListView.SelectedItem, DragDropEffects.Move);
+    }
+
+    private void OnProviderListDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = DragDropEffects.Move;
+        if (e.Data.GetData(typeof(ProviderRow)) is not ProviderRow source)
+        { e.Effects = DragDropEffects.None; return; }
+        var item = FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject);
+        if (item?.DataContext is not ProviderRow target) { e.Effects = DragDropEffects.None; return; }
+        if (ReferenceEquals(target, source)) { e.Effects = DragDropEffects.None; return; }
+        int from = _providerRows.IndexOf(source);
+        int to = _providerRows.IndexOf(target);
+        if (from >= 0 && to >= 0 && from != to)
+            _providerRows.Move(from, to); // 即时移动，拖动过程中列表实时换位
+        e.Handled = true;
+    }
+
+    private void OnProviderListDrop(object sender, DragEventArgs e) => e.Handled = true;
+
+    /// <summary>从光标下的最深元素沿视觉树往上找最近的 ListViewItem。</summary>
+    private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
+    {
+        while (node is not null)
+        {
+            if (node is T t) return t;
+            node = VisualTreeHelper.GetParent(node);
+        }
+        return null;
+    }
+
+    private void OnResetProviderOrderClick(object sender, RoutedEventArgs e)
+    {
+        _providerRows.Clear();
+        foreach (var entry in TranslationSettings.DefaultProviders)
+        {
+            var (name, kind) = ProviderMeta(entry.Id);
+            _providerRows.Add(new ProviderRow { Id = entry.Id, Enabled = entry.Enabled, Name = name, Kind = kind });
+        }
+        RefreshProviderStatuses();
     }
 
     private void OnEditGlossaryClick(object sender, RoutedEventArgs e)
@@ -613,7 +723,7 @@ public partial class SettingsWindow : Window
 
         if (!TryMapKey(key, out uint vk))
         {
-            MessageBox.Show(this, $"不支持的按键：{key}（当前支持 F7–F11，可加 Ctrl/Alt/Shift 组合）",
+            MessageBox.Show(this, $"不支持的按键：{key}（当前支持 F6–F12，可加 Ctrl/Alt/Shift 组合）",
                 "热键", MessageBoxButton.OK, MessageBoxImage.Warning);
             StopRecording();
             return;
@@ -660,11 +770,13 @@ public partial class SettingsWindow : Window
     {
         switch (key)
         {
+            case Key.F6: vk = HotkeyKeys.VK_F6; return true;
             case Key.F7: vk = HotkeyKeys.VK_F7; return true;
             case Key.F8: vk = HotkeyKeys.VK_F8; return true;
             case Key.F9: vk = HotkeyKeys.VK_F9; return true;
             case Key.F10: vk = HotkeyKeys.VK_F10; return true;
             case Key.F11: vk = HotkeyKeys.VK_F11; return true;
+            case Key.F12: vk = HotkeyKeys.VK_F12; return true;
             default: vk = 0; return false;
         }
     }
@@ -750,7 +862,8 @@ public partial class SettingsWindow : Window
 
         var translation = original.Translation with
         {
-            Active = ChatGptEngineRadio.IsChecked == true ? TranslationEngine.ChatGpt : TranslationEngine.DashScope,
+            // 池的顺序 + 每行启用态直接回写。拖动排序、勾选/取消都落在这里。
+            Providers = _providerRows.Select(r => new TranslationProviderEntry(r.Id, r.Enabled)).ToList(),
             DashScopeModel = OrDefault(DashScopeModelBox.Text, original.Translation.DashScopeModel),
             ChatGptModel = OrDefault(ChatGptModelBox.Text, original.Translation.ChatGptModel),
             TranslateChat = TranslateChatCheck.IsChecked == true,

@@ -45,21 +45,20 @@ public sealed record HotkeyBinding(uint Modifiers, uint Vk);
 
 public static class HotkeyKeys
 {
-    public const uint VK_F6 = 0x75, VK_F7 = 0x76, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 = 0x79, VK_F11 = 0x7A;
+    public const uint VK_F6 = 0x75, VK_F7 = 0x76, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 = 0x79, VK_F11 = 0x7A, VK_F12 = 0x7B;
     public const uint MOD_NONE = 0x0, MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4;
 }
 public static class HotkeyDefaults
 {
+    /// <summary>全部热键：F9 开/关翻译、F10 进入校准、Ctrl+F9 打开配置、F8 切 DEBUG 面板、Ctrl+F6 复制诊断。
+    /// 用户可重绑到 F6–F12（可加 Ctrl/Alt/Shift）。悬浮层显隐 / 翻译玩家ID / 暂停 已改为纯配置项，不再占热键。</summary>
     public static IReadOnlyDictionary<string, HotkeyBinding> Map { get; } =
         new Dictionary<string, HotkeyBinding>
         {
             ["ToggleTranslate"] = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9),
-            ["ToggleOverlay"]   = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10),
-            ["Calibrate"]       = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8),
+            ["Calibrate"]       = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10),
             ["OpenConfig"]      = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F9),
-            ["TogglePlayerId"]  = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F7),
-            ["TogglePause"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F11),
-            ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F6),
+            ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8),
             ["CopyDebug"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F6),
         };
 }

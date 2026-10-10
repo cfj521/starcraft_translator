@@ -3,33 +3,31 @@ namespace ScrTranslator.Core.Translation;
 /// <summary>一批翻译的结果。<see cref="Texts"/> 与传入的韩文行**按下标一一对应**。</summary>
 /// <param name="AllResolved">本批每一行都真翻出来了。false 时未翻成的行在 <see cref="Texts"/> 里仍是原文，
 /// 调用方**必须**按"文本==原文"过滤掉，否则原文会被当译文显示出去。</param>
-/// <param name="Error">provider 失败原因（null=没失败）。</param>
+/// <param name="Error">provider 失败原因（null=没失败）。池内全部 provider 都不可用/失败时才非空。</param>
 public sealed record TranslateOutcome(IReadOnlyList<string> Texts, bool AllResolved, string? Error);
 
 /// <summary>
-/// 翻译编排：**术语表 → 缓存 → 当前活跃 provider**，单级，一批一次请求。
+/// 翻译编排：**术语表 → 缓存 → provider 池回退链**，单级，一批一次请求。
 ///
-/// 为什么没有"两级"了：曾经的设计是快引擎先出临时译文（灰斜体）→ 主力引擎再原地替换。
-/// 但这是个很窄的任务（游戏聊天/房间名短句），低价模型单发就够好，两级只让每个未命中批次多打一次请求、
-/// 并多出一整套"临时态"的视觉与状态分支 —— 复杂度换来的收益接近零，故整体移除。
-///
-/// 失败语义："引用相等 == 降级"。provider 抛异常时回落到传入的那一份引用，
-/// 据此判定哪些行没翻成：不写缓存、也不该被当译文显示。
+/// provider 池（<see cref="_pool"/>）是有序的 provider 列表。编排器从上到下取第一个
+/// 「<see cref="ITranslationProvider.GetStatus"/> 为 Available」的 provider 翻译；
+/// 不可用（无凭据/额度耗尽）或翻译失败（抛异常）就跳到下一个，直到成功或全部失败。
+/// 默认池顺序＝先免费机器翻译（腾讯云/阿里云）、后 LLM（OpenAI/阿里云），与"先免费再 LLM"一致。
 /// </summary>
 public sealed class TranslationOrchestrator
 {
     private readonly Glossary _glossary;
     private readonly TranslationCache _cache;
-    private readonly Func<ITranslationProvider> _provider;
+    private readonly Func<IReadOnlyList<ITranslationProvider>> _pool;
     private readonly Action<string>? _onError;
 
-    /// <param name="provider">取当前活跃 provider（用 Func 是为了让"托盘切引擎"即时生效，不必重建本对象）。</param>
-    /// <param name="onError">provider 异常上报。不给这个回调就等于把失败吞进黑洞：
+    /// <param name="pool">取当前 provider 池（有序、已过滤启用项）。用 Func 是为了让"配置页拖拽排序/启用禁用"即时生效，不必重建本对象。</param>
+    /// <param name="onError">provider 失败上报。不给这个回调就等于把失败吞进黑洞：
     /// 回落的原文会被当译文显示，用户只会看到"韩文没翻译"而无处可查原因。</param>
     public TranslationOrchestrator(Glossary glossary, TranslationCache cache,
-        Func<ITranslationProvider> provider, Action<string>? onError = null)
+        Func<IReadOnlyList<ITranslationProvider>> pool, Action<string>? onError = null)
     {
-        _glossary = glossary; _cache = cache; _provider = provider; _onError = onError;
+        _glossary = glossary; _cache = cache; _pool = pool; _onError = onError;
     }
 
     /// <summary>当前缓存条目数（调试面板用）。</summary>
@@ -52,15 +50,32 @@ public sealed class TranslationOrchestrator
 
         if (missText.Count == 0) return new TranslateOutcome(text, true, null);
 
-        var provider = _provider();
+        // 池回退链：从上到下，跳过不可用（无凭据/额度耗尽），翻译失败跳到下一个。
+        var providers = _pool();
         string? error = null;
-        IReadOnlyList<string> zh;
-        try { zh = await provider.TranslateAsync(missText, ctx, ct); }
-        catch (Exception ex)
+        IReadOnlyList<string>? zh = null;
+        foreach (var p in providers)
         {
-            error = $"{provider.Name} 翻译失败: {ex.Message}";
-            _onError?.Invoke(error);
-            zh = missText; // 整体回落：下面逐行按"引用相等"判为未翻成
+            var status = p.GetStatus();
+            if (!status.Usable) { error = $"{p.Name}：{status.Detail}"; continue; } // 不可用，跳到下一个
+            try
+            {
+                zh = await p.TranslateAsync(missText, ctx, ct);
+                error = null;
+                break; // 成功，用这个 provider 的结果
+            }
+            catch (Exception ex)
+            {
+                error = $"{p.Name} 翻译失败: {ex.Message}";
+                _onError?.Invoke(error);
+                zh = null; // 继续下一个
+            }
+        }
+
+        if (zh is null)
+        {
+            // 全部 provider 都不可用/失败：整批回落原文。
+            return new TranslateOutcome(text, false, error ?? "没有可用的翻译 provider");
         }
 
         bool allResolved = true;

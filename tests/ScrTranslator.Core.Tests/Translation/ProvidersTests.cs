@@ -12,7 +12,7 @@ public class ProvidersTests
     {
         var stub = new StubHttpMessageHandler("{\"choices\":[{\"message\":{\"content\":\"[1] 甲\\n[2] 乙\"}}]}");
         var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://x/v1", () => "K");
-        var p = new DashScopeProvider(client, () => "qwen-flash");
+        var p = new DashScopeProvider(client, () => "qwen-flash", () => "key");
         var r = await p.TranslateAsync(new[]{"가","나"}, Ctx, CancellationToken.None);
         Assert.Equal(new[]{"甲","乙"}, r);
         Assert.Equal("dashscope", p.Name);
@@ -23,7 +23,7 @@ public class ProvidersTests
     {
         var stub = new StubHttpMessageHandler("{\"choices\":[{\"message\":{\"content\":\"[1] 甲\"}}]}");
         var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://x/v1", () => "K");
-        await new DashScopeProvider(client, () => "m").TranslateAsync(new[]{"가"}, Ctx, CancellationToken.None);
+        await new DashScopeProvider(client, () => "m", () => "key").TranslateAsync(new[]{"가"}, Ctx, CancellationToken.None);
         // System.Text.Json 默认把非 ASCII 转义成 \uXXXX,原始 body 无字面中韩文;
         // 必须解析 JSON 取 system 段(解码转义)再断言。system = messages[0].content。
         var sys = JsonDocument.Parse(stub.LastBody!).RootElement
@@ -38,7 +38,7 @@ public class ProvidersTests
         var stub = new StubHttpMessageHandler("{\"choices\":[{\"message\":{\"content\":\"[1] 甲\"}}]}");
         var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://x/v1", () => "K");
         var input = new[]{"가","나"};
-        var r = await new DashScopeProvider(client, () => "m").TranslateAsync(input, Ctx, CancellationToken.None);
+        var r = await new DashScopeProvider(client, () => "m", () => "key").TranslateAsync(input, Ctx, CancellationToken.None);
         Assert.Same(input, r); // 降级：原样返回传入引用
     }
 
@@ -47,7 +47,7 @@ public class ProvidersTests
     {
         var stub = new StubHttpMessageHandler("{}");
         var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://x/v1", () => "K");
-        var r = await new DashScopeProvider(client, () => "m").TranslateAsync(Array.Empty<string>(), Ctx, CancellationToken.None);
+        var r = await new DashScopeProvider(client, () => "m", () => "key").TranslateAsync(Array.Empty<string>(), Ctx, CancellationToken.None);
         Assert.Empty(r);
     }
 
@@ -55,6 +55,7 @@ public class ProvidersTests
     {
         public Task<(string accessToken, string accountId)> GetAsync(CancellationToken ct)
             => Task.FromResult(("TOK", "ACC"));
+        public bool IsLoggedIn() => true;
     }
 
     [Fact]

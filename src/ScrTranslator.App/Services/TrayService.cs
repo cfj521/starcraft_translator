@@ -11,7 +11,7 @@ using ScrTranslator.Core.Translation;
 
 namespace ScrTranslator.App.Services;
 
-/// <summary>系统托盘图标：显隐悬浮窗、开关探测、登录 ChatGPT/填 DashScope Key/选翻译引擎、退出。</summary>
+/// <summary>系统托盘图标：显隐悬浮窗、开关探测、登录 ChatGPT/填 DashScope Key、退出。（翻译引擎改为 provider 池，在配置页管）</summary>
 public sealed class TrayService : IDisposable
 {
     private readonly OverlayWindow _overlay;
@@ -22,8 +22,6 @@ public sealed class TrayService : IDisposable
     private readonly string _settingsPath;
     private TaskbarIcon? _trayIcon;
     private MenuItem? _loginItem;
-    private MenuItem? _engineDashScopeItem;
-    private MenuItem? _engineChatGptItem;
 
     public TrayService(OverlayWindow overlay, OpenAiOAuth oauth, SettingsHolder settings, SecretStore store, FileLogger log, string settingsPath)
     {
@@ -59,16 +57,6 @@ public sealed class TrayService : IDisposable
         var keyItem = new MenuItem { Header = "设置阿里云 Key" };
         keyItem.Click += (_, _) => OnSetDashScopeKey();
 
-        _engineDashScopeItem = new MenuItem { Header = "DashScope（阿里云）", IsCheckable = true };
-        _engineDashScopeItem.Click += (_, _) => SetEngine(TranslationEngine.DashScope);
-        _engineChatGptItem = new MenuItem { Header = "ChatGPT（订阅）", IsCheckable = true };
-        _engineChatGptItem.Click += (_, _) => SetEngine(TranslationEngine.ChatGpt);
-        RefreshEngineChecks();
-
-        var engineMenu = new MenuItem { Header = "翻译引擎" };
-        engineMenu.Items.Add(_engineDashScopeItem);
-        engineMenu.Items.Add(_engineChatGptItem);
-
         var exitItem = new MenuItem { Header = "退出" };
         exitItem.Click += (_, _) => Application.Current.Shutdown();
 
@@ -81,7 +69,6 @@ public sealed class TrayService : IDisposable
         menu.Items.Add(new Separator());
         menu.Items.Add(_loginItem);
         menu.Items.Add(keyItem);
-        menu.Items.Add(engineMenu);
         menu.Items.Add(new Separator());
         menu.Items.Add(exitItem);
 
@@ -161,22 +148,6 @@ public sealed class TrayService : IDisposable
     {
         var win = new DashScopeKeyWindow(_store) { Owner = null };
         win.ShowDialog();
-    }
-
-    private void SetEngine(TranslationEngine engine)
-    {
-        _settings.Current = _settings.Current with { Translation = _settings.Current.Translation with { Active = engine } };
-        RefreshEngineChecks();
-        SaveSettings();
-        OnTranslationStateChanged?.Invoke(); // 切引擎后让静止画面立即用新引擎重译
-    }
-
-    private void RefreshEngineChecks()
-    {
-        if (_engineDashScopeItem is null || _engineChatGptItem is null) return;
-        var active = _settings.Current.Translation.Active;
-        _engineDashScopeItem.IsChecked = active == TranslationEngine.DashScope;
-        _engineChatGptItem.IsChecked = active == TranslationEngine.ChatGpt;
     }
 
     /// <summary>托盘改设置后立即落盘（防 Save-without-Load / 下次启动丢失）。</summary>

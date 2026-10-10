@@ -84,7 +84,7 @@ public partial class App : Application
         string roisPath = Path.Combine(Path.GetDirectoryName(settingsPath)!, "rois.json");
         string legacyRois = Path.Combine(baseDir, "rois.json");
         if (!File.Exists(roisPath) && File.Exists(legacyRois))
-            try { File.Copy(legacyRois, roisPath); } catch { /* 迁移失败则按无校准处理，F8 重建即可 */ }
+            try { File.Copy(legacyRois, roisPath); } catch { /* 迁移失败则按无校准处理，F10 重建即可 */ }
 
         // 场景识别参考（两层，故意分文件）：
         //  出厂层 exe 旁 scene-refs.json，由 tools/SceneRefGen 生成，带 sha256 校验，程序只读；
@@ -113,27 +113,40 @@ public partial class App : Application
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             () => sp.GetRequiredService<SecretStore>().Load().DashScopeApiKey));
         builder.Services.AddSingleton(sp => new CodexResponsesClient(sp.GetRequiredService<HttpClient>()));
-        builder.Services.AddSingleton(sp => new DashScopeProvider(
+        // 四个翻译 provider 全按 ITranslationProvider 注册进池。密钥都走 SecretStore（DPAPI 加密），不进 settings.json。
+        builder.Services.AddSingleton<ITranslationProvider>(sp => new DashScopeProvider(
             sp.GetRequiredService<OpenAiCompatibleChatClient>(),
-            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.DashScopeModel));
-        builder.Services.AddSingleton(sp => new ChatGptSubscriptionProvider(
+            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.DashScopeModel,
+            () => sp.GetRequiredService<SecretStore>().Load().DashScopeApiKey)); // 第三个参数供 GetStatus 判 key 是否已配
+        builder.Services.AddSingleton<ITranslationProvider>(sp => new ChatGptSubscriptionProvider(
             sp.GetRequiredService<CodexResponsesClient>(),
             sp.GetRequiredService<ITokenSource>(),
             () => sp.GetRequiredService<SettingsHolder>().Current.Translation.ChatGptModel));
+        builder.Services.AddSingleton<ITranslationProvider>(sp => new TencentMtProvider(
+            sp.GetRequiredService<HttpClient>(),
+            () => { var t = sp.GetRequiredService<SecretStore>().Load().Tencent; return (t.SecretId, t.SecretKey); }));
+        builder.Services.AddSingleton<ITranslationProvider>(sp => new AliyunMtProvider(
+            sp.GetRequiredService<HttpClient>(),
+            () => { var a = sp.GetRequiredService<SecretStore>().Load().Aliyun; return (a.AccessKeyId, a.AccessKeySecret); }));
         builder.Services.AddSingleton(sp =>
         {
             var settings = sp.GetRequiredService<SettingsHolder>();
-            var dashScope = sp.GetRequiredService<DashScopeProvider>();       // 绑 Current.Translation.DashScopeModel
-            var chatGpt = sp.GetRequiredService<ChatGptSubscriptionProvider>();
+            // 全部 provider 实例（按接口取），建 Id→实例 映射，供池按 settings 顺序/启用过滤。
+            var all = sp.GetServices<ITranslationProvider>().ToList();
+            var byId = all.ToDictionary(p => p.Name);
 
-            // 单活跃引擎：用 Func 每次现取，托盘/配置切引擎即时生效，不必重建本对象。
-            ITranslationProvider Active() =>
-                settings.Current.Translation.Active == TranslationEngine.DashScope ? dashScope : chatGpt;
+            // provider 池：按 settings.Providers 的顺序返回已启用的 provider。用 Func 每次现取，
+            // 配置页拖拽排序/启用禁用即时生效，不必重建本对象。
+            IReadOnlyList<ITranslationProvider> Pool() =>
+                settings.Current.Translation.Providers
+                    .Where(p => p.Enabled && byId.ContainsKey(p.Id))
+                    .Select(p => byId[p.Id])
+                    .ToList();
 
             return new TranslationOrchestrator(
                 sp.GetRequiredService<Glossary>(),
                 sp.GetRequiredService<TranslationCache>(),
-                Active,
+                Pool,
                 // provider 异常必须冒到日志：以前是 catch 掉直接回落原文，
                 // 症状就是"识别到韩文但显示的还是原文"，且无处可查原因（实测是空 API Key）。
                 msg => sp.GetRequiredService<FileLogger>().Error(msg));
@@ -166,10 +179,10 @@ public partial class App : Application
         var overlay = _host.Services.GetRequiredService<OverlayWindow>();
         overlay.Show();
 
-        // 调试窗口：先 Show() 建句柄再置 Hidden（ShowActivated=False 不抢焦点）。之后由探测定时器按前台+DebugMode 切 Visibility。
+        // 调试窗口：只建句柄、不 Show()，杜绝启动瞬间的闪现。之后由探测定时器按前台+DebugMode 切 Visibility。
+        // Show() 会先让窗口出现在屏幕上再被置 Hidden → 启动闪一下；EnsureHandle() 只建 HWND，窗口始终处于 Hidden。
         var debug = _host.Services.GetRequiredService<DebugWindow>();
-        debug.Show();
-        debug.Visibility = Visibility.Hidden;
+        new System.Windows.Interop.WindowInteropHelper(debug).EnsureHandle();
 
         _trayService = _host.Services.GetRequiredService<TrayService>();
         _trayService.Initialize();
@@ -188,24 +201,21 @@ public partial class App : Application
             var info = probe.Start(); // 首次引导：失败原因不再只进日志，托盘气泡直出
             running = info.Status == ProbeStart.Ok;
 
-            // 凭据体检：OCR 认得出韩文、但翻译引擎没钥匙时，症状是"字出来了却没翻"，
+            // 凭据体检：OCR 认得出韩文、但 provider 池里没有任何可用 provider 时，症状是"字出来了却没翻"，
             // 而且失败发生在网络层、离配置页很远——必须在开翻译这一刻就说破。
             if (running)
             {
-                var tr = _host!.Services.GetRequiredService<SettingsHolder>().Current.Translation;
-                var sec = _host.Services.GetRequiredService<SecretStore>().Load();
-                string? missing = tr.Active switch
+                var enabled = _host.Services.GetServices<ITranslationProvider>()
+                    .Where(p => _host!.Services.GetRequiredService<SettingsHolder>()
+                        .Current.Translation.Providers.Any(pe => pe.Id == p.Name && pe.Enabled))
+                    .ToList();
+                var usable = enabled.Where(p => p.GetStatus().Usable).ToList();
+                if (usable.Count == 0 && enabled.Count > 0)
                 {
-                    TranslationEngine.DashScope when string.IsNullOrWhiteSpace(sec.DashScopeApiKey)
-                        => "当前引擎＝阿里云 DashScope，但 API Key 是空的",
-                    TranslationEngine.ChatGpt when string.IsNullOrWhiteSpace(sec.OpenAi.AccessToken)
-                        => "当前引擎＝ChatGPT 订阅，但还没登录",
-                    _ => null,
-                };
-                if (missing is not null)
-                {
+                    string reasons = string.Join("；", enabled.Select(p =>
+                        $"{p.Name}（{p.GetStatus().Detail}）"));
                     _trayService.ShowToast("翻译翻不出来",
-                        $"{missing}。韩文能识别出来，但翻不成中文。请到 配置→翻译 填 Key / 登录，或切换引擎。");
+                        $"启用的 provider 全都不可用：{reasons}。韩文能识别出来，但翻不成中文。请到 配置→翻译 配密钥/登录，或启用其它 provider。");
                 }
             }
 
@@ -214,16 +224,12 @@ public partial class App : Application
                 ProbeStart.Ok => "已开启",
                 ProbeStart.WaitingForWindow => $"未找到游戏窗口（进程 {info.ProcessName}），已转入等待：窗口出现后自动开始翻译（游戏需窗口化/无边框运行）",
                 ProbeStart.CaptureUnsupported => "无法开启：系统不支持窗口捕获（需 Win10 1803+，且非 WSL）",
-                ProbeStart.NoRoi => "尚未校准区域：按 F8 框选游戏聊天/房间区域后再按 F9",
+                ProbeStart.NoRoi => "尚未校准区域：按 F10 框选游戏聊天/房间区域后再按 F9",
                 ProbeStart.WindowNotFound => $"{info.ProcessName} 窗口查找异常：请确认游戏已以窗口化/无边框模式启动",
                 ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见 logs/app.log",
                 _ => "无法开启",
             };
             _trayService.ShowToast("翻译", msg);
-        }
-        void ToggleOverlay()
-        {
-            overlay.EnabledByUser = !overlay.EnabledByUser; // 意图开关；实际显隐由探测按"游戏前台"叠加计算
         }
         _trayService.ToggleProbe = ToggleProbe;
         _trayService.OnTranslationStateChanged = probe.ResetChangeDetection; // 切引擎/登录成功后立即重译静止画面
@@ -272,7 +278,7 @@ public partial class App : Application
                       "请确认 exe 旁存在 scene-refs.json（或重跑 tools/SceneRefGen 生成）");
         }
 
-        // 校准窗口：单例（已开则激活），F8/托盘"进入校准…"打开。窗口关闭后置空以便下次可重新 new（WPF Window 一次性）。
+        // 校准窗口：单例（已开则激活），F10/托盘"进入校准…"打开。窗口关闭后置空以便下次可重新 new（WPF Window 一次性）。
         Calibration.CalibrationWindow? calibrationWindow = null;
         void OpenCalibration()
         {
@@ -289,12 +295,12 @@ public partial class App : Application
             }
             if (NativeMethods.IsIconic(hwnd))
             {
-                _trayService.ShowToast("无法校准", "游戏处于最小化状态，请先还原窗口再按 F8。");
+                _trayService.ShowToast("无法校准", "游戏处于最小化状态，请先还原窗口再按 F10。");
                 return;
             }
             if (NativeMethods.GetForegroundWindow() != hwnd)
             {
-                _trayService.ShowToast("无法校准", "游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 F8。");
+                _trayService.ShowToast("无法校准", "游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 F10。");
                 return;
             }
 
@@ -341,26 +347,7 @@ public partial class App : Application
         _trayService.OpenSettings = OpenSettings;
         _openSettingsAction = OpenSettings;
 
-        // 玩家 ID 翻译开关（F7）：翻转 Translation.TranslatePlayerId + 落盘 + 复位变化检测 + 短提示。
-        void TogglePlayerId()
-        {
-            var cur = settingsHolder.Current;
-            bool newVal = !cur.Translation.TranslatePlayerId;
-            settingsHolder.Current = cur with { Translation = cur.Translation with { TranslatePlayerId = newVal } };
-            try { SettingsStore.Save(settingsHolder.Current, settingsPath); }
-            catch (Exception ex) { log.Log($"[hotkey] 保存 settings.json 失败: {ex.Message}"); }
-            probe.ResetChangeDetection();
-            _trayService.ShowToast("玩家ID翻译", newVal ? "已开启" : "已关闭");
-        }
-
-        // 暂停/继续（F11）：不与 F9 的开关探测互相干扰，交给 Phase1Probe 内部的处理跳过标记。
-        void TogglePause()
-        {
-            bool nowPaused = probe.TogglePause();
-            _trayService.ShowToast("翻译", nowPaused ? "已暂停" : "已继续");
-        }
-
-        // DEBUG 面板开关（F6）：翻转 General.DebugMode + 落盘；探测的 500ms 定时器随即显隐面板。
+        // DEBUG 面板开关（F8）：翻转 General.DebugMode + 落盘；探测的 500ms 定时器随即显隐面板。
         void ToggleDebug()
         {
             var cur = settingsHolder.Current;
@@ -380,16 +367,13 @@ public partial class App : Application
             catch (Exception ex) { log.Warn($"[hotkey] 复制诊断失败: {ex.Message}"); _trayService.ShowToast("诊断信息", "复制失败"); }
         }
 
-        // 全局热键：从 SettingsHolder.Current.Hotkeys 驱动注册全部七功能（游戏有焦点时也生效）。
+        // 全局热键：从 SettingsHolder.Current.Hotkeys 驱动注册全部五功能（游戏有焦点时也生效）。
         _hotkeys = new HotkeyService(overlay);
         var hotkeyActions = new Dictionary<string, Action>
         {
             ["ToggleTranslate"] = ToggleProbe,
-            ["ToggleOverlay"] = ToggleOverlay,
             ["Calibrate"] = OpenCalibration,
             ["OpenConfig"] = OpenSettings,
-            ["TogglePlayerId"] = TogglePlayerId,
-            ["TogglePause"] = TogglePause,
             ["ToggleDebug"] = ToggleDebug,
             ["CopyDebug"] = CopyDebug,
         };

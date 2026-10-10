@@ -10,7 +10,7 @@
 | UI / 悬浮层 | WPF | 透明窗口、矢量渲染、CJK 字体好 |
 | 屏幕捕获 | `Windows.Graphics.Capture` (WinRT) | 抓指定窗口、性能好、官方 API；DXGI Desktop Duplication 备选 |
 | OCR | PaddleOCR / RapidOcrNet (ONNX Runtime) + 韩文 mobile 模型 | 韩文识别准、随包分发、**无需系统语言包**（已取代原 `Windows.Media.Ocr` 方案） |
-| LLM 翻译（Phase 2 起） | **OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** / **阿里云 DashScope（OpenAI 兼容 Chat）**，单活跃可切换 | 懂游戏黑话、可加术语表与上下文。**不再用 Claude / Papago / 百度**。详见 `docs/superpowers/specs/2026-07-02-phase2-translation-design.md` |
+| 翻译 provider 池 | 免费机器翻译：**腾讯云 MT**（TC3-HMAC-SHA256）/ **阿里云 MT**（RPC 签名）＋ LLM：**OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** / **阿里云 DashScope（OpenAI 兼容 Chat）**；池可拖拽排序，回退链先免费后 LLM | 免费额度兜底 + 懂游戏黑话、可加术语表与上下文。**不再用 Claude / Papago / 百度**。详见 `docs/superpowers/specs/2026-07-02-phase2-translation-design.md` |
 | 配置/序列化 | System.Text.Json | 内置 |
 | 依赖注入 | Microsoft.Extensions.DependencyInjection | 模块解耦 |
 | 日志 | Microsoft.Extensions.Logging + Serilog(可选) | 排障 |
@@ -154,8 +154,8 @@ Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。�
   1. **预处理/分流**：若该 ROI 列为"ID 列" 且配置 `TranslatePlayerId=false`（默认）→ 不翻译，原样输出；开关打开则照常翻译。聊天/房间名/地图列各有独立开关。
   2. **术语表**：整句或分词命中 GLOSSARY → 直接映射（无网络）。
   3. **缓存**：`MemoryCache<原文, 译文>` 命中 → 直出。
-  4. **翻译 provider**（`ITranslationProvider`，OpenAI 订阅 / 阿里云 DashScope 单活跃）批量调用 → 上屏中文。**Phase 2 为单级**（术语/缓存未命中即调当前活跃 provider）。
-  5. **单级（原"两级编排"已移除）**：曾实现"快引擎出临时态（灰斜体）→ 主力引擎定稿原地替换"，但这是很窄的翻译任务（游戏聊天/房间名短句），低价模型单发就够好，两级只让每个未命中批次多打一次请求、并多一套临时态视觉与状态分支 → 整体删除（含 `TwoLevel/FastEngine/FastModel` 三字段、`TranslationStage`、托盘与配置页开关）。现由 `TranslationOrchestrator` 编排：术语表 → 缓存 → 活跃 provider，一批一次请求。
+  4. **翻译 provider 池**（`ITranslationProvider`：腾讯云/阿里云机器翻译 ＋ OpenAI 订阅 / 阿里云 DashScope LLM）按序回退批量调用 → 上屏中文。**单级**（术语/缓存未命中即走 provider 池回退链，取第一个「启用且可用」）。
+  5. **单级（原"两级编排"已移除）**：曾实现"快引擎出临时态（灰斜体）→ 主力引擎定稿原地替换"，但这是很窄的翻译任务（游戏聊天/房间名短句），低价模型单发就够好，两级只让每个未命中批次多打一次请求、并多一套临时态视觉与状态分支 → 整体删除（含 `TwoLevel/FastEngine/FastModel` 三字段、`TranslationStage`、托盘与配置页开关）。现由 `TranslationOrchestrator` 编排：术语表 → 缓存 → **provider 池回退链**，一批一次请求。
 - **LLM Prompt 要点**：系统提示设定"星际争霸韩服游戏聊天翻译"角色；附术语表；要求口语化、简短、保留游戏黑话语气；ID/数字/英文缩写不乱翻。
 - **限流**：LLM 请求合并/节流，避免刷屏时狂发请求。
 
@@ -200,7 +200,7 @@ Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。�
   `%APPDATA%\ScrTranslator`；出厂层在 exe 旁、只读。见 3.2 的两层表。
 - **Calibration**：独立的可交互全屏覆盖窗（悬浮层本身始终点击穿透，不变成编辑态）。
   进入前要求游戏在前台，并自己抓帧检测场景，见 UI_DESIGN 第 5 节。
-- **Hotkey**：全局热键 8 个（`RegisterHotKey`，可录制重绑 + 冲突检测 + 恢复默认）。
+- **Hotkey**：全局热键 5 个（`RegisterHotKey`，可录制重绑 + 冲突检测 + 恢复默认）。
 - **日志**：`logs/app.log`，分级（DEBUG 开=全量诊断，关=仅业务），UTF-8 带 BOM，超限轮转。
 
 ### 3.9 SceneRecognizer（场景识别 = 图像指纹，不用 OCR）
@@ -250,11 +250,11 @@ starcraft_translator/
 │     ├─ Roi/                       # RoiStore(含 Replace/Remove/MoveRoi)、TranslationScope、RelRect
 │     ├─ Scene/                     # SceneRefStore、SceneFingerprint、SceneRecognizer、SceneRefCapture、LayoutPresets、Scene
 │     ├─ Ocr/                       # IOcrEngine + PaddleOcrEngine(RapidOcrNet)
-│     ├─ Translation/               # ITranslationProvider、两 provider、Glossary、Cache、
-│     │                             #   TranslationOrchestrator(单级)、PromptBuilder、BatchProtocol
+│     ├─ Translation/               # ITranslationProvider、四 provider(腾讯/阿里云 MT + OpenAI/DashScope LLM)、Glossary、Cache、
+│     │                             #   TranslationOrchestrator(单级 provider 池回退)、PromptBuilder、BatchProtocol
 │     ├─ Settings/                  # AppSettings、SettingsStore、PollInterval(两节拍)
 │     └─ KoreanText.cs              # 谚文判定：翻译入口的内容闸门
-├─ tests/ScrTranslator.Core.Tests/  # 219 条；含 SceneRefsShippingTests / LayoutPresetTests 回归
+├─ tests/ScrTranslator.Core.Tests/  # 238 条；含 SceneRefsShippingTests / LayoutPresetTests 回归
 ├─ tools/
 │  ├─ SceneRefGen/                  # 截图 → scene-refs.json（含全量判定矩阵，判错退出码非 0）
 │  ├─ LayoutCheck/                  # 把布局预设画到截图上核验
@@ -282,7 +282,7 @@ starcraft_translator/
 | 韩文小字识别 | ROI 裁剪 + 预处理（放大/二值化）；PaddleOCR 升级 |
 | 黑话翻译质量 | 术语表 + LLM 上下文 prompt |
 | 刷屏性能/费用 | 变化检测 + 文本去重 + 缓存 + 术语表直出 + 一批一请求 |
-| ID 是否翻译 | 配置项 `TranslatePlayerId`(默认 false)+ 热键切换；RoomList 的 ID 列据此决定 |
+| ID 是否翻译 | 配置项 `TranslatePlayerId`(默认 false)；RoomList 的 ID 列据此决定（纯配置，无热键） |
 | 分辨率适配 | 相对坐标 / 按分辨率存多套 ROI |
 | 判断当前是哪个界面 | **图像指纹**：每场景两块静态区，块均值 RGB + 容差命中比例（见 3.9），不用 OCR |
 | 游戏内识别不稳 | 只用种族装饰板做锚点，参考按种族分套；缺该分辨率参考时报错而非硬猜 |
@@ -299,14 +299,14 @@ starcraft_translator/
 - `Microsoft.Extensions.DependencyInjection` / `.Hosting` / `.Logging`
 - `System.Drawing.Common` 或 `SixLabors.ImageSharp`（图像处理）
 - `Microsoft.Extensions.Caching.Memory`（缓存）
-- 翻译：**裸 HttpClient**（不用 SDK）——阿里云 DashScope（OpenAI 兼容 `/chat/completions`）、OpenAI 订阅（Codex OAuth + `/responses` SSE 流式）；密钥/token 走 `SecretStore`（DPAPI）
+- 翻译：**裸 HttpClient**（不用 SDK）——腾讯云 MT（TC3-HMAC-SHA256 签名，`TranslateText`）、阿里云 MT（RPC 签名，`Translate`）、阿里云 DashScope（OpenAI 兼容 `/chat/completions`）、OpenAI 订阅（Codex OAuth + `/responses` SSE 流式）；密钥/token 走 `SecretStore`（DPAPI）
 - OCR：`RapidOcrNet` + 韩文 mobile 模型（已采用）
 
 ---
 
 ## 8. 测试策略
 
-- **可单测**（Core，当前 219 条全绿）：Glossary 匹配、缓存、ID 列过滤、LLM prompt 组装、文本去重、
+- **可单测**（Core，当前 220 条全绿）：Glossary 匹配、缓存、ID 列过滤、LLM prompt 组装、文本去重、
   **场景指纹**（`SceneFingerprint`/`SceneRecognizer` 用合成帧跑；`SceneRefStore` 覆盖解析/校验和/覆盖层合并；
   `SceneRefCapture` 覆盖现场缩放几何/块均值指纹采集/写覆盖层与合并回退；
   `SceneRefsShippingTests` 回归验证出厂参考真的互相区分得开）、

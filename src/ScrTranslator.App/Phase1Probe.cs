@@ -59,7 +59,6 @@ public sealed class Phase1Probe : IDisposable
     private bool _roiAvailable; // 当前活动场景是否存在且 bucket 非空；活动场景/ReloadRois 变化时重算
     private bool _anySceneCalibrated; // 至少一个场景校准过 ROI——F9 的启动前置条件（与"当前场景"无关）
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
-    private bool _paused; // F11 暂停/继续：暂停时跳过 OnFrame 处理，不动 CaptureService（与 F9 的 Start/Stop 互不干扰）
 
     // ── Phase 5 异常恢复：看门狗(2s) 检测窗口丢失/最小化/分辨率切换 ──
     public event Action<ProbeNotice, string>? Notice;
@@ -322,7 +321,6 @@ public sealed class Phase1Probe : IDisposable
     /// <summary>看门狗（线程池执行）：窗口无效→释放旧捕获并尝试重连新句柄；最小化⇄还原→清屏/重译；均发事件给 UI。</summary>
     private void WatchdogTick(object? state)
     {
-        if (_paused) return; // F11 暂停期间不做恢复动作（继续时若窗口已丢，由下一轮看门狗处理）
         try
         {
             var hwnd = _capture.Hwnd;
@@ -409,7 +407,7 @@ public sealed class Phase1Probe : IDisposable
         var ocr = _settings.Current.Ocr;
         int detectMs = PollInterval.SceneDetect(ocr), translateMs = PollInterval.Translate(ocr);
         int roiCount = _cfg.Scenes.TryGetValue(SceneId, out var bs2) ? bs2.Sum(b => b.Rois.Count) : 0;
-        string state = _waitingForWindow ? "等待窗口" : _windowLost ? "窗口丢失" : _paused ? "已暂停" : "运行中";
+        string state = _waitingForWindow ? "等待窗口" : _windowLost ? "窗口丢失" : "运行中";
         // 指纹打分明细：排查"识别不对/识别不到"时最想看的就是每个候选各多少分，直接摊开。
         string scores = _lastRec.Scores.Count == 0 ? "—"
             : string.Join("  ", _lastRec.Scores.Select(s => $"{s.RefId} {s.HitRatio:P0}"));
@@ -422,7 +420,7 @@ public sealed class Phase1Probe : IDisposable
             $"场景: {SceneDisplay(_activeScene, _activeRace)}  判定: {_lastRec.Summary}\n" +
             $"指纹: {scores}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
-            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  引擎: {t.Active}\n" +
+            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  池: {string.Join("→", t.Providers.Where(p => p.Enabled).Select(p => p.Id))}\n" +
             $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  已校准场景={(_anySceneCalibrated ? "yes" : "no")}  busy={_busy}\n" +
             $"状态: {state}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
@@ -471,19 +469,6 @@ public sealed class Phase1Probe : IDisposable
     /// <summary>复位变化检测：切引擎/登录成功后调用，让静止画面也立即用新引擎/新登录态重译上屏。</summary>
     public void ResetChangeDetection() => _lastJoined = "";
 
-    /// <summary>F11 暂停/继续：暂停时清空悬浮显示且后续帧直接跳过处理（不停止捕获，不与 F9 冲突）；
-    /// 继续时复位变化检测，让当前静止画面立即重译。返回切换后的暂停状态。</summary>
-    public bool TogglePause()
-    {
-        _paused = !_paused;
-        _log.Log($"[probe] F11 切换：paused={_paused}");
-        if (_paused)
-            _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
-        else
-            _lastJoined = "";
-        return _paused;
-    }
-
     public void Stop()
     {
         _watchdog?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
@@ -502,7 +487,6 @@ public sealed class Phase1Probe : IDisposable
             _log.Log($"[probe] 首帧到达 {frame.Width}x{frame.Height}（捕获→处理链路已通）");
         }
         _lastFrameWH = $"{frame.Width}x{frame.Height}";
-        if (_paused) { frame.Dispose(); return; }
         // ── 两个独立节拍：场景检测(Ocr.SceneDetectPollMs，默认 200ms) 与 翻译(Ocr.TranslatePollMs，默认 500ms)。
         // 每帧实时读设置，改设置即时生效无需重启。识别很便宜要跑得快，翻译贵(OCR+LLM)按自己节拍跑。
         var ocr = _settings.Current.Ocr;
@@ -603,7 +587,6 @@ public sealed class Phase1Probe : IDisposable
             var joined = string.Join("\n", koLines);
             if (joined == _lastJoined) return; // finally 仍会 Dispose(frame) 并复位 _busy
 
-            var engine = _settings.Current.Translation.Active;
             var ctx = new TranslationContext(SceneId, _glossaryHint);
             int timeout = Math.Max(1, _settings.Current.Translation.TimeoutSeconds);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
@@ -618,7 +601,7 @@ public sealed class Phase1Probe : IDisposable
             for (int k = 0; k < koLines.Count; k++)
             {
                 string zh = outcome.Texts[k];
-                _log.Debug($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" → \"{zh}\" engine={engine} {sw.ElapsedMilliseconds}ms");
+                _log.Debug($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" → \"{zh}\" {sw.ElapsedMilliseconds}ms");
                 // **原文照抄的行不上屏**：provider 失败/超时时编排会回落原文，
                 // 把它当译文显示出去，用户看到的就是"识别到韩文却没翻译"，比什么都不显示更误导。
                 if (zh == koLines[k]) continue;
@@ -637,7 +620,7 @@ public sealed class Phase1Probe : IDisposable
             // 同一原因只气泡提示一次（否则每拍弹一次），原因变了再弹。
             if (outcome.Error is not null && outcome.Error != _lastTranslateError)
                 Notice?.Invoke(ProbeNotice.TranslateFailed,
-                    $"{outcome.Error}\n（{engine} 引擎；请检查 API Key / 登录状态，或换引擎）");
+                    $"{outcome.Error}\n（provider 池；请检查密钥/登录，或在 配置→翻译 调整池顺序/启用项）");
             _lastTranslateError = outcome.Error;
         }
         catch (Exception ex) { _log.Error($"[probe] 处理帧异常: {ex.Message}"); }
