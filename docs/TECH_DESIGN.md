@@ -97,6 +97,11 @@
 Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。不想要重复条目就在配置页删掉，
 行为可解释、不搞优先级魔法。
 
+**区域改写全部走纯函数、定位失败返回 null**：`RoiStore.ReplaceRoi`（改名/类型/像素矩形）、
+`RoiStore.RemoveRoi`（删一条）、`RoiStore.MoveRoi`（挪到另一场景的同分辨率桶，没有就新建）。
+三者都按 `(场景, 分辨率, 序号)` 定位，**定位不到就返回 null 让调用方报错**，
+绝不"差不多就行"地改到别的场景或别的分辨率上——那会让用户的校准莫名其妙坏掉且极难查。
+
 **列定义**：只有 RoomList 型 ROI 有列。列 = { Kind(RoomName/MapName/PlayerId/Other), 相对框宽的起止 }。
 运行时按每行 OCR 文本在框内的水平位置命中列（`TranslationScope.HitColumn`），再由「翻译」页
 四个开关决定翻不翻；**未命中任何列一律不翻**（最安全）。房间列表网格的两列之间隔着 Game Type，
@@ -116,9 +121,13 @@ Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。�
 **核验工具** `tools/LayoutCheck`：把预设画到真实截图上（复用运行时同一套 `LayoutPresetStore` +
 `ToRois()`），所以"核验通过"等价于"实机就是这个框"。游戏改版后跑一次即可定位哪个框歪了。
 
-### 3.3 ChangeDetector
-- **职责**：对每个 ROI 子图判断是否变化，避免重复 OCR/翻译（省 CPU 和 API 费用）。
-- **方案**：缩略图 + 感知哈希(aHash/dHash) 或像素差比例；阈值可调。聊天区因滚动，建议结合"OCR 文本去重"做二级判断。
+### 3.3 变化检测与内容闸门（实现在 `Phase1Probe.OnFrame` 内，无独立类）
+- **职责**：避免对同一内容重复 OCR/翻译（省 CPU 与 API 费用）。
+- **做法**：本帧所有待译行拼成一个字符串 `_lastJoined`，与上一帧相同则整批跳过；
+  **只有整批都真翻出来（AllResolved）才提交该状态**，否则下一帧重试 —— 否则一次失败会把错误内容永久"钉"在屏幕上。
+- **内容闸门**：`KoreanText.ContainsHangul` —— 整行不含谚文（地图名、`Top vs Bottom`、表头…）直接不进翻译。
+- 注：早期设计写的"缩略图 + 感知哈希(aHash/dHash)"与独立的 `ChangeDetector` 类**从未实现**——
+  精确文本比对已够用且无误判风险，感知哈希反而要给"文字变了但像素没大变"的场景调阈值。
 
 ### 3.4 OcrService（可插拔）
 - **接口**：
@@ -202,7 +211,7 @@ Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。�
   - `ingame`：底部**种族装饰板** `(420,930,120,120)`、`(1200,910,120,120)`。游戏内除装饰板外全是会变的（视口/小地图/单位面板），所以装饰板是唯一锚点；也因此**必须按种族分套参考**(`ingame_t/p/z`)——顺带就得到了种族信息。
   - 块均值(4×4，随分辨率等比放大)而非逐像素：SC:R 贴图自带噪点，逐像素存原始数据要 2.47MB，块均值后 114KB，且噪点被平均掉，跨场景命中率反而从 37% 降到 24%。
 - **实测判别力**：同场景两样本 100% 命中；跨场景/跨种族最高 25.2%；阈值 90% → 余量 65 个百分点。
-- **参考数据**：`src/ScrTranslator.App/scene-refs.json`（只读，随包分发）由 `tools/SceneRefGen` 从 `docs/scenes pictures/` 的截图生成，带 **SHA-256 完整性校验（覆盖几何+数据）**，被改坏/截断则整份拒用并降级为"其他界面"。用户现场采集的参考写 `%APPDATA%\ScrTranslator\scene-overrides.json`，同 (场景,分辨率) 覆盖出厂值。
+- **参考数据**：`src/ScrTranslator.App/scene-refs.json`（只读，随包分发）由 `tools/SceneRefGen` 从 `docs/scenes pictures/` 的截图生成，带 **SHA-256 完整性校验（覆盖几何+数据，算法单一实现在 `SceneRefIntegrity`，生成端与加载端共用，不可能写岔）**，被改坏/截断则整份拒用并降级为"其他界面"。用户现场采集的参考写 `%APPDATA%\ScrTranslator\scene-overrides.json`，同 (场景,分辨率) 覆盖出厂值。
 - **关键约束**：**分辨率必须精确匹配**——块均值网格随分辨率变，借用邻近分辨率参考会整片错位；所以参考按分辨率分套，缺哪个分辨率就明确报"该分辨率无参考"（保持原场景不动，不硬猜）。
 - **迟滞**：新场景需连续 2 次命中才切换；连续 3 次"全部不达标"才落到 `other`（防过场动画/弹窗瞬时干扰）。
 - **接口**：`SceneRecognizer.Recognize(FramePixels) → SceneRecognition{Status, GameScene, Race, HitRatio, Scores[]}`。`FramePixels` 是 Core 侧的只读像素视图（BGRA 偏移由 App 捕获层提供），Core 不依赖任何图像库，纯函数可单测。
