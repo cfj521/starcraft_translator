@@ -32,15 +32,20 @@
             └────────────────────────┬─────────────────────────┘
                                      │ 整窗帧
                     ┌────────────────▼─────────────────┐
-                    │           RoiManager              │  按分辨率加载 ROI 配置
-                    │   裁出: 聊天框 / 房间名列表 / 地图  │
+                    │          SceneRecognizer          │  图像指纹：每场景两块静态区，块均值+容差命中比例
+                    │   每 200ms 一次，纯内存不跑 OCR     │  见 3.9；带迟滞切换，第四态=其他界面
                     └────────────────┬─────────────────┘
-                                     │ 每个 ROI 的子图
+                                     │ 当前场景（决定用哪套区域、是否翻译）
                     ┌────────────────▼─────────────────┐
-                    │         ChangeDetector            │  帧差 / 感知哈希
-                    │   未变 → 跳过；变了 → 下游          │
+                    │    区域来源 = 校准 ROI ＋ 布局预设  │  rois.json + layout-presets.json
+                    │   裁出: 聊天框 / 房间名列表 / 地图  │  按 场景→分辨率 取，两者叠加
                     └────────────────┬─────────────────┘
-                                     │ 变化的 ROI
+                                     │ 每个区域的子图
+                    ┌────────────────▼─────────────────┐
+                    │     变化检测 ＋ 内容闸门           │  整批文本与上帧相同→跳过(省 API)
+                    │  无谚文的行不进翻译(英文 UI 是噪声) │
+                    └────────────────┬─────────────────┘
+                                     │ 待翻译的韩文行
                     ┌────────────────▼─────────────────┐
                     │           OcrService              │  IOcrEngine (可插拔)
                     │   ROI 子图 → 韩文文本 + 行位置     │
@@ -73,12 +78,43 @@
   - 窗口丢失/最小化时暂停并重试。
 - **接口**：`event Action<CaptureFrame> FrameArrived;` `Start(IntPtr hwnd)` / `Stop()`。
 
-### 3.2 RoiManager
-- **职责**：管理用户定义的区域。每个 ROI = { Name, Type(Chat/RoomList/MapInfo/Custom), Rect(相对窗口客户区的比例或像素), 分辨率 }。
-- **关键点**：
-  - 坐标用**相对比例**(0~1) 存储，适配窗口缩放；或按分辨率存多套并自动匹配当前分辨率。
-  - 房间名列表型 ROI 可定义**列**（ID 列 vs 房间名列 vs 地图列），用于"哪些翻哪些不翻"。
-- **配置**：`rois.json`。
+### 3.2 区域来源：校准 ROI ＋ 布局预设
+
+**两个来源，运行时合并**（`Phase1Probe.EffectiveRois`）：
+
+1. **用户校准的 ROI** —— `rois.json`：`场景 → 分辨率 bucket → Roi[]`。
+   每个 ROI = { Name, Type(Chat/RoomList/MapInfo), Rect(相对 0~1), Columns? }。
+   存相对比例、按分辨率分桶，界面上一律换算成**整数像素**显示（用户读百分比读不动）。
+2. **出厂布局预设** —— `layout-presets.json`：各场景在各分辨率下的**聊天框** +
+   寻找房间的**房间列表网格**（列表框 / 行高 / 房间名列 / 地图名列）。
+
+**为什么要有预设**：这些面板在给定分辨率下位置和行高是死的（列表行距实测 1080p=38px、
+2K=51px、4K=76px，严格等比），让用户每次拖框既没准头也没必要。数值由截图量得：
+列表用**绿色人数槽的 y 周期**定行、**表头亮字团**定列；游戏内聊天用 `ingame-w/h` 两张专用图
+定出单行最大宽度与最大行数。2K/4K 等比推算后用叠加图目视核验。
+
+**合并规则：叠加，不顶替。** 校准的 RoomList 框可能是用户有意框在别处（例如右侧详情面板的
+Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。不想要重复条目就在配置页删掉，
+行为可解释、不搞优先级魔法。
+
+**列定义**：只有 RoomList 型 ROI 有列。列 = { Kind(RoomName/MapName/PlayerId/Other), 相对框宽的起止 }。
+运行时按每行 OCR 文本在框内的水平位置命中列（`TranslationScope.HitColumn`），再由「翻译」页
+四个开关决定翻不翻；**未命中任何列一律不翻**（最安全）。房间列表网格的两列之间隔着 Game Type，
+所以列必须带 x 起点，只给宽度会把第二列顶到第一列右边、正好盖住 Game Type。
+
+**两层文件（预设与场景参考同一套纪律）**：
+
+| 层 | 位置 | 谁写 | 说明 |
+|---|---|---|---|
+| 出厂层 | exe 旁 `layout-presets.json` / `scene-refs.json` | 只有量测/生成工具 | 程序**永不改写**；`scene-refs.json` 另带 sha256（覆盖几何+数据），改一个坐标即整份拒用 |
+| 覆盖层 | `%APPDATA%\ScrTranslator\layout-overrides.json` / `scene-overrides.json` | 用户在配置页编辑 | 同 (场景,分辨率) 覆盖胜出；删掉即恢复出厂值。升级 exe 不丢用户数据 |
+
+**分辨率必须精确匹配**，缺该档就回落到校准 ROI —— 绝不借用邻近分辨率的数值（UI 非严格等比缩放，
+借了会整体偏移）。改完预设配置页会连着调 `probe.ReloadRois()` + `probe.ReloadLayoutPresets()`，
+否则 DI 单例里的 store 还是旧值，症状是"我明明改了，框没变"。
+
+**核验工具** `tools/LayoutCheck`：把预设画到真实截图上（复用运行时同一套 `LayoutPresetStore` +
+`ToRois()`），所以"核验通过"等价于"实机就是这个框"。游戏改版后跑一次即可定位哪个框歪了。
 
 ### 3.3 ChangeDetector
 - **职责**：对每个 ROI 子图判断是否变化，避免重复 OCR/翻译（省 CPU 和 API 费用）。
@@ -98,7 +134,7 @@
   - `PaddleOcrEngine`（后续）：ONNX 模型(det+rec, korean)。
 - **预处理**：灰度/二值化/放大，提升小字识别率。
 
-### 3.5 TranslationService
+### 3.5 翻译编排（`TranslationOrchestrator`）
 - **接口**：
   ```csharp
   public interface ITranslationProvider {
@@ -114,22 +150,49 @@
 - **LLM Prompt 要点**：系统提示设定"星际争霸韩服游戏聊天翻译"角色；附术语表；要求口语化、简短、保留游戏黑话语气；ID/数字/英文缩写不乱翻。
 - **限流**：LLM 请求合并/节流，避免刷屏时狂发请求。
 
-### 3.6 OverlayRenderer
-- **职责**：WPF 透明置顶窗，渲染译文。
-- **关键实现**：
-  - 窗口：`AllowsTransparency=true`、`WindowStyle=None`、`Topmost=true`、`Background=Transparent`。
-  - **点击穿透**：扩展样式加 `WS_EX_TRANSPARENT | WS_EX_LAYERED`（P/Invoke `SetWindowLong`）。
-  - 跟随游戏窗口位置/大小（监听窗口移动，或定时校正）。
-  - 聊天区：滚动 `ItemsControl`，保留最近 N 条。
-  - 房间名列表：译文叠在对应行旁。
+### 3.6 OverlayRenderer（`OverlayWindow`）
+- **职责**：WPF 透明置顶窗，把"这一帧翻出来的中文"叠在对应位置上。
+- **窗口**：`AllowsTransparency=true`、`WindowStyle=None`、`Topmost=true`、`Background=Transparent`、
+  `ShowInTaskbar=false`、`ShowActivated=false`（不抢游戏焦点）。
+- **点击穿透**：扩展样式加 `WS_EX_TRANSPARENT | WS_EX_LAYERED`（P/Invoke `SetWindowLongPtr`），
+  在 `SourceInitialized` 拿句柄后开启。
+- **渲染方式（与早期设想不同）**：不是滚动列表/`ItemsControl`，而是一张铺满主屏的 `Canvas`，
+  每帧 `Children.Clear()` 后按**当前帧**的译文逐条摆放。没有"保留最近 N 条历史"——
+  悬浮层的语义是"就地替换画面上的字"，历史聊天由游戏自己滚动。
+- **每条一个底衬**：`Border`（黑底 alpha = `Appearance.BackplateOpacity`，默认 0.8，圆角 3 + padding）。
+  逐条包而不是整窗铺一层：整窗铺会把游戏画面糊掉一大片，而译文只占几个小点。
+  整体不透明度 `Appearance.Opacity` 加在"整条"外层，文字自身 Opacity 只表达相对深浅——
+  否则会出现 0.8×0.8 的双重衰减。
+- **坐标**：条目带物理屏幕像素坐标，内部按 DPI 换算成 DIP。
+- **显隐**：由探测按"游戏是否前台"叠加计算，用 `Visibility`（不用 Show/Hide，避免与游戏抢焦点振荡）。
+- **原文+译文双行**（`Appearance.ShowOriginalAndTranslation`）：原文小字(0.72×、灰)在上。
+- **只渲染真翻出来的行**：provider 失败时编排回落原文，这类"文本==原文"的行不上屏
+  （显示假原文比什么都不显示更误导）。
 
-### 3.7 Pipeline / Orchestrator
-- 串起 Capture → Roi → Change → Ocr → Translate → Overlay，用事件/Channel 解耦，异步队列处理，避免阻塞捕获线程。
+### 3.7 主管线（`Phase1Probe`）
+不是 Channel 队列，而是**捕获事件驱动 + 单飞**：`CaptureService.FrameArrived → OnFrame`，
+`_busy` 用 `Interlocked` 保证同时只有一帧在处理（未处理完的帧直接丢弃），避免堆积与阻塞捕获线程。
+
+一帧内的顺序（**这个顺序是踩过坑的**）：
+1. 两个独立时钟：`detectDue`(默认 200ms) / `translateDue`(默认 500ms)，都不到点直接丢帧；
+   捕获侧帧节流取两者**较快值**（否则识别被翻译的慢节拍拖平，那个 200ms 是假的）。
+2. **场景识别**——必须在 `_roiAvailable` 判断**之前**：`_roiAvailable` 是识别的结果，
+   放后面会让"其他界面/未校准场景"变成只进不出的死状态（实测症状：识别几次后永远停在其他界面）。
+3. ROI 可用性判断 → 逐 ROI 裁剪 → OCR → 按类型/列 + 内容闸门（含谚文才翻）过滤。
+4. 变化检测：本批文本与上帧相同则跳过翻译（省 API）；只有整批都真翻出来才提交该状态，否则下帧重试。
+5. 翻译（`TranslationOrchestrator`）→ 上屏。
+
+另有 2s 看门狗：窗口丢失自动重连、最小化清屏、还原重译、分辨率切换提示、零帧/卡死诊断。
 
 ### 3.8 横切
-- **Settings**：`appsettings.json` + 用户配置；API Key 用 DPAPI(`ProtectedData`) 加密。
-- **Calibration**：进入校准模式时，悬浮层变为可交互的框选 UI，用户拖框定义 ROI 并命名/选类型。
-- **Hotkey**：全局热键（`RegisterHotKey`）。
+- **Settings**：`%APPDATA%\ScrTranslator\settings.json`（`SettingsStore`，缺文件/损坏→默认值不崩）。
+  密钥与 OAuth token 另存 `secrets.dat`，走 DPAPI(`ProtectedData`, CurrentUser)，**不进 settings.json**。
+- **区域与预设**：`rois.json` 与两个覆盖层（`scene-overrides.json` / `layout-overrides.json`）同在
+  `%APPDATA%\ScrTranslator`；出厂层在 exe 旁、只读。见 3.2 的两层表。
+- **Calibration**：独立的可交互全屏覆盖窗（悬浮层本身始终点击穿透，不变成编辑态）。
+  进入前要求游戏在前台，并自己抓帧检测场景，见 UI_DESIGN 第 5 节。
+- **Hotkey**：全局热键 8 个（`RegisterHotKey`，可录制重绑 + 冲突检测 + 恢复默认）。
+- **日志**：`logs/app.log`，分级（DEBUG 开=全量诊断，关=仅业务），UTF-8 带 BOM，超限轮转。
 
 ### 3.9 SceneRecognizer（场景识别 = 图像指纹，不用 OCR）
 - **职责**：判断当前帧属于 `browsing`(寻找房间) / `room`(房间内) / `ingame`(游戏内) 哪一个，或三者之外的 `other`(其他界面：主菜单/加载/单人/街机/设置)。场景决定用哪套 ROI、以及**翻不翻**。
@@ -161,28 +224,41 @@ record TranslationItem(string SourceText, string? TargetText, TranslationState S
 
 ---
 
-## 5. 项目目录结构（建议）
+## 5. 项目目录结构（实际落地）
 
 ```
 starcraft_translator/
 ├─ src/
-│  ├─ ScrTranslator.App/            # WPF 启动、主窗、托盘、设置 UI
-│  ├─ ScrTranslator.Core/           # 业务逻辑（无 UI 依赖，便于测试）
-│  │  ├─ Capture/                   # CaptureService
-│  │  ├─ Roi/                       # RoiManager, ChangeDetector
-│  │  ├─ Ocr/                       # IOcrEngine, WindowsOcrEngine, PaddleOcrEngine
-│  │  ├─ Translation/               # ITranslationProvider, Fast*, Llm*, Glossary, Cache, TranslationService
-│  │  └─ Pipeline/                  # Orchestrator
-│  ├─ ScrTranslator.Overlay/        # 悬浮层（透明窗、点击穿透、渲染）
-│  └─ ScrTranslator.Common/         # 模型、配置、工具
-├─ tests/
-│  └─ ScrTranslator.Core.Tests/     # Glossary/Cache/Translation 单元测试
-├─ assets/                          # 术语表数据、图标
-├─ docs/
-└─ ScrTranslator.sln
+│  ├─ ScrTranslator.App/            # WPF 启动、悬浮层、托盘、配置窗、校准窗、DEBUG 面板
+│  │  ├─ Capture/                   # CaptureService(WGC→SKBitmap) + FramePixelsSource
+│  │  ├─ Calibration/               # CalibrationWindow（拖框/划列/预设参考框/操作条）
+│  │  ├─ Config/                    # SettingsWindow + RoiEditWindow + PresetEditWindow/ColumnEditWindow
+│  │  ├─ Auth/ Secrets/ Services/   # OAuth、DPAPI 密钥、托盘/热键/自启
+│  │  ├─ Phase1Probe.cs             # 主管线：帧 → 场景 → ROI → OCR → 翻译 → 上屏 + 看门狗
+│  │  ├─ scene-refs.json            # 场景识别像素参考（生成物，只读）
+│  │  └─ layout-presets.json        # 界面布局预设（量测产物，只读）
+│  └─ ScrTranslator.Core/           # 业务逻辑（无 UI、无图像库依赖，可单测）
+│     ├─ Roi/                       # RoiStore(含 Replace/Remove/MoveRoi)、TranslationScope、RelRect
+│     ├─ Scene/                     # SceneRefStore、SceneFingerprint、SceneRecognizer、LayoutPresets、Scene
+│     ├─ Ocr/                       # IOcrEngine + PaddleOcrEngine(RapidOcrNet)
+│     ├─ Translation/               # ITranslationProvider、两 provider、Glossary、Cache、
+│     │                             #   TranslationOrchestrator(单级)、PromptBuilder、BatchProtocol
+│     ├─ Settings/                  # AppSettings、SettingsStore、PollInterval(两节拍)
+│     └─ KoreanText.cs              # 谚文判定：翻译入口的内容闸门
+├─ tests/ScrTranslator.Core.Tests/  # 207 条；含 SceneRefsShippingTests / LayoutPresetTests 回归
+├─ tools/
+│  ├─ SceneRefGen/                  # 截图 → scene-refs.json（含全量判定矩阵，判错退出码非 0）
+│  ├─ LayoutCheck/                  # 把布局预设画到截图上核验
+│  ├─ publish.ps1  make-icon.ps1
+├─ models/                          # PaddleOCR 韩文 mobile ONNX（det/rec/cls/dict，≈18MB，随包分发）
+├─ docs/                            # PRD / TECH_DESIGN / UI_DESIGN / ROADMAP / E2E_CHECKLIST / GLOSSARY
+└─ ScrTranslator.slnx
 ```
 
-> 也可先单工程起步（Phase 0），随阶段拆分。Core 与 UI 分离是为了能对翻译/术语/缓存写单测。
+> 早期设想的 `ScrTranslator.Overlay/`、`ScrTranslator.Common/`、`Pipeline/` 未拆出来：悬浮层与
+> 配置/校准都是 WPF 窗口，和启动器同进程同工程最省事；Core 与 UI 的分离才是关键（为了能单测
+> 指纹、编排、区域换算），这一条做到了。
+> `docs/scenes pictures/` 是量测/生成的**本机输入**，已 gitignore（近百 MB），不入库。
 
 ---
 
@@ -201,6 +277,10 @@ starcraft_translator/
 | 分辨率适配 | 相对坐标 / 按分辨率存多套 ROI |
 | 判断当前是哪个界面 | **图像指纹**：每场景两块静态区，块均值 RGB + 容差命中比例（见 3.9），不用 OCR |
 | 游戏内识别不稳 | 只用种族装饰板做锚点，参考按种族分套；缺该分辨率参考时报错而非硬猜 |
+| 界面位置固定却要反复校准 | 布局预设内置（聊天框 + 房间列表网格，见 3.2），按分辨率精确匹配；校准与预设叠加 |
+| 预设数值对不对 | `tools/LayoutCheck` 把预设画到真实截图上核验，复用运行时同一套换算 |
+| 校准框不准 / 误触 | 校准窗自抓帧检测场景（不依赖 F9）；新建框最小 20 物理像素；操作条可拖走、不溢出窗口 |
+| 翻译失败被当成译文 | provider 异常必须上报（不空 catch）；"文本==原文"的行不上屏；F9 时体检凭据 |
 
 ---
 
@@ -217,5 +297,13 @@ starcraft_translator/
 
 ## 8. 测试策略
 
-- **可单测**：Glossary 匹配、缓存、ID 列过滤、LLM prompt 组装、文本去重、**场景指纹**（`SceneFingerprint`/`SceneRecognizer` 用合成帧跑，`SceneRefStore` 覆盖解析/校验和/覆盖层合并，`SceneRefsShippingTests` 回归验证出厂参考真的互相区分得开）。
-- **手动验证**：捕获/悬浮/OCR/端到端需在真实游戏窗口上验证（见 ROADMAP 各阶段验收）。
+- **可单测**（Core，当前 207 条全绿）：Glossary 匹配、缓存、ID 列过滤、LLM prompt 组装、文本去重、
+  **场景指纹**（`SceneFingerprint`/`SceneRecognizer` 用合成帧跑；`SceneRefStore` 覆盖解析/校验和/覆盖层合并；
+  `SceneRefsShippingTests` 回归验证出厂参考真的互相区分得开）、
+  **布局预设**（三种相对口径各自正确、精确匹配不借用、坏数据只丢该字段并告警、
+  覆盖层读写与回退、`LayoutPresetTests` 回归验证出厂三场景×三分辨率齐全且不越画面）、
+  **区域改写**（`RoiStoreEditTests`：Replace/Remove/Move 只动目标条目、定位失败返回 null）、
+  **内容闸门**（`KoreanTextTests`：真实 UI 英文串必须判"不含谚文"）、
+  **两节拍**（`PollIntervalTests`：捕获闸门取较快值）。
+- **手动验证**：捕获/悬浮/OCR/端到端、校准交互与预设落位需在真实游戏窗口上验证（见 `E2E_CHECKLIST.md`）。
+  单测覆盖不到的主要是：真机帧像素与截图是否一致、DPI/缩放、前台判定、拖框手感。

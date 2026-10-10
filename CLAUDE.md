@@ -10,7 +10,7 @@
 - 开发计划（按 Phase 推进）：`docs/ROADMAP.md`
 - 韩文术语表：`docs/GLOSSARY.md`
 
-**当前进度**：Phase 0–4 代码全部完成；**Phase 5 自动化部分完成**、**Phase 6 场景识别（图像指纹）代码完成**（分支 `phase4-multiregion-ui`）：轮询频率接线(ChatPollMs/OtherPollMs→PollInterval 即时生效)、首次引导(F9 失败原因气泡)、异常恢复(看门狗:窗口丢失自动重连/最小化清屏还原重译/分辨率切换提示)、开机自启(HKCU Run)+启动自动翻译、打包(`tools/publish.ps1` 单文件+`tools/make-icon.ps1` 图标+版本号 0.4.0)、假设置清理(OCR 预处理/灵敏度实测无收益已移除)。F9 语义升级为"等待游戏窗口"模式(ProbeStart.WaitingForWindow)。场景识别已从 OCR 关键词换成**静态区域块均值图像指纹**（见 TECH_DESIGN §3.9），实测同场景 100%、跨场景最高 25.2%、阈值 90%。Core 单测 153/153 绿。**剩余：实机 e2e 验收（真实 SC:R，需用户）**——自启/等待/重连/场景来回切换等仅代码验证未真实环境跑过。发布产物在 `publish/`（已 gitignore）。
+**当前进度**：Phase 0–6 代码完成（分支 `phase4-multiregion-ui`，版本 0.4.0）。管线：捕获(WGC→SKBitmap) → **场景识别（图像指纹，非 OCR）** → 区域（校准 ROI ＋ 内置布局预设叠加）→ 变化检测 ＋ 内容闸门（含谚文才翻）→ PaddleOCR → 单级翻译（术语表/缓存直出，未命中一批一请求）→ 悬浮上屏（每条带 80% 黑底）。场景统一命名 browsing/room/ingame + other 四态；参考 `scene-refs.json`（含 sha256 覆盖几何+数据）由 `tools/SceneRefGen` 生成，实测同场景 100%、跨场景最高 25.2%、阈值 90%。布局预设 `layout-presets.json`（聊天框 + 房间列表网格，按分辨率量得）+ 覆盖层 `layout-overrides.json`，`tools/LayoutCheck` 可核验落位。两个正交节拍：`SceneDetectPollMs`=200 / `TranslatePollMs`=500（捕获闸门取较快值）。其余：配置窗六页、托盘、8 个热键、看门狗（窗口丢失重连/最小化清屏/分辨率提示/零帧与卡死诊断）、开机自启、启动自动翻译、DEBUG 面板（F6）+ 诊断复制（Ctrl+F6）、单实例守护、分级日志 `logs/app.log`、单文件打包。已移除：两级翻译、OCR 关键词场景判定、假设置（预处理/灵敏度/ChatPollMs）。Core 单测 207/207 绿。**剩余：实机 e2e 验收（真实 SC:R，需用户）**——按 `docs/E2E_CHECKLIST.md` 逐项勾，尤其 §4 场景识别与 §5 布局预设/校准。发布产物在 `publish/`（已 gitignore）。
 
 ## 技术栈与环境
 - **.NET 10 (LTS) + WPF**，目标框架 `net10.0-windows10.0.19041.0`，`UseWPF=true`。
@@ -28,7 +28,8 @@
 7. **场景名一律 `browsing` / `room` / `ingame`**（枚举 `GameScene`、`rois.json` 键、提示词、文档同一套）；`other`=游戏前台但不属三场景，此态**不翻译**。老校准文件的 `custom_games_listing`/`waiting_room`/`in_game` 由 `GameSceneIds.Normalize` 兼容。
 8. **`src/ScrTranslator.App/scene-refs.json` 是生成物，禁止手改**：它是场景识别的出厂参考（含 sha256 覆盖"几何+数据"），改一个坐标就会整份被拒用。要变区域/补分辨率 → 改 `tools/SceneRefGen/Program.cs` 的 `SceneDefs` 并重跑该工具（它会顺便打印全量判定矩阵，判错退出码非 0）。用户现场采集写 `%APPDATA%\ScrTranslator\scene-overrides.json`，不写回出厂文件。
    **`docs/scenes pictures/` 已 gitignore，不要提议把它加进版本库**（近百 MB，用户已明确否决）：截图只当 tools/SceneRefGen 的本机输入，入库的只有生成出来的 scene-refs.json。需要新截图直接找用户要，别去动忽略规则。
-8b. **`src/ScrTranslator.App/layout-presets.json` 是量测产物**（界面布局预设：各场景各分辨率的聊天框 + 寻找房间的房间列表网格）。这些面板位置固定，**运行时优先用预设、不需要校准**；校准结果与预设**叠加**而非互相顶替（否则用户已有的框会莫名失效）。坐标是该分辨率的**整数像素**，分辨率必须精确匹配、绝不借用邻近档。改完用 `tools/LayoutCheck` 把框画到截图上核验——它复用运行时同一套 `LayoutPresetStore` + `ToRois()`，核验结果不会与实机脱节。
+8b. **`src/ScrTranslator.App/layout-presets.json` 是量测产物**（界面布局预设：各场景各分辨率的聊天框 + 寻找房间的房间列表网格）。这些面板位置固定，**运行时优先用预设、不需要校准**；校准结果与预设**叠加**而非互相顶替（否则用户已有的框会莫名失效）。坐标是该分辨率的**整数像素**，分辨率必须精确匹配、绝不借用邻近档。用户在配置页改预设写进 `%APPDATA%\ScrTranslator\layout-overrides.json`（同 (场景,分辨率) 覆盖，删掉即恢复出厂），**出厂文件永不改写**。改完用 `tools/LayoutCheck` 把框画到截图上核验——它复用运行时同一套 `LayoutPresetStore` + `ToRois()`，核验结果不会与实机脱节。
+8c. **校准的前置与顺序不可回退**：① 进校准必须游戏已启动且**在前台**（校准窗是半透明覆盖层且靠抓屏检测场景，看不见画面时框出来全是凭空的）；② 校准窗**自己抓帧做场景检测**，不依赖 F9 是否开启，检测出的场景才决定框存进哪个桶；③ 主管线里**场景识别必须在 `_roiAvailable` 判断之前**——`_roiAvailable` 是识别的结果，放后面会让"其他界面/未校准场景"变成只进不出的死状态（已犯过一次）。
 9. 场景截图命名（`docs/scenes pictures/`）：分辨率 `1`=1920x1080 / `2`=2560x1440 / `4`=3840x2160；`ingame` 再带种族字母 `t`/`p`/`z`。必须是**无损 PNG + 1:1 物理像素**（JPG 或缩放图会让指纹整体失效）。`ingame-w*`/`ingame-h*` 是量聊天框用的，不参与识别。
 
 ## 代码约定
