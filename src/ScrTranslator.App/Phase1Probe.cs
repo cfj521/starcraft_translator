@@ -58,6 +58,12 @@ public sealed class Phase1Probe : IDisposable
     // 每 ROI 独立变化检测（键=ROI 在当前有效列表里的下标）：该 ROI 韩文与上一帧相同则整块跳过（不重译、不重显）。
     // ROI 集变化（换场景/分辨率/增删）时按签名整体清空 per-ROI 状态。
     private readonly Dictionary<int, string> _lastJoinedPerRoi = new();
+    // OCR 行级两帧共识（ingame 聊天浮在游戏画面上的动态背景降噪）：同一行文本连续两帧出现才提交进变化检测/翻译/上屏；
+    // 已提交的行被单位遮挡一两帧不掉（宽限，bounds 沿用最近见到）。键=ROI 下标，随 ROI 集签名与变化检测一起清。
+    private readonly LineStabilizer _stabilizer = new();
+    /// <summary>OCR 行置信度下限：ingame 聊天背景是真实游戏画面，背景像素被读成低置信度乱行（碰巧含韩文就会过韩文闸门、
+    /// 每拍刷一次池请求）。真文字白底黑边 conf≈0.98，0.75 留足余量。"真行被遮挡/读乱"由两帧共识兜住。</summary>
+    private const double MinLineConfidence = 0.75;
     private readonly Dictionary<int, List<OverlayItem>> _displayedPerRoi = new();
     private string _roiSetSignature = "";
     private bool _roiAvailable; // 当前活动场景是否存在且 bucket 非空；活动场景/ReloadRois 变化时重算
@@ -483,6 +489,7 @@ public sealed class Phase1Probe : IDisposable
         _lastJoinedPerRoi.Clear();
         _displayedPerRoi.Clear();
         _roiSetSignature = "";
+        _stabilizer.ResetAll();
     }
     public void ResetChangeDetection() => ResetAllChangeDetection();
 
@@ -580,6 +587,11 @@ public sealed class Phase1Probe : IDisposable
                 foreach (var line in res.Lines)
                 {
                     _log.Debug($"[{roi.Name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
+                    if (line.Confidence < MinLineConfidence)
+                    {
+                        _log.Debug($"[{roi.Name}][skip-low-conf] \"{line.Text}\" conf={line.Confidence:F2}");
+                        continue;
+                    }
                     double relX = (line.Bounds.X + line.Bounds.Width / 2.0) / Math.Max(1, px.Width);
                     ColumnKind? col = roi.Columns is null
                         ? (roiType == RoiType.RoomList ? ColumnKind.RoomName : (ColumnKind?)null)
@@ -600,7 +612,11 @@ public sealed class Phase1Probe : IDisposable
                 }
                 if (res.Lines.Count == 0)
                     _log.Debug($"[{roi.Name}] (空)");
-                rois.Add((roi.Name, lines, bounds));
+                // 两帧共识：背景噪音一帧就过去，聊天文字持续在屏——只有连续两帧同文本的行才进下游。
+                var (stableLines, stableBounds) = _stabilizer.Stabilize(rois.Count, lines, bounds);
+                if (stableLines.Count != lines.Count)
+                    _log.Debug($"[{roi.Name}][stable] OCR={lines.Count} 稳定={stableLines.Count}");
+                rois.Add((roi.Name, stableLines, stableBounds));
             }
 
             // ── ROI 集变化（换场景/分辨率/增删）→ 清空 per-ROI 状态与悬浮层，全量重译 ──
@@ -612,6 +628,7 @@ public sealed class Phase1Probe : IDisposable
                 _roiSetSignature = sig;
                 _lastJoinedPerRoi.Clear();
                 _displayedPerRoi.Clear();
+                _stabilizer.ResetAll();
                 _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
             }
 

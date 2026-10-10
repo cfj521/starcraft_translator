@@ -121,11 +121,12 @@ Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。�
 **核验工具** `tools/LayoutCheck`：把预设画到真实截图上（复用运行时同一套 `LayoutPresetStore` +
 `ToRois()`），所以"核验通过"等价于"实机就是这个框"。游戏改版后跑一次即可定位哪个框歪了。
 
-### 3.3 变化检测与内容闸门（实现在 `Phase1Probe.OnFrame` 内，无独立类）
+### 3.3 变化检测与内容闸门（`Phase1Probe.OnFrame` + `LineStabilizer`）
 - **职责**：避免对同一内容重复 OCR/翻译（省 CPU 与 API 费用）。
-- **做法**：本帧所有待译行拼成一个字符串 `_lastJoined`，与上一帧相同则整批跳过；
+- **两帧共识（`LineStabilizer`）**：ingame 聊天浮在游戏画面上，背景像素会被 OCR 读成低置信度噪音行——一行文本**连续两帧出现**才提交进下游；已提交行被单位遮挡一两帧不掉（宽限，bounds 沿用最近见到）；重复行按出现次数跟踪，聊天滚动改变 y 坐标时按出现次序对齐、共识不打断。
+- **做法**：每 ROI 独立，把已提交的稳定行拼成一个字符串 `_lastJoinedPerRoi`，与上一帧相同则整块跳过；
   **只有整批都真翻出来（AllResolved）才提交该状态**，否则下一帧重试 —— 否则一次失败会把错误内容永久"钉"在屏幕上。
-- **内容闸门**：`KoreanText.ContainsHangul` —— 整行不含谚文（地图名、`Top vs Bottom`、表头…）直接不进翻译。
+- **内容闸门**：① 置信度闸门：OCR 行 conf<0.75 直接丢（背景乱读置信度低，真文字白底黑边 conf≈0.98）；② `KoreanText.ContainsHangul` —— 整行不含谚文（地图名、`Top vs Bottom`、表头…）直接不进翻译。
 - 注：早期设计写的"缩略图 + 感知哈希(aHash/dHash)"与独立的 `ChangeDetector` 类**从未实现**——
   精确文本比对已够用且无误判风险，感知哈希反而要给"文字变了但像素没大变"的场景调阈值。
 

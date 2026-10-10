@@ -1,0 +1,114 @@
+using System.Drawing;
+namespace ScrTranslator.Core.Translation;
+
+/// <summary>OCR 行级两帧共识（动态背景降噪，如 ingame 聊天浮在游戏画面上）：
+/// 背景噪音是瞬时的（单位/特效穿过一两帧就过去），聊天/列表文字是持久的。
+/// 一行**连续两帧以相同文本出现**才提交进下游管线（变化检测/翻译/上屏）；
+/// 已提交的行允许**连续缺失两帧**（宽限，单位从文字后面穿过遮挡它），
+/// 宽限期间位置沿用最近一次见到的 bounds。
+/// 重复行（两条相同消息）按**出现次数**跟踪、不合并：k 次出现对应 k 个条目，
+/// 聊天滚动导致 y 坐标整体变化时按出现次序对齐、数量自校正，共识不被滚动打断。
+/// 一个 probe 一个实例，按 ROI 下标分状态；ROI 集变化（换场景）时调 <see cref="ResetAll"/>。</summary>
+public sealed class LineStabilizer
+{
+    private sealed class Roi
+    {
+        // 已提交行（有序）：文本 + 最近一次见到的 bounds + 最近一次见到时的帧内下标（插入排序用）。
+        public List<(string Text, RectangleF Bounds, int LastFrameIdx)> Stable = new();
+        // 上一帧出现过、尚未提交（等次帧确认）的出现次数，按文本。
+        public Dictionary<string, int> Pending = new();
+        // 已提交文本连续缺失的帧数（>= DropAfterMissing 时撤掉该文本所有缺失出现）。
+        public Dictionary<string, int> MissingFrames = new();
+    }
+
+    private readonly Dictionary<int, Roi> _byRoi = new();
+    private const int DropAfterMissing = 2; // 缺失两帧才撤行（遮挡一两帧不掉）
+
+    /// <summary>给定本帧候选行（已过置信度/韩文/翻译范围闸门，按 OCR 顺序），返回已提交的稳定行及其 bounds。
+    /// 挂起行（首帧见到）不在返回值里；宽限行（本帧缺失但仍在宽限内）带最近 bounds 返回。</summary>
+    public (List<string> Lines, List<RectangleF> Bounds) Stabilize(
+        int roiIndex, IReadOnlyList<string> frameLines, IReadOnlyList<RectangleF> frameBounds)
+    {
+        var roi = GetOrCreate(roiIndex);
+        int n = frameLines.Count;
+
+        // 本帧每个文本的出现次数与各次出现的帧内下标（出现次序对齐用）。
+        var frameCount = new Dictionary<string, int>();
+        var frameOccIdx = new Dictionary<string, List<int>>();
+        for (int i = 0; i < n; i++)
+        {
+            string t = frameLines[i];
+            frameCount[t] = frameCount.GetValueOrDefault(t) + 1;
+            if (!frameOccIdx.TryGetValue(t, out var li)) frameOccIdx[t] = li = new List<int>();
+            li.Add(i);
+        }
+
+        // 按旧稳定顺序走：每个文本的前 min(已提交次数, 本帧出现次数) 次出现被确认（位置用本帧 bounds），
+        // 尾部出现本帧没见到 → 缺失（打标记，按文本统一裁决）。
+        var kept = new List<(string Text, RectangleF Bounds, int LastFrameIdx, bool Missing)>();
+        var confirmedSoFar = new Dictionary<string, int>();
+        var missingNow = new Dictionary<string, int>();
+        foreach (var s in roi.Stable)
+        {
+            int confirmed = confirmedSoFar.GetValueOrDefault(s.Text);
+            if (confirmed < frameCount.GetValueOrDefault(s.Text))
+            {
+                int idx = frameOccIdx[s.Text][confirmed];
+                confirmedSoFar[s.Text] = confirmed + 1;
+                kept.Add((s.Text, frameBounds[idx], idx, false));
+            }
+            else
+            {
+                missingNow[s.Text] = missingNow.GetValueOrDefault(s.Text) + 1;
+                kept.Add((s.Text, s.Bounds, s.LastFrameIdx, true)); // 暂留，裁决见下
+            }
+        }
+
+        // 缺失裁决（每文本每帧只 +1，不管缺几次）：连续缺失满 2 帧 → 撤掉该文本所有缺失出现；
+        // 本帧有确认的文本 → 缺失计数归零。
+        var dropAllMissing = new HashSet<string>();
+        foreach (var kv in missingNow)
+        {
+            int frames = roi.MissingFrames.GetValueOrDefault(kv.Key) + 1;
+            roi.MissingFrames[kv.Key] = frames;
+            if (frames >= DropAfterMissing) dropAllMissing.Add(kv.Key);
+        }
+        foreach (var kv in frameCount)
+            if (!missingNow.ContainsKey(kv.Key)) roi.MissingFrames[kv.Key] = 0;
+
+        var newStable = new List<(string, RectangleF, int)>();
+        foreach (var k in kept)
+            if (!k.Missing || !dropAllMissing.Contains(k.Text)) newStable.Add((k.Text, k.Bounds, k.LastFrameIdx));
+
+        // 提升：本帧里超出"确认数"的出现，上一帧有挂起同文 → 凑满两帧，转正；
+        // 插到"帧内下标比它小的已保留行"的最后一条之后（下标相等不可能：同帧内一行只占一个下标）。
+        var newPending = new Dictionary<string, int>();
+        foreach (var kv in frameCount)
+        {
+            string t = kv.Key;
+            int confirmed = confirmedSoFar.GetValueOrDefault(t);
+            int promote = Math.Min(roi.Pending.GetValueOrDefault(t), kv.Value - confirmed);
+            for (int k = 0; k < promote; k++)
+            {
+                int idx = frameOccIdx[t][confirmed + k];
+                int at = newStable.FindLastIndex(x => x.Item3 < idx);
+                newStable.Insert(at < 0 ? 0 : at + 1, (t, frameBounds[idx], idx));
+            }
+            int rest = kv.Value - confirmed - promote;
+            if (rest > 0) newPending[t] = rest; // 首帧见到：挂起（挂起行本帧没再出现＝噪音，随 newPending 自然丢弃）
+        }
+        roi.Pending = newPending;
+        roi.Stable = newStable;
+
+        var lines = new List<string>(newStable.Count);
+        var bounds = new List<RectangleF>(newStable.Count);
+        foreach (var s in newStable) { lines.Add(s.Item1); bounds.Add(s.Item2); }
+        return (lines, bounds);
+    }
+
+    /// <summary>ROI 集变化（换场景/分辨率/增删）：清掉全部 ROI 的共识状态。</summary>
+    public void ResetAll() => _byRoi.Clear();
+
+    private Roi GetOrCreate(int roiIndex) =>
+        _byRoi.TryGetValue(roiIndex, out var r) ? r : _byRoi[roiIndex] = new Roi();
+}
