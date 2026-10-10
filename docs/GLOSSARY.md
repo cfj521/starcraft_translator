@@ -35,7 +35,6 @@
 | 빌드 | 出兵顺序 / build | build order |
 | 자원 | 资源 | |
 | 리치 | 经济领先 / 优势 | reach |
-| 가스업 | 气田满了 / 气收满 | gas full |
 
 ## 3. 战术
 | 韩文 | 中文 | 备注 |
@@ -43,7 +42,6 @@
 | 러시 | 速攻 / rush | |
 | 치즈 / 치즈러시 | 偷鸡 / cheese | |
 | 올인 | 一波流 / all-in | |
-| 한타 | 团战 | teamfight |
 | 정찰 | 侦察 | |
 | 견제 | 牵制 / 骚扰 | harass |
 | 컨트롤 / 컨 | 操作 / 微操 | micro |
@@ -71,11 +69,9 @@
 | 오버로드 / 오버 | 王虫 | Overlord |
 | 고스트 | 幽灵 / 狙击手 | Ghost |
 | 파이어배트 | 火焰蝙蝠 | Firebat |
-| 고렘 | 石像鬼 / 高灵 | Golem |
-| 레이스 | 幽灵战机 | Wraith |
-| 메디배 | 医疗运输机 | Medivac |
-| 리퍼 | 收割者 | Reaper |
-| 마리네이드 | 攻城坦克兵 | Marauder |
+| 골리앗 | 歌利亚 / 大脚 | Goliath |
+| 레이스 / 발키리 | 怨灵战机 / 女武神 | Wraith / Valkyrie |
+| 드랍십 / 드랍 | 运兵船 / 运输机 | Dropship |
 | 배틀크루저 | 战列巡洋舰 | Battlecruiser |
 | 사이언스쉽 | 科学战舰 | Science Vessel |
 | 프로브 | 探测机 / SCV | Probe |
@@ -83,18 +79,21 @@
 | 아콘 | 执政官 / 大主教 | Archon |
 | 캐리어 | 航母 | Carrier |
 | 리버 | 叉前哨 / 掠夺者 | Reaver |
-| 인터셉터 | 拦截机 | Interceptor |
-| 아비터 | 仲裁者 | Arbiter |
-| 포닉스 | 凤凰 | Phoenix |
-| 디스랩터 / 디스랩 | 扰乱者 | Disruptor |
-| 스칼럽 | 飞蝎 / 蝎子 | Scarab |
 | 울트라 / 울트라리스크 | 跳虫 | Ultralisk |
 | 디파일러 | 腐化者 / 爆虫 | Defiler |
-| 브루드로드 / 브루드 | 巢母领主 | Brood Lord |
-| 커럽터 | 腐蚀者 / 毒爆虫 | Corruptor |
-| 퀸 | 女王 | Queen |
-| 코크로치 | 蟑螂 | Cockroach |
-| 인페스터 / 인페 | 潜伏者 | Infestor |
+| 다크아콘 | 黑暗执政官 / 红球 | Dark Archon |
+| 옵저버 / 옵 | 观察机 / 叮当 | Observer |
+| 셔틀 | 穿梭机 / 运输机 | Shuttle |
+| 스카웃 | 斥候 / 侦察机 | Scout |
+| 아비터 | 仲裁者 / 法官 | Arbiter |
+| 유충 | 幼虫 | Larva |
+| 드론 | 工蜂 / 农民 | Drone |
+| 퀸 | 皇后 / 女王 | Queen |
+| 감염테란 | 寄生人族 / 自爆人 | Infested Terran |
+| 브루드링 | 巢虫 | Broodling |
+| 스콜지 | 自爆蚊 / 自杀机 | Scourge |
+| 가디언 | 守护者 | Guardian |
+| 디바이러 | 吞噬者 | Devourer |
 
 ## 5. 地图 / 房间
 | 韩文 | 中文 | 备注 |
@@ -105,7 +104,7 @@
 | 팀플 | 团队游戏 | team play |
 | 1대1 / 1:1 | 单挑 / 1v1 | |
 | 관전 | 观战 | spectate |
-| 옵저버 / 옵 | 观察者 / OB | observer |
+| 옵 | 观战者 / OB | observer（观战的人，别与神族单位 Observer 混） |
 | 비번 / 비밀번호 | 房间密码 | password |
 
 ## 6. 聊天黑话 / 缩写
@@ -126,8 +125,7 @@
 | 하수 | 菜鸟 / 弱者 | |
 | 뉴비 | 新手 | newbie |
 | 즐겜 | 玩得愉快 | enjoy game |
-| 빵 / 빵셔틀 | （口语，按上下文） | 慎翻 |
-| 대박 | 太棒了 / 厉害 | 大박（称赞） |
+| 대박 | 太棒了 / 厉害 | （称赞） |
 | 헐 | 哇 / 我靠 | 惊叹 |
 | 와 / 우와 | 哇 / 好厉害 | 惊叹 |
 | 미쳤어 | 疯了 / 太强了 | 夸张赞 |
