@@ -39,7 +39,7 @@
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>0.4.0</Version>
+    <Version>0.1.1</Version>
     <Company>SC:R Translator</Company>
     <Product>SC:R Translator</Product>
     <Copyright>MIT License</Copyright>
