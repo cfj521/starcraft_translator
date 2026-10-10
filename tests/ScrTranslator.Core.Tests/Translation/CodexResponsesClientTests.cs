@@ -30,4 +30,15 @@ public class CodexResponsesClientTests
         await Assert.ThrowsAsync<HttpRequestException>(() =>
             client.CompleteAsync("m","s","u","t","a", CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Status429_ThrowsRateLimit_WithRetryAfter()
+    {
+        var stub = new StubHttpMessageHandler("slow down", HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(4));
+        var client = new CodexResponsesClient(new HttpClient(stub));
+        var ex = await Assert.ThrowsAsync<RateLimitException>(() =>
+            client.CompleteAsync("m", "s", "u", "t", "a", CancellationToken.None));
+        Assert.Equal(TimeSpan.FromSeconds(4), ex.RetryAfter);
+        Assert.Contains("429", ex.Message);
+    }
 }

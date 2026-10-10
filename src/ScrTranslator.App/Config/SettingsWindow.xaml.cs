@@ -120,6 +120,8 @@ public partial class SettingsWindow : Window
         VersionText.Text = $"版本 {Assembly.GetExecutingAssembly().GetName().Version}";
 
         LoadFromSettings(_holder.Current);
+        LoadLogView();          // 载入本次运行以来的全部日志
+        _log.LogWritten += OnLogWritten; // 实时追加（marshal 到 UI 线程）
         Activated += (_, _) =>
         {
             LoadRoiList(); // 从校准窗口返回时刷新区域页
@@ -132,9 +134,53 @@ public partial class SettingsWindow : Window
     // 这里兜底注销，避免 handler 残留、_recordingFunc 悬空。
     private void OnWindowClosed(object? sender, EventArgs e)
     {
+        _log.LogWritten -= OnLogWritten; // 窗口关了不再追加快照，避免 handler 悬空
         if (_recordingFunc is null) return;
         PreviewKeyDown -= OnRecordKeyDown;
         _recordingFunc = null;
+    }
+
+    // ── 日志页 ───────────────────────────────────────────────────────────
+
+    /// <summary>载入本次运行以来的全部日志（FileLogger 内存缓冲，最新在后）。</summary>
+    private void LoadLogView()
+    {
+        LogListBox.Items.Clear();
+        foreach (var line in _log.RecentLines) LogListBox.Items.Add(line);
+    }
+
+    /// <summary>实时追加一行。仅在用户正停留在底部时自动滚到新行（否则不打断其翻看历史）。</summary>
+    private void OnLogWritten(string line)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            bool follow = IsLogAtBottom();
+            LogListBox.Items.Add(line);
+            if (follow && LogListBox.Items.Count > 0)
+                LogListBox.ScrollIntoView(LogListBox.Items[LogListBox.Items.Count - 1]);
+        });
+    }
+
+    /// <summary>日志列表是否正显示在底部（用户在看最新行）。未找到内部 ScrollViewer 时按"跟随"处理。</summary>
+    private bool IsLogAtBottom()
+    {
+        var sv = FindScrollViewer(LogListBox);
+        if (sv is null) return true;
+        double max = sv.ExtentHeight - sv.ViewportHeight;
+        return max <= 1 || sv.VerticalOffset >= max - 2;
+    }
+
+    /// <summary>沿视觉树第一个子节点向下找 ScrollViewer（ListBox 模板：ListBox→Border→ScrollViewer，几层内必达，不触碰列表项）。</summary>
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        DependencyObject? d = root;
+        for (int depth = 0; d is not null && depth < 10; depth++)
+        {
+            if (d is ScrollViewer sv) return sv;
+            int n = VisualTreeHelper.GetChildrenCount(d);
+            d = n > 0 ? VisualTreeHelper.GetChild(d, 0) : null;
+        }
+        return null;
     }
 
     // ── 加载 ─────────────────────────────────────────────────────────────

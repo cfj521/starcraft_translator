@@ -33,6 +33,9 @@ public sealed class TranslationOrchestrator
     /// <summary>当前缓存条目数（调试面板用）。</summary>
     public int CacheCount => _cache.Count;
 
+    /// <summary>当前 provider 池实例（调试面板逐个展示状态用；翻译仍走 <see cref="TranslateAsync"/> 的回退链）。</summary>
+    public IReadOnlyList<ITranslationProvider> Providers => _pool();
+
     public async Task<TranslateOutcome> TranslateAsync(
         IReadOnlyList<string> koreanLines, TranslationContext ctx, CancellationToken ct)
     {

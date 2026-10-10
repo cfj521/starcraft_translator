@@ -181,6 +181,12 @@ public partial class App : Application
         _trayService = _host.Services.GetRequiredService<TrayService>();
         _trayService.Initialize();
 
+        var log = _host.Services.GetRequiredService<FileLogger>();
+        var startupSettings = _host.Services.GetRequiredService<SettingsHolder>();
+        log.DebugEnabled = startupSettings.Current.General.DebugMode; // 启动即同步，避免首帧诊断漏记
+        log.Info($"──── SC:R Translator v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version} 启动 ────");
+        log.Info($"[app] 配置={settingsPath} | ROI={roisPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
+
         var probe = _host.Services.GetRequiredService<Phase1Probe>();
         bool running = false;
         void ToggleProbe()
@@ -190,14 +196,14 @@ public partial class App : Application
                 probe.Stop();
                 running = false;
                 _trayService.SetProbeRunning(false);
-                _trayService.ShowToast("翻译", "已关闭");
+                log.Info("[app] 翻译已关闭（F9）");
                 return;
             }
-            var info = probe.Start(); // 首次引导：失败原因不再只进日志，托盘气泡直出
+            var info = probe.Start();
             running = info.Status == ProbeStart.Ok;
 
             // 凭据体检：OCR 认得出韩文、但 provider 池里没有任何可用 provider 时，症状是"字出来了却没翻"，
-            // 而且失败发生在网络层、离配置页很远——必须在开翻译这一刻就说破。
+            // 而且失败发生在网络层、离配置页很远——必须在开翻译这一刻就说破（只进日志，不弹气泡）。
             if (running)
             {
                 var enabled = _host.Services.GetServices<ITranslationProvider>()
@@ -209,56 +215,34 @@ public partial class App : Application
                 {
                     string reasons = string.Join("；", enabled.Select(p =>
                         $"{p.Name}（{p.GetStatus().Detail}）"));
-                    _trayService.ShowToast("翻译翻不出来",
-                        $"启用的 provider 全都不可用：{reasons}。韩文能识别出来，但翻不成中文。请到 配置→翻译 配密钥/登录，或启用其它 provider。");
+                    log.Warn($"[app] 开翻译但启用的 provider 全都不可用：{reasons}。韩文能识别但翻不成中文，请到 配置→翻译 配密钥/登录或启用其它 provider。");
                 }
             }
 
-            string msg = info.Status switch
+            string result = info.Status switch
             {
                 ProbeStart.Ok => "已开启",
-                ProbeStart.WaitingForWindow => $"未找到游戏窗口（进程 {info.ProcessName}），已转入等待：窗口出现后自动开始翻译（游戏需窗口化/无边框运行）",
+                ProbeStart.WaitingForWindow => $"未找到游戏窗口（进程 {info.ProcessName}），转入等待：窗口出现后自动开始翻译（游戏需窗口化/无边框）",
                 ProbeStart.CaptureUnsupported => "无法开启：系统不支持窗口捕获（需 Win10 1803+，且非 WSL）",
                 ProbeStart.NoRoi => "尚未校准区域：按 F10 框选游戏聊天/房间区域后再按 F9",
                 ProbeStart.WindowNotFound => $"{info.ProcessName} 窗口查找异常：请确认游戏已以窗口化/无边框模式启动",
-                ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见 logs/app.log",
+                ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见日志",
                 _ => "无法开启",
             };
-            _trayService.ShowToast("翻译", msg);
+            log.Info($"[app] 翻译开启结果：{result}");
+            _trayService.SetProbeRunning(running);
         }
         _trayService.ToggleProbe = ToggleProbe;
 
-        // Phase 5 异常恢复：看门狗(线程池)事件 → marshal UI 线程 → 托盘气泡。
-        probe.Notice += (kind, msg) => Dispatcher.InvokeAsync(() =>
+        // Phase 5 异常恢复：看门狗/识别事件不再弹气泡（游戏前台看不到），统一靠 Phase1Probe 自己的
+        // 日志（_log.Info/Warn/Error，含翻译失败）+ 配置→日志页 查看。这里只做一件事：
+        // 托盘"开启/关闭翻译"文本随实际运行态变化——自动续译(首连/重连)→开，窗口丢失→关。
+        // （最小化/还原不改运行态——探测仍在捕获翻译，只是暂不显示）
+        probe.Notice += (kind, _) => Dispatcher.InvokeAsync(() =>
         {
-            string title = kind switch
-            {
-                ProbeNotice.WindowLost => "翻译已暂停",
-                ProbeNotice.Reconnected => "翻译已恢复",
-                ProbeNotice.FirstConnected => "翻译已开启",
-                ProbeNotice.Minimized => "翻译已暂停",
-                ProbeNotice.Restored => "翻译已恢复",
-                ProbeNotice.ResolutionChanged => "需要重新校准",
-                ProbeNotice.NoFrames => "收不到画面",
-                ProbeNotice.Stalled => "翻译卡住",
-                ProbeNotice.SceneChanged => "场景",
-                ProbeNotice.SceneRefMissing => "场景识别不可用",
-                ProbeNotice.TranslateFailed => "翻译失败",
-                ProbeNotice.NeedsCalibration => "需要校准",
-                _ => "翻译",
-            };
-            // 托盘"开启/关闭翻译"文本随实际运行态变化：自动续译(首连/重连)→开，窗口丢失→关。
-            // （最小化/还原不改运行态——探测仍在捕获翻译，只是暂不显示）
             if (kind is ProbeNotice.FirstConnected or ProbeNotice.Reconnected) { running = true; _trayService.SetProbeRunning(true); }
             else if (kind is ProbeNotice.WindowLost) { running = false; _trayService.SetProbeRunning(false); }
-            _trayService.ShowToast(title, msg);
         });
-
-        var log = _host.Services.GetRequiredService<FileLogger>();
-        var startupSettings = _host.Services.GetRequiredService<SettingsHolder>();
-        log.DebugEnabled = startupSettings.Current.General.DebugMode; // 启动即同步，避免首帧诊断漏记
-        log.Info($"──── SC:R Translator v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version} 启动 ────");
-        log.Info($"[app] 配置={settingsPath} | ROI={roisPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
 
         // 场景识别参考的启动体检：缺文件/缺分辨率是"翻译突然不工作"的头号原因，必须在日志第一屏说清楚。
         var sceneStore = _host.Services.GetRequiredService<SceneRefStore>();
@@ -288,17 +272,17 @@ public partial class App : Application
             var hwnd = WindowFinder.FindByProcess(proc);
             if (hwnd == IntPtr.Zero)
             {
-                _trayService.ShowToast("无法校准", $"未找到游戏窗口（进程 {proc}）。请先启动 SC:R（窗口化/无边框）。");
+                log.Info($"[app] 无法校准：未找到游戏窗口（进程 {proc}）。请先启动 SC:R（窗口化/无边框）。");
                 return;
             }
             if (NativeMethods.IsIconic(hwnd))
             {
-                _trayService.ShowToast("无法校准", "游戏处于最小化状态，请先还原窗口再按 F10。");
+                log.Info("[app] 无法校准：游戏处于最小化状态，请先还原窗口再按 F10。");
                 return;
             }
             if (NativeMethods.GetForegroundWindow() != hwnd)
             {
-                _trayService.ShowToast("无法校准", "游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 F10。");
+                log.Info("[app] 无法校准：游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 F10。");
                 return;
             }
 
@@ -355,14 +339,13 @@ public partial class App : Application
             try { SettingsStore.Save(settingsHolder.Current, settingsPath); }
             catch (Exception ex) { log.Error($"[hotkey] 保存 settings.json 失败: {ex.Message}"); }
             log.Info($"[app] DEBUG 模式: {(newVal ? "开（全量诊断日志+面板）" : "关（仅业务日志）")}");
-            _trayService.ShowToast("DEBUG 面板", newVal ? "已开启" : "已关闭");
         }
 
         // 复制诊断快照（Ctrl+F6）：把面板同源文本拷到剪贴板，无需面板可点/不抢焦点。
         void CopyDebug()
         {
-            try { Clipboard.SetText(probe.GetDebugSnapshot()); _trayService.ShowToast("诊断信息", "已复制到剪贴板"); }
-            catch (Exception ex) { log.Warn($"[hotkey] 复制诊断失败: {ex.Message}"); _trayService.ShowToast("诊断信息", "复制失败"); }
+            try { Clipboard.SetText(probe.GetDebugSnapshot()); log.Info("[app] 诊断快照已复制到剪贴板（Ctrl+F8）"); }
+            catch (Exception ex) { log.Warn($"[app] 复制诊断失败: {ex.Message}"); }
         }
 
         // 全局热键：从 SettingsHolder.Current.Hotkeys 驱动注册全部五功能（游戏有焦点时也生效）。

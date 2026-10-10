@@ -9,6 +9,9 @@ public enum ProviderState
     NoCredentials,
     /// <summary>免费额度已用尽（或近期被 API 判为超额）。编排器跳过，直到额度重置/冷却结束。</summary>
     QuotaExhausted,
+    /// <summary>命中限流（HTTP 429），正处于冷却期（Retry-After 或指数退避）。编排器跳过、不发请求，
+    /// 冷却结束自动恢复——期间整批回落原文或落到池内下一个 provider。</summary>
+    RateLimited,
 }
 
 /// <summary><see cref="ITranslationProvider.GetStatus"/> 的返回值。<see cref="Detail"/> 给日志/界面展示原因。</summary>
@@ -18,6 +21,7 @@ public sealed record ProviderStatus(ProviderState State, string Detail)
     public static ProviderStatus Ok(string detail = "") => new(ProviderState.Available, detail);
     public static ProviderStatus NoCreds(string detail) => new(ProviderState.NoCredentials, detail);
     public static ProviderStatus Exhausted(string detail) => new(ProviderState.QuotaExhausted, detail);
+    public static ProviderStatus RateLimited(string detail) => new(ProviderState.RateLimited, detail);
 }
 
 /// <summary>翻译 provider 的统一接口。池内每个 provider（免费机器翻译 / LLM）都实现它。

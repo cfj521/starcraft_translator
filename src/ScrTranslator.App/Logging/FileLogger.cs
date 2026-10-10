@@ -15,12 +15,20 @@ public sealed class FileLogger : IDisposable
 {
     private readonly string _path;
     private readonly object _lock = new();
+    private readonly List<string> _recent = new();
     private StreamWriter? _w;
     private long _bytes;
     private const long MaxBytes = 5L * 1024 * 1024;
+    private const int MaxRecent = 2000; // 内存缓冲：日志页实时视图，超出丢最旧
 
     /// <summary>诊断级开关。由 App/探测按 General.DebugMode 实时设置；volatile 保证跨线程立即可见。</summary>
     public volatile bool DebugEnabled;
+
+    /// <summary>每写一条日志（通过级别过滤后）触发。供配置页"日志"标签实时追加；订阅方需自行 marshal 到 UI 线程。</summary>
+    public event Action<string>? LogWritten;
+
+    /// <summary>当前内存缓冲的日志行快照（含本次运行以来的全部已写行，最新在后）。供日志页打开时一次性载入历史。</summary>
+    public IReadOnlyList<string> RecentLines { get { lock (_lock) return _recent.ToArray(); } }
 
     public FileLogger(string path)
     {
@@ -45,13 +53,16 @@ public sealed class FileLogger : IDisposable
     public void Write(LogLevel level, string msg)
     {
         if (level == LogLevel.Debug && !DebugEnabled) return;
+        string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level.ToString().ToUpperInvariant(),-5}] {msg}";
         lock (_lock)
         {
             if (_bytes > MaxBytes) Rotate();
-            string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level.ToString().ToUpperInvariant(),-5}] {msg}";
             _w!.WriteLine(line);
             _bytes += Encoding.UTF8.GetByteCount(line) + 2;
+            _recent.Add(line);
+            while (_recent.Count > MaxRecent) _recent.RemoveAt(0);
         }
+        LogWritten?.Invoke(line); // 锁外触发：订阅方（UI）回写本 logger 不会死锁
     }
 
     /// <summary>把当前日志改名为 .1（覆盖旧的），重开新文件。查看器占用导致 Move 失败时静默跳过，继续追加不崩。</summary>

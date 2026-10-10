@@ -91,13 +91,6 @@ public sealed class TrayService : IDisposable
         };
     }
 
-    /// <summary>M4：热键切换类动作触发后的短提示。用系统气泡通知，托盘未初始化时静默忽略。</summary>
-    public void ShowToast(string title, string message)
-    {
-        try { _trayIcon?.ShowNotification(title, message); }
-        catch (Exception ex) { _log.Warn($"[tray] 显示提示失败: {ex.Message}"); }
-    }
-
     public void Dispose()
     {
         _trayIcon?.Dispose();

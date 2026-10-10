@@ -419,12 +419,18 @@ public sealed class Phase1Probe : IDisposable
         string refs = store.IsUsable
             ? $"{store.References.Count}条(现场{store.OverrideCount}) 块{store.BlockSize} 容差{store.ChannelTolerance} 阈值{store.MinHitRatio:P0}"
             : $"不可用: {store.LoadError}";
-        var t = _settings.Current.Translation;
+        // 池按实例逐个报状态（不只是 Id）：RateLimited/NoCredentials/QuotaExhausted 一眼可见，
+        // 不用再猜"为什么一直在发原文"。GetStatus 是本地检查（不联网），调试定时器里调无副作用。
+        string pool = string.Join(" → ", _orchestrator.Providers.Select(p =>
+        {
+            var s = p.GetStatus();
+            return s.State == ProviderState.Available ? p.Name : $"{p.Name}({s.State}:{s.Detail})";
+        }));
         return
             $"场景: {SceneDisplay(_activeScene, _activeRace)}  判定: {_lastRec.Summary}\n" +
             $"指纹: {scores}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
-            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  池: {string.Join("→", t.Providers.Where(p => p.Enabled).Select(p => p.Id))}\n" +
+            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  池: {pool}\n" +
             $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  已校准场景={(_anySceneCalibrated ? "yes" : "no")}  busy={_busy}\n" +
             $"状态: {state}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
@@ -671,11 +677,11 @@ public sealed class Phase1Probe : IDisposable
             }
             _log.Debug($"[probe] 上屏完成 rois={rois.Count} 变化={toTranslate.Count} lines={koLines.Count} 显示={allItems.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
 
-            // 翻译失败：日志已在编排的 onError 里逐条记过，这里只负责"让你知道"——
-            // 同一原因只气泡提示一次（否则每拍弹一次），原因变了再弹。
+            // 翻译失败：同一原因只记一次日志（否则每拍一条），原因变了再记。
+            // 编排器 onError 已对"抛异常"的失败即时记 Error；这里补"被跳过/全不可用"这类没有异常、
+            // 只回落原文的失败，让日志完整（异常类失败会同时出现在两处，可接受）。
             if (outcome.Error is not null && outcome.Error != _lastTranslateError)
-                Notice?.Invoke(ProbeNotice.TranslateFailed,
-                    $"{outcome.Error}\n（provider 池；请检查密钥/登录，或在 配置→翻译 调整池顺序/启用项）");
+                _log.Warn($"[probe] 翻译未成：{outcome.Error}。请检查 配置→翻译 的密钥/登录/池顺序/启用项。");
             _lastTranslateError = outcome.Error;
         }
         catch (Exception ex) { _log.Error($"[probe] 处理帧异常: {ex.Message}"); }

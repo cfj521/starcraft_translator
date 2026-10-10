@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using ScrTranslator.Core.Translation;
 using ScrTranslator.Core.Translation.Providers;
@@ -49,6 +50,49 @@ public class ProvidersTests
         var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://x/v1", () => "K");
         var r = await new DashScopeProvider(client, () => "m", () => "key").TranslateAsync(Array.Empty<string>(), Ctx, CancellationToken.None);
         Assert.Empty(r);
+    }
+
+    [Fact]
+    public async Task DashScope_429_ThrowsRateLimit_AndEntersCooldown()
+    {
+        // 429 带 Retry-After：provider 进冷却（GetStatus 报 RateLimited，编排器会跳过它），
+        // 异常仍重抛给编排器回退链，消息里带冷却时长与结束时刻。
+        var stub = new StubHttpMessageHandler("limited", HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(3));
+        var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://x/v1", () => "K");
+        var p = new DashScopeProvider(client, () => "m", () => "key");
+        var ex = await Assert.ThrowsAsync<RateLimitException>(() => p.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None));
+        Assert.Equal(TimeSpan.FromSeconds(3), ex.RetryAfter);
+        Assert.Contains("冷却", ex.Message);
+        Assert.Equal(ProviderState.RateLimited, p.GetStatus().State);
+        Assert.False(p.GetStatus().Usable);
+        Assert.Contains("限流冷却", p.GetStatus().Detail);
+    }
+
+    [Fact]
+    public async Task DashScope_429ThenSuccess_ResetsCooldown()
+    {
+        // 第一次 429 进冷却，第二次成功 → 冷却清零、退避归零，GetStatus 回到 Available。
+        var ok = StubHttpMessageHandler.Make(HttpStatusCode.OK, "{\"choices\":[{\"message\":{\"content\":\"[1] 甲\"}}]}");
+        var limited = StubHttpMessageHandler.Make(HttpStatusCode.TooManyRequests, "limited");
+        var stub = new StubHttpMessageHandler(new HttpResponseMessage[] { limited, ok });
+        var client = new OpenAiCompatibleChatClient(new HttpClient(stub), "https://x/v1", () => "K");
+        var p = new DashScopeProvider(client, () => "m", () => "key");
+        await Assert.ThrowsAsync<RateLimitException>(() => p.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None));
+        Assert.Equal(ProviderState.RateLimited, p.GetStatus().State);
+        var r = await p.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None);
+        Assert.Equal(new[] { "甲" }, r);
+        Assert.Equal(ProviderState.Available, p.GetStatus().State);
+    }
+
+    [Fact]
+    public async Task ChatGpt_429_ThrowsRateLimit_AndEntersCooldown()
+    {
+        var stub = new StubHttpMessageHandler("limited", HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(2));
+        var client = new CodexResponsesClient(new HttpClient(stub));
+        var p = new ChatGptSubscriptionProvider(client, new FakeTokens(), () => "gpt-5");
+        await Assert.ThrowsAsync<RateLimitException>(() => p.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None));
+        Assert.Equal(ProviderState.RateLimited, p.GetStatus().State);
+        Assert.Contains("限流冷却", p.GetStatus().Detail);
     }
 
     private sealed class FakeTokens : ITokenSource

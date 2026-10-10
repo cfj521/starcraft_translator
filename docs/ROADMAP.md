@@ -113,6 +113,8 @@
 - [x] 翻译失败不再静默：provider 异常上报日志、原文照抄的行不上屏、F9 时体检凭据
 - [x] 校准窗增加"采集当前场景指纹"：`SceneRefCapture` 把出厂 1080p 基准区域按当前分辨率等比缩放、从当前帧算块均值指纹，写进 `scene-overrides.json` 覆盖层（覆盖层唯一的写入入口）；写入后调 `probe.ReloadSceneRefs()` 即时生效，免重启
 - [x] **翻译 provider 池**：单活跃引擎（`TranslationEngine` 二选一）改**有序 provider 池**——腾讯云/阿里云**免费机器翻译** ＋ OpenAI 订阅 / 阿里云 DashScope **LLM**，配置页可拖拽排序、每行启用/禁用，从上到下取第一个「启用且可用」，不可用或额度耗尽自动跳下一个（默认先免费后 LLM）。`TranslationOrchestrator` 由"单活跃"改"池回退链"；新增 `TencentMtProvider`(TC3-HMAC-SHA256) 与 `AliyunMtProvider`(RPC 签名)；`ITranslationProvider` 加 `GetStatus()` 暴露可用/无凭据/额度耗尽。托盘"切引擎"菜单移除（池在配置页管）。Core 单测 220→238。
+- [x] **LLM 429 限流冷却**：`ITranslationProvider` 加 `RateLimited` 态；两个 LLM 客户端识别 429 抛 `RateLimitException`（带 Retry-After）；provider 捕获后入 `RateLimitCooldown` 冷却（优先服务端 Retry-After，无则指数退避 5s→×2→60s 封顶，成功请求复位）并重抛触发池回退链——冷却期 `GetStatus` 报 RateLimited、编排器跳过不发请求，本批落池内下一个 provider；全部 provider 限流→回落原文、原因进日志。调试面板池行改按实例逐个报状态（不只是 Id）。Core 单测 238→250。
+- [x] **移除全部托盘气泡**：原先弹气泡的所有事件（开/关翻译、窗口丢失/重连、场景切换、校准前置拦截、DEBUG 开关、诊断复制、翻译失败）统一走 `FileLogger` 进日志，`TrayService.ShowToast` 删除；观察面改为 配置→**日志页**（新标签：内存缓冲 `FileLogger.RecentLines` + `LogWritten` 实时追加，DEBUG 模式下 DEBUG 级诊断一并显示）与 DEBUG 面板。托盘"开启/关闭翻译"文本仍随实际运行态变化（自动续译→开、窗口丢失→关），只是不再弹通知。
 - [ ] 按识别到的种族选聊天 ROI（装饰板宽度随种族不同）
 - [ ] 实机验收：4K 下三场景 + 主菜单/加载来回切，看 `other` 态进出是否正确
 

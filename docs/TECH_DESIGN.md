@@ -157,7 +157,7 @@ Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。�
   4. **翻译 provider 池**（`ITranslationProvider`：腾讯云/阿里云机器翻译 ＋ OpenAI 订阅 / 阿里云 DashScope LLM）按序回退批量调用 → 上屏中文。**单级**（术语/缓存未命中即走 provider 池回退链，取第一个「启用且可用」）。
   5. **单级（原"两级编排"已移除）**：曾实现"快引擎出临时态（灰斜体）→ 主力引擎定稿原地替换"，但这是很窄的翻译任务（游戏聊天/房间名短句），低价模型单发就够好，两级只让每个未命中批次多打一次请求、并多一套临时态视觉与状态分支 → 整体删除（含 `TwoLevel/FastEngine/FastModel` 三字段、`TranslationStage`、托盘与配置页开关）。现由 `TranslationOrchestrator` 编排：术语表 → 缓存 → **provider 池回退链**，一批一次请求。
 - **LLM Prompt 要点**：系统提示设定"星际争霸韩服游戏聊天翻译"角色；附术语表；要求口语化、简短、保留游戏黑话语气；ID/数字/英文缩写不乱翻。
-- **限流**：LLM 请求合并/节流，避免刷屏时狂发请求。
+- **限流**：主动侧靠变化检测+单飞+缓存（同文不重复请求）；被动侧是 LLM provider 的 429 限流冷却（`RateLimitCooldown`：优先服务端 Retry-After，没有则指数退避 5s→×2→60s 封顶，成功请求归零复位）。冷却期 `GetStatus` 报 `RateLimited`、`RateLimitException` 重抛触发池回退链——编排器跳过它、本批落到池内下一个 provider，全程静默（只进日志，不弹气泡）。
 
 ### 3.6 OverlayRenderer（`OverlayWindow`）
 - **职责**：WPF 透明置顶窗，把"这一帧翻出来的中文"叠在对应位置上。

@@ -139,7 +139,8 @@
                                     <Button x:Name="EditGlossaryButton" Content="编辑术语表…" Margin="12,0,0,0" Click="OnEditGlossaryClick"/>
                                 </StackPanel>
                                 <CheckBox x:Name="CacheEnabledCheck" Content="启用翻译缓存（进程内 LRU，容量固定，无 TTL）" IsChecked="True" IsEnabled="False" Margin="0,4,0,4"/>
-                                <CheckBox Content="LLM 节流（防刷屏）— 后续" IsEnabled="False" Margin="0,4,0,4"/>
+                                <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,4"
+                                           Text="LLM 节流（429 限流冷却）：已实现，静默 —— 被限流的 provider 自动冷却（Retry-After 或指数退避）并让位给池内下一个，冷却结束自动恢复；详见 日志 页。"/>
                             </StackPanel>
                         </GroupBox>
                     </StackPanel>
@@ -338,6 +339,17 @@
                         </GroupBox>
                     </StackPanel>
                 </ScrollViewer>
+            </TabItem>
+
+            <!-- ══════════════════ 日志 ══════════════════ -->
+            <TabItem Header="日志">
+                <DockPanel Margin="8">
+                    <TextBlock DockPanel.Dock="Top" Margin="0,0,0,6" Foreground="Gray" TextWrapping="Wrap"
+                               Text="本次运行以来的全部日志。开启 DEBUG 模式（F8）后，DEBUG 级诊断也在这里显示。所有事件不再弹气泡，统一在此查看。"/>
+                    <ListBox x:Name="LogListBox" FontFamily="Consolas, Cascadia Mono, Microsoft YaHei" FontSize="12"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+                </DockPanel>
             </TabItem>
 
             <!-- ══════════════════ 关于 ══════════════════ -->

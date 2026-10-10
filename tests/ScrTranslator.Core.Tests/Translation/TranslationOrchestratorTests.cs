@@ -18,9 +18,12 @@ public class TranslationOrchestratorTests
         public string Prefix = "T:";
         public int Calls;
         public bool Usable = true;          // false 时 GetStatus 报"无凭据"，编排器直接跳过、不发请求
+        public bool RateLimited;            // true 时 GetStatus 报 RateLimited（429 冷却期），同样跳过
         public string Name { get; }
         public FakeProvider(string name = "fake") { Name = name; }
-        public ProviderStatus GetStatus() => Usable ? ProviderStatus.Ok() : ProviderStatus.NoCreds(Name + " 无凭据");
+        public ProviderStatus GetStatus() =>
+            RateLimited ? ProviderStatus.RateLimited(Name + " 限流冷却中") :
+            Usable ? ProviderStatus.Ok() : ProviderStatus.NoCreds(Name + " 无凭据");
         public Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> lines, TranslationContext ctx, CancellationToken ct)
         {
             Calls++;
@@ -180,6 +183,41 @@ public class TranslationOrchestratorTests
         Assert.Equal(1, live.Calls);        // 回退到第二个成功
         Assert.True(r.AllResolved);
         Assert.StartsWith("tencent 翻译失败", Assert.Single(errors)); // 失败有上报（后接 ": boom"），不会静默
+    }
+
+    [Fact]
+    public async Task Pool_SkipsRateLimited_TriesNext()
+    {
+        // 第一个 provider 正处 429 冷却期（GetStatus 报 RateLimited）：与无凭据同等待遇——
+        // 跳过、不发请求，本批落到下一个（而不是拿原文去撞限流墙）。
+        var cooling = new FakeProvider("dashscope") { RateLimited = true };
+        var live = new FakeProvider("tencent");
+        var (o, _, errors) = MakePool(cooling, live);
+        var r = await o.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None);
+
+        Assert.Equal("T:가", r.Texts[0]);
+        Assert.Equal(0, cooling.Calls);   // 冷却期没被调用
+        Assert.Equal(1, live.Calls);
+        Assert.True(r.AllResolved);
+        Assert.Null(r.Error);
+        Assert.Empty(errors);            // 跳过不算失败，不上报
+    }
+
+    [Fact]
+    public async Task Pool_AllRateLimited_FallsBackToOriginal_WithReason()
+    {
+        // 池里每个 provider 都在冷却期：整批回落原文，Error 说清原因（探测据此记一条日志，不弹气泡）。
+        var r1 = new FakeProvider("dashscope") { RateLimited = true };
+        var r2 = new FakeProvider("chatgpt") { RateLimited = true };
+        var (o, _, _) = MakePool(r1, r2);
+        var outcome = await o.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None);
+
+        Assert.Equal("가", outcome.Texts[0]);
+        Assert.False(outcome.AllResolved);
+        Assert.Equal(0, r1.Calls);
+        Assert.Equal(0, r2.Calls);
+        Assert.NotNull(outcome.Error);
+        Assert.Contains("限流冷却", outcome.Error);
     }
 
     [Fact]

@@ -21,7 +21,12 @@ public sealed class OpenAiCompatibleChatClient
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _key());
         using var resp = await _http.SendAsync(req, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
-        if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"chat/completions {(int)resp.StatusCode}: {body}");
+        if (!resp.IsSuccessStatusCode)
+        {
+            if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                throw new RateLimitException($"chat/completions 429: {body}", resp.Headers.RetryAfter?.Delta);
+            throw new HttpRequestException($"chat/completions {(int)resp.StatusCode}: {body}");
+        }
         using var doc = JsonDocument.Parse(body);
         return doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString() ?? "";
     }
