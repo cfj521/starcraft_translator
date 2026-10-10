@@ -248,13 +248,13 @@ starcraft_translator/
 │  │  └─ layout-presets.json        # 界面布局预设（量测产物，只读）
 │  └─ ScrTranslator.Core/           # 业务逻辑（无 UI、无图像库依赖，可单测）
 │     ├─ Roi/                       # RoiStore(含 Replace/Remove/MoveRoi)、TranslationScope、RelRect
-│     ├─ Scene/                     # SceneRefStore、SceneFingerprint、SceneRecognizer、LayoutPresets、Scene
+│     ├─ Scene/                     # SceneRefStore、SceneFingerprint、SceneRecognizer、SceneRefCapture、LayoutPresets、Scene
 │     ├─ Ocr/                       # IOcrEngine + PaddleOcrEngine(RapidOcrNet)
 │     ├─ Translation/               # ITranslationProvider、两 provider、Glossary、Cache、
 │     │                             #   TranslationOrchestrator(单级)、PromptBuilder、BatchProtocol
 │     ├─ Settings/                  # AppSettings、SettingsStore、PollInterval(两节拍)
 │     └─ KoreanText.cs              # 谚文判定：翻译入口的内容闸门
-├─ tests/ScrTranslator.Core.Tests/  # 207 条；含 SceneRefsShippingTests / LayoutPresetTests 回归
+├─ tests/ScrTranslator.Core.Tests/  # 219 条；含 SceneRefsShippingTests / LayoutPresetTests 回归
 ├─ tools/
 │  ├─ SceneRefGen/                  # 截图 → scene-refs.json（含全量判定矩阵，判错退出码非 0）
 │  ├─ LayoutCheck/                  # 把布局预设画到截图上核验
@@ -306,8 +306,9 @@ starcraft_translator/
 
 ## 8. 测试策略
 
-- **可单测**（Core，当前 207 条全绿）：Glossary 匹配、缓存、ID 列过滤、LLM prompt 组装、文本去重、
+- **可单测**（Core，当前 219 条全绿）：Glossary 匹配、缓存、ID 列过滤、LLM prompt 组装、文本去重、
   **场景指纹**（`SceneFingerprint`/`SceneRecognizer` 用合成帧跑；`SceneRefStore` 覆盖解析/校验和/覆盖层合并；
+  `SceneRefCapture` 覆盖现场缩放几何/块均值指纹采集/写覆盖层与合并回退；
   `SceneRefsShippingTests` 回归验证出厂参考真的互相区分得开）、
   **布局预设**（三种相对口径各自正确、精确匹配不借用、坏数据只丢该字段并告警、
   覆盖层读写与回退、`LayoutPresetTests` 回归验证出厂三场景×三分辨率齐全且不越画面）、

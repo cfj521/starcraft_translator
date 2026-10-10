@@ -154,6 +154,8 @@ public partial class App : Application
             sp.GetRequiredService<FileLogger>(),
             sp.GetRequiredService<OverlayWindow>(),
             roisPath,
+            sceneRefsPath,
+            sceneOverridesPath,
             sp.GetRequiredService<TranslationOrchestrator>(),
             sp.GetRequiredService<SettingsHolder>(),
             sp.GetRequiredService<Glossary>(),
@@ -300,7 +302,9 @@ public partial class App : Application
             calibrationWindow = new Calibration.CalibrationWindow(
                 roisPath, log, probe.ReloadRois, probe.CurrentSceneId,
                 _host.Services.GetRequiredService<SceneRecognizer>(),
-                _host.Services.GetRequiredService<LayoutPresetStore>());
+                _host.Services.GetRequiredService<LayoutPresetStore>(),
+                sceneOverridesPath,          // 现场采集场景指纹的覆盖层路径
+                probe.ReloadSceneRefs);      // 采集写入后让运行中的探测重读参考
             calibrationWindow.Closed += (_, _) => calibrationWindow = null;
             calibrationWindow.Show();
             calibrationWindow.Activate();

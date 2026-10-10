@@ -23,7 +23,9 @@ public sealed class Phase1Probe : IDisposable
 {
     private readonly CaptureService _capture;
     private readonly IOcrEngine _ocr;
-    private readonly SceneRecognizer _scene;   // 图像指纹场景识别（读 scene-refs.json）
+    private SceneRecognizer _scene;   // 图像指纹场景识别（读 scene-refs.json）；现场采集后重读覆盖层需重建，故非 readonly
+    private readonly string _sceneRefsPath;      // 出厂层 scene-refs.json 路径（重载时重读）
+    private readonly string _sceneOverridesPath; // 覆盖层 scene-overrides.json 路径（现场采集写入后重载生效）
     private LayoutPresetStore _layout;   // 界面布局预设：聊天框与房间列表网格（可重载，配置页改了要重读盘）
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
@@ -86,10 +88,11 @@ public sealed class Phase1Probe : IDisposable
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
     public Phase1Probe(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, LayoutPresetStore layout, FileLogger log, OverlayWindow overlay,
-        string roisJsonPath, TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug)
+        string roisJsonPath, string sceneRefsPath, string sceneOverridesPath,
+        TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug)
     {
         _capture = capture; _ocr = ocr; _scene = scene; _layout = layout; _log = log; _overlay = overlay; _debug = debug;
-        _roisJsonPath = roisJsonPath;
+        _roisJsonPath = roisJsonPath; _sceneRefsPath = sceneRefsPath; _sceneOverridesPath = sceneOverridesPath;
         _cfg = RoiStore.Load(roisJsonPath);
         RefreshRoiDerivedFlags();
         _orchestrator = orchestrator; _settings = settings;
@@ -247,6 +250,19 @@ public sealed class Phase1Probe : IDisposable
         ResetChangeDetection();
         _log.Log($"[probe] 布局预设已重新加载：{_layout.Presets.Count} 条（覆盖 {_layout.OverrideCount}）" +
                  (_layout.LoadError is null ? "" : $" 错误={_layout.LoadError}"));
+    }
+
+    /// <summary>
+    /// 重新从磁盘加载场景识别参考（出厂层 + 覆盖层）。校准窗"采集当前场景指纹"写入覆盖层后调用，
+    /// 让运行中的识别立即用上新参考，无需重启。与 ReloadLayoutPresets 同一"DI 单例不重读盘就是旧值"的坑。
+    /// </summary>
+    public void ReloadSceneRefs()
+    {
+        _scene = new SceneRecognizer(SceneRefStore.Load(_sceneRefsPath, _sceneOverridesPath));
+        _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
+            GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "已重载，待识别");
+        _log.Log($"[probe] 场景参考已重新加载：{_scene.Store.References.Count} 条（覆盖 {_scene.Store.OverrideCount}）" +
+                  (_scene.Store.LoadError is null ? "" : $" 错误={_scene.Store.LoadError}"));
     }
 
     /// <summary>启动探测。返回具体失败原因供 UI 提示（首次引导：F9 后没反应要知道为什么）。</summary>

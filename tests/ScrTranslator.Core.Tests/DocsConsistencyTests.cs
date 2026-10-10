@@ -35,7 +35,7 @@ public class DocsConsistencyTests
     private static readonly string[] LiveSymbols =
     {
         // 场景识别
-        "SceneRecognizer", "SceneRefStore", "SceneFingerprint", "SceneRefIntegrity", "FramePixels",
+        "SceneRecognizer", "SceneRefStore", "SceneFingerprint", "SceneRefIntegrity", "SceneRefCapture", "FramePixels",
         "scene-refs.json", "scene-overrides.json", "tools/SceneRefGen",
         // 区域与布局预设
         "layout-presets.json", "layout-overrides.json", "LayoutPresetStore", "ToRois", "EffectiveRois",

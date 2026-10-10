@@ -21,6 +21,7 @@ public partial class CalibrationWindow : Window
     /// <summary>本次校准写入的场景键。**由校准窗自己检测得出**（打开方传的值只作兜底），
     /// 所以它不是 readonly：OnLoaded 里检测到真实场景后会覆盖。</summary>
     private string _sceneId;
+    private GameRace _detectedRace = GameRace.Unknown; // DetectSceneOrKeep 检测出的种族（采集面板预填用）
     private readonly SceneRecognizer? _scene;
     private readonly LayoutPresetStore? _layout;
     private const double HandleSize = 8;
@@ -30,6 +31,13 @@ public partial class CalibrationWindow : Window
     private readonly string _roisJsonPath;
     private readonly FileLogger? _log;
     private readonly Action? _onSaved;
+    // 现场采集场景指纹：覆盖层路径（null=不启用）+ 写入后回调（让运行中的探测重读参考）。
+    private readonly string? _sceneOverridesPath;
+    private readonly Action? _onSceneRefsSaved;
+    private Border? _capturePanel;
+    private ComboBox _captureSceneCombo = null!;
+    private ComboBox _captureRaceCombo = null!;
+    private TextBlock? _captureStatus;
 
     private readonly List<CalibBox> _boxes = new();
     private CalibBox? _selected;
@@ -64,6 +72,15 @@ public partial class CalibrationWindow : Window
         new(ColumnKind.RoomName, "房间名"), new(ColumnKind.MapName, "地图"),
         new(ColumnKind.PlayerId, "玩家ID"), new(ColumnKind.Other, "其它"),
     };
+    /// <summary>采集面板的场景选项（四态）。游戏内会再配一个种族选项，拼成参考 id（如 ingame_t）。</summary>
+    private static readonly Option<string>[] CaptureSceneOptions =
+    {
+        new(GameSceneIds.Browsing, "寻找房间"), new(GameSceneIds.Room, "房间内"), new(GameSceneIds.InGame, "游戏内"),
+    };
+    private static readonly Option<string>[] CaptureRaceOptions =
+    {
+        new("t", "人族"), new("p", "神族"), new("z", "虫族"),
+    };
 
     /// <summary>一个已框选区域的编辑态：Canvas 内 DIP 矩形 + 可选列定义（仅 RoomList 用）。</summary>
     private sealed class CalibBox
@@ -87,8 +104,11 @@ public partial class CalibrationWindow : Window
     /// 所以 F9 没开也能定准场景。</param>
     /// <param name="scene">场景识别器（图像指纹）。为 null 时跳过检测，沿用传入的 sceneId。</param>
     /// <param name="layout">布局预设：校准窗把它们画成只读参考框，省得用户重复框已有的区域。</param>
+    /// <param name="sceneOverridesPath">现场采集的场景指纹覆盖层路径；null 时不显示采集面板。</param>
+    /// <param name="onSceneRefsSaved">采集写入覆盖层后调用（让运行中的探测重读参考，免重启）。</param>
     public CalibrationWindow(string roisJsonPath, FileLogger? log = null, Action? onSaved = null, string? sceneId = null,
-        SceneRecognizer? scene = null, LayoutPresetStore? layout = null)
+        SceneRecognizer? scene = null, LayoutPresetStore? layout = null,
+        string? sceneOverridesPath = null, Action? onSceneRefsSaved = null)
     {
         InitializeComponent();
         _roisJsonPath = roisJsonPath;
@@ -97,6 +117,8 @@ public partial class CalibrationWindow : Window
         _sceneId = sceneId ?? GameSceneIds.Browsing;
         _scene = scene;
         _layout = layout;
+        _sceneOverridesPath = sceneOverridesPath;
+        _onSceneRefsSaved = onSceneRefsSaved;
         Left = 0;
         Top = 0;
         Width = SystemParameters.PrimaryScreenWidth;
@@ -127,6 +149,7 @@ public partial class CalibrationWindow : Window
         DrawGameOutline();
         DrawPresetBoxes();
         LoadExisting();
+        BuildCapturePanel(); // 最后建，盖在最上层；采集面板的预填用 DetectSceneOrKeep 检测出的场景
 
         Focusable = true;
         Focus();
@@ -160,11 +183,146 @@ public partial class CalibrationWindow : Window
 
             var rec = _scene.Recognize(new FramePixels(buf, bmp.Width, bmp.Height, stride, 4, 2, 1, 0));
             _log?.Log($"[calibration] 场景检测：{rec.Summary}");
-            if (rec.IsMatched) _sceneId = rec.Scene.ToId();
+            if (rec.IsMatched) { _sceneId = rec.Scene.ToId(); _detectedRace = rec.Race; }
         }
         catch (Exception ex)
         {
             _log?.Log($"[calibration] 场景检测失败，沿用传入场景 {_sceneId}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 建"采集当前场景指纹"面板（右上角）。把当前帧算成所选场景在该分辨率的块均值指纹，写进覆盖层
+    /// scene-overrides.json——这是覆盖层唯一的写入入口，补上"现场补新分辨率参考"的断链。
+    /// 预填用 DetectSceneOrKeep 检测出的场景/种族；检测不到（新分辨率）时用户手动选。
+    /// </summary>
+    private void BuildCapturePanel()
+    {
+        if (_sceneOverridesPath is null || _scene is null) return; // 没传覆盖层路径或未启用识别 → 不显示采集面板
+
+        _captureSceneCombo = new ComboBox
+        {
+            Width = 100,
+            ItemsSource = CaptureSceneOptions,
+            DisplayMemberPath = "Label",
+            SelectedValuePath = "Value",
+        };
+        _captureRaceCombo = new ComboBox
+        {
+            Width = 78,
+            ItemsSource = CaptureRaceOptions,
+            DisplayMemberPath = "Label",
+            SelectedValuePath = "Value",
+            IsEnabled = false,
+        };
+        _captureStatus = new TextBlock
+        {
+            Foreground = Brushes.LightGray,
+            FontSize = 11,
+            Margin = new Thickness(8, 6, 8, 6),
+            Text = "采集当前帧 → 写入 scene-overrides.json",
+        };
+
+        // 预填：检测出的四态场景 + 种族
+        string detectedScene = GameSceneIds.FromId(_sceneId).ToId();
+        _captureSceneCombo.SelectedValue = detectedScene;
+        string? detectedRace = _detectedRace switch
+        {
+            GameRace.Terran => "t", GameRace.Protoss => "p", GameRace.Zerg => "z", _ => null,
+        };
+        if (detectedRace is not null) _captureRaceCombo.SelectedValue = detectedRace;
+        _captureRaceCombo.IsEnabled = detectedScene == GameSceneIds.InGame;
+        _captureSceneCombo.SelectionChanged += (_, _) =>
+            _captureRaceCombo.IsEnabled = _captureSceneCombo.SelectedValue as string == GameSceneIds.InGame;
+
+        var captureBtn = new Button { Content = "采集", Width = 56, Margin = new Thickness(8, 0, 0, 0), IsDefault = true };
+        captureBtn.Click += (_, _) => DoCapture();
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 6, 8, 2) };
+        row.Children.Add(new TextBlock { Text = "场景:", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+        row.Children.Add(_captureSceneCombo);
+        row.Children.Add(new TextBlock { Text = "种族:", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) });
+        row.Children.Add(_captureRaceCombo);
+        row.Children.Add(captureBtn);
+
+        var content = new StackPanel();
+        content.Children.Add(new TextBlock { Text = "采集当前场景指纹", Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.Bold, Margin = new Thickness(8, 6, 8, 2) });
+        content.Children.Add(row);
+        content.Children.Add(_captureStatus);
+
+        _capturePanel = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(235, 30, 30, 30)),
+            BorderBrush = Brushes.White,
+            BorderThickness = new Thickness(1),
+            Child = content,
+        };
+        // 面板上的点击（含空白处）吃掉，别穿透到画布误画 ROI 框
+        _capturePanel.MouseLeftButtonDown += (_, e) => e.Handled = true;
+        RootCanvas.Children.Add(_capturePanel);
+
+        // 量尺寸后贴右上角，留 16px 边距
+        _capturePanel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double pw = _capturePanel.DesiredSize.Width, ph = _capturePanel.DesiredSize.Height;
+        Canvas.SetLeft(_capturePanel, Math.Max(0, RootCanvas.ActualWidth - pw - 16));
+        Canvas.SetTop(_capturePanel, 40);
+    }
+
+    /// <summary>
+    /// 采集：抓当前游戏帧，用所选场景的出厂 1080p 基准区域（缩放到当前分辨率）算块均值指纹，写进覆盖层。
+    /// 成功后回调 onSceneRefsSaved 让运行中的探测重读参考，免重启。
+    /// </summary>
+    private void DoCapture()
+    {
+        if (_captureStatus is null) return;
+        string scene = _captureSceneCombo.SelectedValue as string ?? GameSceneIds.Browsing;
+        string? race = scene == GameSceneIds.InGame ? (_captureRaceCombo.SelectedValue as string) : null;
+        string sceneId = race is null ? scene : $"{scene}_{race}";
+        string label = scene == GameSceneIds.InGame
+            ? $"游戏内·{(race switch { "t" => "人族", "p" => "神族", "z" => "虫族", _ => "?" })}"
+            : GameSceneIds.FromId(scene).Label();
+
+        var baseRegions = SceneRefCapture.BaseRegions(_scene!.Store, sceneId);
+        if (baseRegions is null)
+        {
+            _captureStatus.Foreground = Brushes.OrangeRed;
+            _captureStatus.Text = $"场景【{label}】无出厂参考，无法采集（需先有 1080p 基准）";
+            return;
+        }
+
+        try
+        {
+            // 抓当前游戏窗口那块屏幕（同 DetectSceneOrKeep：游戏在前台，所见即所测）
+            byte[] buf; int stride;
+            using (var bmp = new System.Drawing.Bitmap(_gameRect.Width, _gameRect.Height,
+                     System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(_gameRect.Left, _gameRect.Top, 0, 0, bmp.Size);
+                var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
+                    System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                stride = Math.Abs(data.Stride);
+                buf = new byte[stride * bmp.Height];
+                System.Runtime.InteropServices.Marshal.Copy(data.Scan0, buf, 0, buf.Length);
+                bmp.UnlockBits(data);
+            }
+
+            var store = _scene.Store;
+            var (regions, regionBytes) = SceneRefCapture.Capture(
+                new FramePixels(buf, _gameRect.Width, _gameRect.Height, stride, 4, 2, 1, 0),
+                baseRegions, _gameRect.Width, _gameRect.Height, store.BaseWidth, store.BlockSize);
+            SceneRefCapture.SaveOverride(_sceneOverridesPath!, sceneId, label, scene, race,
+                _gameRect.Width, _gameRect.Height, "现场采集", regions, regionBytes);
+            _onSceneRefsSaved?.Invoke();
+            _log?.Log($"[calibration] 已采集场景指纹 {sceneId} @ {_gameRect.Width}x{_gameRect.Height} → {_sceneOverridesPath}");
+
+            _captureStatus.Foreground = Brushes.LightGreen;
+            _captureStatus.Text = $"✓ 已采集【{label}】@ {_gameRect.Width}x{_gameRect.Height}，写入覆盖层并即时生效";
+        }
+        catch (Exception ex)
+        {
+            _captureStatus.Foreground = Brushes.OrangeRed;
+            _captureStatus.Text = $"采集失败：{ex.Message}";
         }
     }
 
