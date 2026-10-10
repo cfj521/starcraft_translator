@@ -29,7 +29,7 @@ public class SettingsStoreTests
         Assert.Equal(250, back.Ocr.TranslatePollMs);
         Assert.Equal(5, back.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk);
-        Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["OpenConfig"].Modifiers);
+        Assert.Equal(HotkeyKeys.MOD_NONE, back.Hotkeys["OpenConfig"].Modifiers);
     }
 
     [Fact] public void Load_MissingFile_ReturnsDefault()

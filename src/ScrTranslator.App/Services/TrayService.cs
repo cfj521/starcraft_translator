@@ -3,72 +3,48 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using H.NotifyIcon;
-using ScrTranslator.App.Auth;
 using ScrTranslator.App.Logging;
-using ScrTranslator.App.Secrets;
-using ScrTranslator.Core.Settings;
-using ScrTranslator.Core.Translation;
 
 namespace ScrTranslator.App.Services;
 
-/// <summary>系统托盘图标：显隐悬浮窗、开关探测、登录 ChatGPT/填 DashScope Key、退出。（翻译引擎改为 provider 池，在配置页管）</summary>
+/// <summary>系统托盘图标：开/关翻译（文本随状态变化）、区域校准设置、设置、退出。
+/// （翻译引擎、ChatGPT 登录、各 provider 密钥都在 配置→翻译 页的 provider 池里管，托盘不再单列）。</summary>
 public sealed class TrayService : IDisposable
 {
-    private readonly OverlayWindow _overlay;
-    private readonly OpenAiOAuth _oauth;
-    private readonly SettingsHolder _settings;
-    private readonly SecretStore _store;
     private readonly FileLogger _log;
-    private readonly string _settingsPath;
     private TaskbarIcon? _trayIcon;
-    private MenuItem? _loginItem;
+    private MenuItem? _probeItem;
 
-    public TrayService(OverlayWindow overlay, OpenAiOAuth oauth, SettingsHolder settings, SecretStore store, FileLogger log, string settingsPath)
+    public TrayService(FileLogger log)
     {
-        _overlay = overlay; _oauth = oauth; _settings = settings; _store = store; _log = log; _settingsPath = settingsPath;
+        _log = log;
     }
 
     public Action? ToggleProbe { get; set; }
-    /// <summary>切引擎/登录成功后触发（用于复位管线变化检测，让静止画面立即重译）。</summary>
-    public Action? OnTranslationStateChanged { get; set; }
-    /// <summary>托盘"进入校准…"菜单项触发（打开 CalibrationWindow，由 App.xaml.cs 提供实现）。</summary>
+    /// <summary>托盘"区域校准设置"菜单项触发（打开 CalibrationWindow，由 App.xaml.cs 提供实现）。</summary>
     public Action? OpenCalibration { get; set; }
-    /// <summary>托盘"配置…"菜单项 + 双击托盘图标触发（打开 SettingsWindow，由 App.xaml.cs 提供实现）。</summary>
+    /// <summary>托盘"设置"菜单项 + 双击托盘图标触发（打开 SettingsWindow，由 App.xaml.cs 提供实现）。</summary>
     public Action? OpenSettings { get; set; }
 
     public void Initialize()
     {
-        var toggleItem = new MenuItem { Header = "显示/隐藏悬浮窗" };
-        toggleItem.Click += (_, _) => ToggleOverlay();
+        _probeItem = new MenuItem { Header = "开启翻译 F9" };
+        _probeItem.Click += (_, _) => ToggleProbe?.Invoke();
 
-        var probeItem = new MenuItem { Header = "开始/停止 Phase1 探测" };
-        probeItem.Click += (_, _) => ToggleProbe?.Invoke();
-
-        var calibrateItem = new MenuItem { Header = "进入校准…" };
+        var calibrateItem = new MenuItem { Header = "区域校准设置 F10" };
         calibrateItem.Click += (_, _) => OpenCalibration?.Invoke();
 
-        var settingsItem = new MenuItem { Header = "配置…" };
+        var settingsItem = new MenuItem { Header = "设置 F11" };
         settingsItem.Click += (_, _) => OpenSettings?.Invoke();
-
-        _loginItem = new MenuItem { Header = "登录 ChatGPT（订阅）" };
-        _loginItem.Click += async (_, _) => await OnLoginChatGptAsync();
-        RefreshLoginText();
-
-        var keyItem = new MenuItem { Header = "设置阿里云 Key" };
-        keyItem.Click += (_, _) => OnSetDashScopeKey();
 
         var exitItem = new MenuItem { Header = "退出" };
         exitItem.Click += (_, _) => Application.Current.Shutdown();
 
         var menu = new ContextMenu();
-        menu.Items.Add(toggleItem);
-        menu.Items.Add(probeItem);
+        menu.Items.Add(_probeItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(calibrateItem);
         menu.Items.Add(settingsItem);
-        menu.Items.Add(new Separator());
-        menu.Items.Add(_loginItem);
-        menu.Items.Add(keyItem);
         menu.Items.Add(new Separator());
         menu.Items.Add(exitItem);
 
@@ -78,8 +54,14 @@ public sealed class TrayService : IDisposable
             IconSource = LoadTrayIcon(),
             ContextMenu = menu,
         };
-        _trayIcon.TrayLeftMouseDoubleClick += (_, _) => OpenSettings?.Invoke(); // 双击托盘图标 = 打开配置窗口
+        _trayIcon.TrayLeftMouseDoubleClick += (_, _) => OpenSettings?.Invoke(); // 双击托盘图标 = 打开设置窗口
         _trayIcon.ForceCreate();
+    }
+
+    /// <summary>按翻译运行状态刷新菜单项文本：开→"关闭翻译 F9"，关→"开启翻译 F9"。</summary>
+    public void SetProbeRunning(bool running)
+    {
+        if (_probeItem is not null) _probeItem.Header = running ? "关闭翻译 F9" : "开启翻译 F9";
     }
 
     /// <summary>托盘图标：优先用随包 app.ico（与 exe 图标一致，한↓中）；缺失/解码失败回落生成式"译"字并补深色背景（原白字透明底=不可见 bug）。</summary>
@@ -109,60 +91,7 @@ public sealed class TrayService : IDisposable
         };
     }
 
-    private async System.Threading.Tasks.Task OnLoginChatGptAsync()
-    {
-        if (_loginItem is null) return;
-        _loginItem.IsEnabled = false;
-        _loginItem.Header = "登录中…（浏览器完成授权）";
-        try
-        {
-            // 带超时，避免用户中途放弃登录时无限等待浏览器回调。
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
-            bool ok = await _oauth.LoginAsync(cts.Token);
-            _log.Log($"[tray] ChatGPT 登录 {(ok ? "成功" : "失败/未完成")}");
-            if (ok) OnTranslationStateChanged?.Invoke(); // 登录成功后让静止画面立即用登录态重译
-            if (!ok)
-                MessageBox.Show("ChatGPT 登录未完成或失败（可能：端口 1455 被占用、超时、网络问题或未在浏览器完成授权）。请重试；详情见 logs/app.log。",
-                    "登录失败", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        catch (Exception ex)
-        {
-            _log.Error($"[tray] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
-            MessageBox.Show($"ChatGPT 登录出错：{ex.Message}", "登录失败", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-        finally
-        {
-            RefreshLoginText();
-            _loginItem.IsEnabled = true;
-        }
-    }
-
-    private void RefreshLoginText()
-    {
-        if (_loginItem is null) return;
-        var (loggedIn, email, plan) = _oauth.Status();
-        _loginItem.Header = loggedIn ? $"已登录: {email}({plan})" : "登录 ChatGPT（订阅）";
-    }
-
-    private void OnSetDashScopeKey()
-    {
-        var win = new DashScopeKeyWindow(_store) { Owner = null };
-        win.ShowDialog();
-    }
-
-    /// <summary>托盘改设置后立即落盘（防 Save-without-Load / 下次启动丢失）。</summary>
-    private void SaveSettings()
-    {
-        try { SettingsStore.Save(_settings.Current, _settingsPath); }
-        catch (Exception ex) { _log.Error($"[tray] 保存 settings.json 失败: {ex.Message}"); }
-    }
-
-    private void ToggleOverlay()
-    {
-        _overlay.EnabledByUser = !_overlay.EnabledByUser; // 意图开关；实际显隐由探测按"游戏前台"叠加计算
-    }
-
-    /// <summary>M4：热键切换类动作触发后的短提示（如"玩家ID翻译: 开"）。用系统气泡通知，托盘未初始化时静默忽略。</summary>
+    /// <summary>M4：热键切换类动作触发后的短提示。用系统气泡通知，托盘未初始化时静默忽略。</summary>
     public void ShowToast(string title, string message)
     {
         try { _trayIcon?.ShowNotification(title, message); }

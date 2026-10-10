@@ -30,10 +30,10 @@ public class AppSettingsTests
         var m = HotkeyDefaults.Map;
         Assert.Equal(HotkeyKeys.VK_F9, m["ToggleTranslate"].Vk);
         Assert.Equal(HotkeyKeys.VK_F10, m["Calibrate"].Vk);
-        Assert.Equal(HotkeyKeys.VK_F9, m["OpenConfig"].Vk);
-        Assert.Equal(HotkeyKeys.MOD_CONTROL, m["OpenConfig"].Modifiers);
+        Assert.Equal(HotkeyKeys.VK_F11, m["OpenConfig"].Vk);
+        Assert.Equal(HotkeyKeys.MOD_NONE, m["OpenConfig"].Modifiers);
         Assert.Equal(HotkeyKeys.VK_F8, m["ToggleDebug"].Vk);
-        Assert.Equal(HotkeyKeys.VK_F6, m["CopyDebug"].Vk);
+        Assert.Equal(HotkeyKeys.VK_F8, m["CopyDebug"].Vk);
         Assert.Equal(HotkeyKeys.MOD_CONTROL, m["CopyDebug"].Modifiers);
         Assert.Equal(5, m.Count);
     }

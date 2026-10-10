@@ -77,14 +77,14 @@ public partial class SettingsWindow : Window
     private static readonly (string Key, string Label)[] HotkeyOrder =
     {
         ("ToggleTranslate", "开/关 翻译"),
-        ("Calibrate", "进入校准"),
-        ("OpenConfig", "打开配置"),
+        ("Calibrate", "区域校准设置"),
+        ("OpenConfig", "设置"),
         ("ToggleDebug", "切换 DEBUG 面板"),
         ("CopyDebug", "复制诊断信息"),
     };
 
     /// <param name="openCalibration">复用 App.xaml.cs 里管理的单例 CalibrationWindow 打开方法（不在本窗口另建实例）。</param>
-    /// <param name="onStateChanged">设置生效后的回调（复用 TrayService 同款 OnTranslationStateChanged：复位变化检测，让静止画面立即按新设置重译）。</param>
+    /// <param name="onStateChanged">设置生效后的回调：复位变化检测，让静止画面立即按新设置重译。</param>
     public SettingsWindow(
         SettingsHolder holder,
         string settingsPath,
@@ -330,11 +330,27 @@ public partial class SettingsWindow : Window
     private void ReloadLayoutStore()
         => _layout = LayoutPresetStore.Load(_layoutFactoryPath, _layoutOverridesPath);
 
-    /// <summary>双击主表 = 编辑选中区域。</summary>
-    private void OnRoiListDoubleClick(object sender, MouseButtonEventArgs e) => OnEditRoiClick(sender, e);
+    /// <summary>双击主表 = 编辑选中区域。点在表头上则忽略（表头双击的自适应列宽是 GridViewColumnHeader 的内置行为，事件会冒泡到这里）。</summary>
+    private void OnRoiListDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (IsOnGridViewHeader(e)) return;
+        OnEditRoiClick(sender, e);
+    }
 
-    /// <summary>双击列表 = 编辑选中列。</summary>
-    private void OnColumnListDoubleClick(object sender, MouseButtonEventArgs e) => OnEditColumnClick(sender, e);
+    /// <summary>双击列表 = 编辑选中列。点在表头上则忽略（表头双击的自适应列宽是 GridViewColumnHeader 的内置行为，事件会冒泡到这里）。</summary>
+    private void OnColumnListDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (IsOnGridViewHeader(e)) return;
+        OnEditColumnClick(sender, e);
+    }
+
+    /// <summary>双击点是否落在列头上（沿视觉树向上找 GridViewColumnHeader）。</summary>
+    private static bool IsOnGridViewHeader(MouseButtonEventArgs e)
+    {
+        for (var d = e.OriginalSource as DependencyObject; d is not null; d = VisualTreeHelper.GetParent(d))
+            if (d is GridViewColumnHeader) return true;
+        return false;
+    }
 
     /// <summary>编辑选中区域：预设行走覆盖层，校准行走 rois.json。</summary>
     private void OnEditRoiClick(object sender, RoutedEventArgs e)
@@ -637,8 +653,10 @@ public partial class SettingsWindow : Window
 
     private void OnProviderListMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton == MouseButton.Left && ProviderListView.SelectedItem is ProviderRow)
-            DragDrop.DoDragDrop(ProviderListView, ProviderListView.SelectedItem, DragDropEffects.Move);
+        if (e.ChangedButton != MouseButton.Left || ProviderListView.SelectedItem is not ProviderRow) return;
+        // 点在行内按钮（如"配置…"）上时不启动拖动：DoDragDrop 的模态循环会吞掉按钮的 Click，对应页面就打不开了
+        if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is not null) return;
+        DragDrop.DoDragDrop(ProviderListView, ProviderListView.SelectedItem, DragDropEffects.Move);
     }
 
     private void OnProviderListDragOver(object sender, DragEventArgs e)

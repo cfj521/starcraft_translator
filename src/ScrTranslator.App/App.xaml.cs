@@ -152,13 +152,7 @@ public partial class App : Application
                 msg => sp.GetRequiredService<FileLogger>().Error(msg));
         });
 
-        builder.Services.AddSingleton(sp => new TrayService(
-            sp.GetRequiredService<OverlayWindow>(),
-            sp.GetRequiredService<OpenAiOAuth>(),
-            sp.GetRequiredService<SettingsHolder>(),
-            sp.GetRequiredService<SecretStore>(),
-            sp.GetRequiredService<FileLogger>(),
-            settingsPath));
+        builder.Services.AddSingleton(sp => new TrayService(sp.GetRequiredService<FileLogger>()));
         builder.Services.AddSingleton(sp => new Phase1Probe(
             sp.GetRequiredService<CaptureService>(),
             sp.GetRequiredService<IOcrEngine>(),
@@ -195,6 +189,7 @@ public partial class App : Application
             {
                 probe.Stop();
                 running = false;
+                _trayService.SetProbeRunning(false);
                 _trayService.ShowToast("翻译", "已关闭");
                 return;
             }
@@ -232,7 +227,6 @@ public partial class App : Application
             _trayService.ShowToast("翻译", msg);
         }
         _trayService.ToggleProbe = ToggleProbe;
-        _trayService.OnTranslationStateChanged = probe.ResetChangeDetection; // 切引擎/登录成功后立即重译静止画面
 
         // Phase 5 异常恢复：看门狗(线程池)事件 → marshal UI 线程 → 托盘气泡。
         probe.Notice += (kind, msg) => Dispatcher.InvokeAsync(() =>
@@ -253,6 +247,10 @@ public partial class App : Application
                 ProbeNotice.NeedsCalibration => "需要校准",
                 _ => "翻译",
             };
+            // 托盘"开启/关闭翻译"文本随实际运行态变化：自动续译(首连/重连)→开，窗口丢失→关。
+            // （最小化/还原不改运行态——探测仍在捕获翻译，只是暂不显示）
+            if (kind is ProbeNotice.FirstConnected or ProbeNotice.Reconnected) { running = true; _trayService.SetProbeRunning(true); }
+            else if (kind is ProbeNotice.WindowLost) { running = false; _trayService.SetProbeRunning(false); }
             _trayService.ShowToast(title, msg);
         });
 

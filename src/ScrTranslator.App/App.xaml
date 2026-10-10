@@ -3,5 +3,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
+        <!-- Win11 Fluent 主题：全局隐式样式（Button/TextBox/CheckBox/ListView/TabControl/ContextMenu 等），
+             把默认 WPF 的"老旧"观感换成 Win11 风格圆角卡片 + 强调色。纯视觉覆盖，不改控件类型/代码。 -->
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/FluentTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

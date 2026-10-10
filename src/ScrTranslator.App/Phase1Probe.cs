@@ -55,7 +55,11 @@ public sealed class Phase1Probe : IDisposable
     // 场景识别节拍与翻译节拍各自独立（Ocr.SceneDetectPollMs / Ocr.TranslatePollMs），见 OnFrame 顶部的门控。
     private DateTime _lastShot = DateTime.MinValue;
     private int _busy; // 0=空闲 1=处理中
-    private string _lastJoined = ""; // 变化检测：上一帧全部 ROI 韩文拼接
+    // 每 ROI 独立变化检测（键=ROI 在当前有效列表里的下标）：该 ROI 韩文与上一帧相同则整块跳过（不重译、不重显）。
+    // ROI 集变化（换场景/分辨率/增删）时按签名整体清空 per-ROI 状态。
+    private readonly Dictionary<int, string> _lastJoinedPerRoi = new();
+    private readonly Dictionary<int, List<OverlayItem>> _displayedPerRoi = new();
+    private string _roiSetSignature = "";
     private bool _roiAvailable; // 当前活动场景是否存在且 bucket 非空；活动场景/ReloadRois 变化时重算
     private bool _anySceneCalibrated; // 至少一个场景校准过 ROI——F9 的启动前置条件（与"当前场景"无关）
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
@@ -205,7 +209,7 @@ public sealed class Phase1Probe : IDisposable
         _pendingScene = GameScene.Unknown; _pendingCount = 0; _unknownCount = 0;
         RefreshRoiDerivedFlags();
         ClearOverlay(); // 换场景=旧译文全部失效，立即清屏（不等下一帧）
-        _lastJoined = ""; _roiMissingLogged = false; // 换场景=换 ROI，重新判定上屏
+        ResetAllChangeDetection(); _roiMissingLogged = false; // 换场景=换 ROI，重新判定上屏
         _log.Info($"[scene] 切换 {SceneDisplay(from, GameRace.Unknown)} → {SceneDisplay(to, race)}");
         if (to != GameScene.Other && !_roiAvailable)
         {
@@ -466,14 +470,21 @@ public sealed class Phase1Probe : IDisposable
         }
     }
 
-    /// <summary>复位变化检测：切引擎/登录成功后调用，让静止画面也立即用新引擎/新登录态重译上屏。</summary>
-    public void ResetChangeDetection() => _lastJoined = "";
+    /// <summary>复位全部变化检测（per-ROI 的拼接文本/显示行/ROI 集签名）。切引擎/登录成功/窗口重连/最小化还原/换场景/Stop 后调用，
+    /// 让静止画面也立即用新状态重译上屏。</summary>
+    private void ResetAllChangeDetection()
+    {
+        _lastJoinedPerRoi.Clear();
+        _displayedPerRoi.Clear();
+        _roiSetSignature = "";
+    }
+    public void ResetChangeDetection() => ResetAllChangeDetection();
 
     public void Stop()
     {
         _watchdog?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
         _capture.Stop();
-        _lastJoined = ""; // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
+        ResetAllChangeDetection(); // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
         _windowLost = false; _wasIconic = false; _resNotified = false; _waitingForWindow = false;
         _log.Log("[probe] 已停止");
         _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
@@ -541,10 +552,11 @@ public sealed class Phase1Probe : IDisposable
                     $"游戏分辨率已变化({frame.Width}x{frame.Height})，正按旧 ROI 等比映射，建议按 F8 重新校准");
             }
             else if (!resMismatch) _resNotified = false;
-            var koLines = new List<string>();
-            var metas = new List<(RectangleF frameBounds, string roiName)>();
             var t = _settings.Current.Translation;
             var scope = new ContentScopeSettings(t.TranslateChat, t.TranslateRoomName, t.TranslateMapInfo, t.TranslatePlayerId);
+
+            // ── 每 ROI 独立收集 OCR 结果（下标=该 ROI 在当前有效列表里的位置）──
+            var rois = new List<(string name, List<string> lines, List<RectangleF> bounds)>();
             foreach (var roi in EffectiveRois(bucket, frame.Width, frame.Height))
             {
                 Rectangle px = RoiStore.ToPixels(roi.Rect, frame.Width, frame.Height);
@@ -557,6 +569,8 @@ public sealed class Phase1Probe : IDisposable
                 }
                 var roiType = RoiTypes.Parse(roi.Type);
                 var res = await _ocr.RecognizeAsync(sub);
+                var lines = new List<string>();
+                var bounds = new List<RectangleF>();
                 foreach (var line in res.Lines)
                 {
                     _log.Debug($"[{roi.Name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
@@ -573,19 +587,49 @@ public sealed class Phase1Probe : IDisposable
                     }
                     bool translate = TranslationScope.ShouldTranslate(roiType, col, scope);
                     if (!translate) continue;
-                    var frameBounds = new RectangleF(
+                    bounds.Add(new RectangleF(
                         line.Bounds.X + px.Left, line.Bounds.Y + px.Top,
-                        line.Bounds.Width, line.Bounds.Height);
-                    koLines.Add(line.Text);
-                    metas.Add((frameBounds, roi.Name));
+                        line.Bounds.Width, line.Bounds.Height));
+                    lines.Add(line.Text);
                 }
                 if (res.Lines.Count == 0)
                     _log.Debug($"[{roi.Name}] (空)");
+                rois.Add((roi.Name, lines, bounds));
             }
 
-            // 变化检测：本帧全部 ROI 韩文与上一帧完全相同则跳过翻译与上屏（省 API 费用，减少闪烁）。
-            var joined = string.Join("\n", koLines);
-            if (joined == _lastJoined) return; // finally 仍会 Dispose(frame) 并复位 _busy
+            // ── ROI 集变化（换场景/分辨率/增删）→ 清空 per-ROI 状态与悬浮层，全量重译 ──
+            // ShowLines 是全量替换，所以未变化的 ROI 必须靠 _displayedPerRoi 里存的上次显示行来合并，
+            // 否则这一帧没翻的 ROI 会从悬浮层上消失。
+            var sig = string.Join("|", rois.Select(r => r.name));
+            if (sig != _roiSetSignature)
+            {
+                _roiSetSignature = sig;
+                _lastJoinedPerRoi.Clear();
+                _displayedPerRoi.Clear();
+                _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+            }
+
+            // ── 每 ROI 单独做变化检测：该 ROI 韩文与上一帧相同则整块跳过（不重译、不重显）──
+            var toTranslate = new List<int>(); // 变化的 ROI 下标
+            for (int r = 0; r < rois.Count; r++)
+            {
+                var joined = string.Join("\n", rois[r].lines);
+                string last = _lastJoinedPerRoi.TryGetValue(r, out var l) ? l : "";
+                if (joined != last) toTranslate.Add(r);
+            }
+            if (toTranslate.Count == 0) return; // 所有 ROI 都没变 → 整帧跳过（finally 仍会 Dispose/复位 _busy）
+
+            // ── 只翻译变化的 ROI 的行（一批一请求）──
+            var koLines = new List<string>();
+            var metas = new List<(RectangleF frameBounds, string roiName, int roiIdx)>();
+            foreach (int r in toTranslate)
+            {
+                for (int i = 0; i < rois[r].lines.Count; i++)
+                {
+                    koLines.Add(rois[r].lines[i]);
+                    metas.Add((rois[r].bounds[i], rois[r].name, r));
+                }
+            }
 
             var ctx = new TranslationContext(SceneId, _glossaryHint);
             int timeout = Math.Max(1, _settings.Current.Translation.TimeoutSeconds);
@@ -596,8 +640,8 @@ public sealed class Phase1Probe : IDisposable
             sw.Stop();
             _lastTranslateMs = sw.ElapsedMilliseconds; _lastAllResolved = outcome.AllResolved; _lastLineCount = koLines.Count;
 
-            // 上屏：逐行只渲染"真翻出来的"。
-            var items = new List<OverlayItem>(koLines.Count);
+            // ── 上屏：变化的 ROI 重算 items；未变化的 ROI 沿用上次显示的行；合并后整窗摆放 ──
+            var itemsPerRoi = new Dictionary<int, List<OverlayItem>>();
             for (int k = 0; k < koLines.Count; k++)
             {
                 string zh = outcome.Texts[k];
@@ -605,16 +649,27 @@ public sealed class Phase1Probe : IDisposable
                 // **原文照抄的行不上屏**：provider 失败/超时时编排会回落原文，
                 // 把它当译文显示出去，用户看到的就是"识别到韩文却没翻译"，比什么都不显示更误导。
                 if (zh == koLines[k]) continue;
-                var (frameBounds, _) = metas[k];
+                var (frameBounds, _, roiIdx) = metas[k];
                 var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
+                if (!itemsPerRoi.TryGetValue(roiIdx, out var list)) itemsPerRoi[roiIdx] = list = new List<OverlayItem>();
                 // Source=该行韩文原文：供悬浮层"原文+译文双行"模式使用（单行模式忽略）。
-                items.Add(new OverlayItem(zh, scr.X, scr.Y, koLines[k]));
+                list.Add(new OverlayItem(zh, scr.X, scr.Y, koLines[k]));
             }
-            _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(items));
+            // 变化的 ROI：更新其显示行（没翻出任何行的 → 清掉旧显示）
+            foreach (var kv in itemsPerRoi) _displayedPerRoi[kv.Key] = kv.Value;
+            foreach (int r in toTranslate)
+                if (!itemsPerRoi.ContainsKey(r)) _displayedPerRoi.Remove(r);
+            var allItems = new List<OverlayItem>();
+            foreach (var kv in _displayedPerRoi) allItems.AddRange(kv.Value);
+            _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(allItems));
 
-            // 仅当整批都翻出来才提交变化检测，否则下一帧同内容重试。
-            if (outcome.AllResolved) _lastJoined = joined;
-            _log.Debug($"[probe] 上屏完成 lines={koLines.Count} 显示={items.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
+            // ── 仅当整批都翻出来才提交各变化 ROI 的变化检测，否则下一帧同内容重试 ──
+            if (outcome.AllResolved)
+            {
+                foreach (int r in toTranslate)
+                    _lastJoinedPerRoi[r] = string.Join("\n", rois[r].lines);
+            }
+            _log.Debug($"[probe] 上屏完成 rois={rois.Count} 变化={toTranslate.Count} lines={koLines.Count} 显示={allItems.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
 
             // 翻译失败：日志已在编排的 onError 里逐条记过，这里只负责"让你知道"——
             // 同一原因只气泡提示一次（否则每拍弹一次），原因变了再弹。

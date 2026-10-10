@@ -50,16 +50,16 @@ public static class HotkeyKeys
 }
 public static class HotkeyDefaults
 {
-    /// <summary>全部热键：F9 开/关翻译、F10 进入校准、Ctrl+F9 打开配置、F8 切 DEBUG 面板、Ctrl+F6 复制诊断。
+    /// <summary>全部热键：F9 开/关翻译、F10 区域校准设置、F11 设置、F8 切 DEBUG 面板、Ctrl+F8 复制诊断。
     /// 用户可重绑到 F6–F12（可加 Ctrl/Alt/Shift）。悬浮层显隐 / 翻译玩家ID / 暂停 已改为纯配置项，不再占热键。</summary>
     public static IReadOnlyDictionary<string, HotkeyBinding> Map { get; } =
         new Dictionary<string, HotkeyBinding>
         {
             ["ToggleTranslate"] = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9),
             ["Calibrate"]       = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10),
-            ["OpenConfig"]      = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F9),
+            ["OpenConfig"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F11),
             ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8),
-            ["CopyDebug"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F6),
+            ["CopyDebug"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F8),
         };
 }
 
