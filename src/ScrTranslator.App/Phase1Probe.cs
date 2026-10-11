@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Drawing;
 using ScrTranslator.App.Capture;
 using ScrTranslator.App.Interop;
@@ -69,6 +70,10 @@ public sealed class Phase1Probe : IDisposable
     private bool _roiAvailable; // 当前活动场景是否存在且 bucket 非空；活动场景/ReloadRois 变化时重算
     private bool _anySceneCalibrated; // 至少一个场景校准过 ROI——F9 的启动前置条件（与"当前场景"无关）
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
+    /// <summary>per-ROI 累计翻译行数（跨帧累计的成功翻译行数，键=ROI 名称）。调试面板逐行显示。</summary>
+    private readonly ConcurrentDictionary<string, long> _cumTranslated = new();
+    /// <summary>上一帧实际处理（被选用）的 ROI 名称，按有效列表顺序。整帧替换，volatile 保证调试定时器读到一致快照。</summary>
+    private volatile string[] _lastEffectiveRoiNames = Array.Empty<string>();
 
     // ── Phase 5 异常恢复：看门狗(2s) 检测窗口丢失/最小化/分辨率切换 ──
     public event Action<ProbeNotice, string>? Notice;
@@ -416,28 +421,22 @@ public sealed class Phase1Probe : IDisposable
     {
         var ocr = _settings.Current.Ocr;
         int detectMs = PollInterval.SceneDetect(ocr), translateMs = PollInterval.Translate(ocr);
-        int roiCount = _cfg.Scenes.TryGetValue(SceneId, out var bs2) ? bs2.Sum(b => b.Rois.Count) : 0;
         string state = _waitingForWindow ? "等待窗口" : _windowLost ? "窗口丢失" : "运行中";
-        // 指纹打分明细：排查"识别不对/识别不到"时最想看的就是每个候选各多少分，直接摊开。
-        string scores = _lastRec.Scores.Count == 0 ? "—"
-            : string.Join("  ", _lastRec.Scores.Select(s => $"{s.RefId} {s.HitRatio:P0}"));
         var store = _scene.Store;
         string refs = store.IsUsable
             ? $"{store.References.Count}条(现场{store.OverrideCount}) 块{store.BlockSize} 容差{store.ChannelTolerance} 阈值{store.MinHitRatio:P0}"
             : $"不可用: {store.LoadError}";
-        // 池按实例逐个报状态（不只是 Id）：RateLimited/NoCredentials/QuotaExhausted 一眼可见，
-        // 不用再猜"为什么一直在发原文"。GetStatus 是本地检查（不联网），调试定时器里调无副作用。
-        string pool = string.Join(" → ", _orchestrator.Providers.Select(p =>
-        {
-            var s = p.GetStatus();
-            return s.State == ProviderState.Available ? p.Name : $"{p.Name}({s.State}:{s.Detail})";
-        }));
+        // ROI 多行：当前帧选中的 bucket 里实际在用的 ROI（含布局预设合并），逐行显示名称 + 累计翻译行数。
+        var roiNames = _lastEffectiveRoiNames;
+        string roiSection = roiNames.Length == 0
+            ? $"ROI[{_activeScene.Label()}]: (无)\n"
+            : $"ROI[{_activeScene.Label()}]:\n" +
+              string.Join("\n", roiNames.Select(n => $"  {n}  累计翻译={_cumTranslated.GetValueOrDefault(n)}行")) + "\n";
         return
-            $"场景: {SceneDisplay(_activeScene, _activeRace)}  判定: {_lastRec.Summary}\n" +
-            $"指纹: {scores}\n" +
+            $"场景: {SceneDisplay(_activeScene, _activeRace)}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
-            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms  池: {pool}\n" +
-            $"ROI[{_activeScene.Label()}]: {roiCount}个  可用={(_roiAvailable ? "yes" : "no")}  已校准场景={(_anySceneCalibrated ? "yes" : "no")}  busy={_busy}\n" +
+            $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms\n" +
+            roiSection +
             $"状态: {state}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
             (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
@@ -594,7 +593,7 @@ public sealed class Phase1Probe : IDisposable
                     }
                     double relX = (line.Bounds.X + line.Bounds.Width / 2.0) / Math.Max(1, px.Width);
                     ColumnKind? col = roi.Columns is null
-                        ? (roiType == RoiType.RoomList ? ColumnKind.RoomName : (ColumnKind?)null)
+                        ? (roiType == RoiType.RoomNameList ? ColumnKind.RoomName : (ColumnKind?)null)
                         : TranslationScope.HitColumn(roi.Columns, relX);
                     // 内容闸门先于用户开关：无韩文的行（地图名、"Top vs Bottom"、表头…）根本不进翻译管线。
                     // 提示词要求"纯英文/数字/符号原样保留"，送过去只会拿回同样的英文 → 白花 API 且悬浮层显示一堆英文。
@@ -618,6 +617,8 @@ public sealed class Phase1Probe : IDisposable
                     _log.Debug($"[{roi.Name}][stable] OCR={lines.Count} 稳定={stableLines.Count}");
                 rois.Add((roi.Name, stableLines, stableBounds));
             }
+            // 调试面板逐行显示"被选用"的 ROI：本帧实际进 OCR 的有效列表（含布局预设合并）。
+            _lastEffectiveRoiNames = rois.Select(r => r.name).ToArray();
 
             // ── ROI 集变化（换场景/分辨率/增删）→ 清空 per-ROI 状态与悬浮层，全量重译 ──
             // ShowLines 是全量替换，所以未变化的 ROI 必须靠 _displayedPerRoi 里存的上次显示行来合并，
@@ -691,6 +692,9 @@ public sealed class Phase1Probe : IDisposable
             {
                 foreach (int r in toTranslate)
                     _lastJoinedPerRoi[r] = string.Join("\n", rois[r].lines);
+                // 累计翻译行数：整批 AllResolved 时，本批每行都算成功翻译，按行归属的 ROI 累加。
+                foreach (var m in metas)
+                    _cumTranslated.AddOrUpdate(m.roiName, 1L, (_, v) => v + 1);
             }
             _log.Debug($"[probe] 上屏完成 rois={rois.Count} 变化={toTranslate.Count} lines={koLines.Count} 显示={allItems.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
 

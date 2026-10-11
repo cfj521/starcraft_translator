@@ -43,7 +43,7 @@ public class RoiStoreTests
         string json = """
         { "scenes": { "scene_a": { "buckets": [
           { "resolution": "1920x1080", "rois": [
-            { "name": "game_name", "type": "RoomList", "rect": [0.18, 0.28, 0.22, 0.40] }
+            { "name": "game_name", "type": "RoomNameList", "rect": [0.18, 0.28, 0.22, 0.40] }
           ] } ] } } }
         """;
         string path = Path.GetTempFileName();
@@ -56,7 +56,7 @@ public class RoiStoreTests
 
     private static RoiConfig MakeConfig()
     {
-        var roi = new Roi("game_name", "RoomList", new RelRect(0.1, 0.1, 0.2, 0.2));
+        var roi = new Roi("game_name", "RoomNameList", new RelRect(0.1, 0.1, 0.2, 0.2));
         var scenes = new Dictionary<string, IReadOnlyList<SceneBucket>>
         {
             ["scene_a"] = new List<SceneBucket>
@@ -85,7 +85,7 @@ public class RoiStoreTests
     public void Load_V2_ParsesColumns()
     {
         var json = "{\"scenes\":{\"s\":{\"buckets\":[{\"resolution\":\"1920x1080\",\"rois\":[" +
-                   "{\"name\":\"房间\",\"type\":\"RoomList\",\"rect\":[0.1,0.2,0.3,0.4]," +
+                   "{\"name\":\"房间\",\"type\":\"RoomNameList\",\"rect\":[0.1,0.2,0.3,0.4]," +
                    "\"columns\":[{\"start\":0.0,\"end\":0.3,\"kind\":\"PlayerId\"}," +
                    "{\"start\":0.3,\"end\":1.0,\"kind\":\"RoomName\"}]}]}]}}}";
         var path = Path.GetTempFileName(); File.WriteAllText(path, json);
@@ -107,14 +107,14 @@ public class RoiStoreTests
     [Fact]
     public void Save_Then_Load_RoundTrips_WithColumns()
     {
-        var roi = new Roi("房间", "RoomList", new RelRect(0.1, 0.2, 0.3, 0.4),
+        var roi = new Roi("房间", "RoomNameList", new RelRect(0.1, 0.2, 0.3, 0.4),
             new[] { new RoiColumn(0.0, 0.3, ColumnKind.PlayerId), new RoiColumn(0.3, 1.0, ColumnKind.RoomName) });
         var cfg = new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>
             { ["s"] = new[] { new SceneBucket("1920x1080", new[] { roi }) } });
         var path = Path.GetTempFileName();
         RoiStore.Save(cfg, path);
         var back = RoiStore.Load(path).Scenes["s"][0].Rois[0];
-        Assert.Equal("RoomList", back.Type);
+        Assert.Equal("RoomNameList", back.Type);
         Assert.Equal(2, back.Columns!.Count);
         Assert.Equal(ColumnKind.RoomName, back.Columns[1].Kind);
         Assert.Equal(1.0, back.Columns[1].RelEnd);

@@ -182,88 +182,60 @@
 
             <!-- ══════════════════ 区域 ══════════════════ -->
             <TabItem Header="区域">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="8">
-                        <StackPanel Margin="0,0,0,6">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="RegionHintText" Text="尚未加载" VerticalAlignment="Center"/>
-                                <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准" Click="OnEnterCalibrationClick"/>
-                            </Grid>
-                            <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"
-                                       Text="ⓘ 程序预设了1920x1080、2560x1440、3840x2160 三种分辨率的区域定位，若您的屏幕分辨率不在其中，程序会提供最近您当前分辨率的区域数据，然后请自行校准。"/>
-                        </StackPanel>
-
-                        <Grid Margin="0,0,0,4">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Margin="0,0,0,6">
+                        <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="已定义区域（坐标为像素坐标）：" FontWeight="Bold" VerticalAlignment="Center"/>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <Button x:Name="EditRoiButton" Content="编辑选中" IsEnabled="False" Click="OnEditRoiClick"/>
-                                <Button x:Name="DeleteRoiButton" Content="删除选中" Margin="8,0,0,0" IsEnabled="False" Click="OnDeleteRoiClick"/>
-                            </StackPanel>
+                            <TextBlock x:Name="RegionHintText" Text="尚未加载" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准" Click="OnEnterCalibrationClick"/>
                         </Grid>
-                        <ListView x:Name="RoiListView" Height="200" Margin="0,0,0,4"
-                                  MouseDoubleClick="OnRoiListDoubleClick" SelectionChanged="OnRoiListSelectionChanged">
-                            <!-- 列表内文本统一小一号（13）：覆盖全局 14 号的隐式 TextBlock 样式 -->
-                            <ListView.Resources>
-                                <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-                                    <Setter Property="FontSize" Value="13"/>
-                                </Style>
-                                <!-- 行高以热键页列表为准（带按钮的行更高）：统一最小行高，两表行高一致 -->
-                                <Style TargetType="ListViewItem" BasedOn="{StaticResource {x:Type ListViewItem}}">
-                                    <Setter Property="MinHeight" Value="36"/>
-                                </Style>
-                            </ListView.Resources>
-                            <ListView.View>
-                                <GridView>
-                                    <GridViewColumn Header="场景" Width="86" DisplayMemberBinding="{Binding Scene}"/>
-                                    <GridViewColumn Header="分辨率" Width="90" DisplayMemberBinding="{Binding Resolution}"/>
-                                    <GridViewColumn Header="名称" Width="150" DisplayMemberBinding="{Binding Name}"/>
-                                    <GridViewColumn Header="类型" Width="86" DisplayMemberBinding="{Binding Type}"/>
-                                    <GridViewColumn Header="左上角 X,Y" Width="94" DisplayMemberBinding="{Binding TopLeft}"/>
-                                    <GridViewColumn Header="宽 × 高" Width="94" DisplayMemberBinding="{Binding Size}"/>
-                                </GridView>
-                            </ListView.View>
-                        </ListView>
-
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="房间列表列区域：" FontWeight="Bold" VerticalAlignment="Center"/>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <Button x:Name="EditColumnButton" Content="编辑选中" IsEnabled="False" Click="OnEditColumnClick"/>
-                                <Button x:Name="DeleteColumnButton" Content="删除选中" Margin="8,0,0,0" IsEnabled="False" Click="OnDeleteColumnClick"/>
-                            </StackPanel>
-                        </Grid>
-                        <ListView x:Name="ColumnsListView" Height="140" MouseDoubleClick="OnColumnListDoubleClick" SelectionChanged="OnColumnListSelectionChanged">
-                            <!-- 列表内文本统一小一号（13）：覆盖全局 14 号的隐式 TextBlock 样式 -->
-                            <ListView.Resources>
-                                <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-                                    <Setter Property="FontSize" Value="13"/>
-                                </Style>
-                                <!-- 行高以热键页列表为准（带按钮的行更高）：统一最小行高，两表行高一致 -->
-                                <Style TargetType="ListViewItem" BasedOn="{StaticResource {x:Type ListViewItem}}">
-                                    <Setter Property="MinHeight" Value="36"/>
-                                </Style>
-                            </ListView.Resources>
-                            <ListView.View>
-                                <GridView>
-                                    <GridViewColumn Header="列名" Width="150" DisplayMemberBinding="{Binding Name}"/>
-                                    <GridViewColumn Header="左上角 X,Y" Width="110" DisplayMemberBinding="{Binding TopLeft}"/>
-                                    <GridViewColumn Header="宽 × 高" Width="110" DisplayMemberBinding="{Binding Size}"/>
-                                </GridView>
-                            </ListView.View>
-                        </ListView>
+                        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"
+                                   Text="ⓘ 程序预设了1920x1080、2560x1440、3840x2160 三种分辨率的区域定位，若您的屏幕分辨率不在其中，程序会提供最近您当前分辨率的区域数据，然后请自行校准。"/>
                     </StackPanel>
-                </ScrollViewer>
+
+                    <Grid Grid.Row="1" Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="已定义区域（坐标为像素坐标）：" FontWeight="Bold" VerticalAlignment="Center"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <Button x:Name="EditRoiButton" Content="编辑选中" IsEnabled="False" Click="OnEditRoiClick"/>
+                            <Button x:Name="DeleteRoiButton" Content="删除选中" Margin="8,0,0,0" IsEnabled="False" Click="OnDeleteRoiClick"/>
+                        </StackPanel>
+                    </Grid>
+                    <ListView x:Name="RoiListView" Grid.Row="2" Margin="0,0,0,4"
+                              MouseDoubleClick="OnRoiListDoubleClick" SelectionChanged="OnRoiListSelectionChanged">
+                        <!-- 列表内文本统一小一号（13）：覆盖全局 14 号的隐式 TextBlock 样式 -->
+                        <ListView.Resources>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                <Setter Property="FontSize" Value="13"/>
+                            </Style>
+                            <!-- 行高以热键页列表为准（带按钮的行更高）：统一最小行高，两表行高一致 -->
+                            <Style TargetType="ListViewItem" BasedOn="{StaticResource {x:Type ListViewItem}}">
+                                <Setter Property="MinHeight" Value="36"/>
+                            </Style>
+                        </ListView.Resources>
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="场景" Width="86" DisplayMemberBinding="{Binding Scene}"/>
+                                <GridViewColumn Header="分辨率" Width="90" DisplayMemberBinding="{Binding Resolution}"/>
+                                <GridViewColumn Header="名称" Width="150" DisplayMemberBinding="{Binding Name}"/>
+                                <GridViewColumn Header="类型" Width="86" DisplayMemberBinding="{Binding Type}"/>
+                                <GridViewColumn Header="左上角 X,Y" Width="94" DisplayMemberBinding="{Binding TopLeft}"/>
+                                <GridViewColumn Header="宽 × 高" Width="94" DisplayMemberBinding="{Binding Size}"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </Grid>
             </TabItem>
 
             <!-- ══════════════════ 热键 ══════════════════ -->

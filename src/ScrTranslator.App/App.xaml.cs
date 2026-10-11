@@ -298,11 +298,10 @@ public partial class App : Application
 
             if (calibrationWindow is not null) { calibrationWindow.Activate(); return; }
             calibrationWindow = new Calibration.CalibrationWindow(
-                roisPath, log, probe.ReloadRois, probe.CurrentSceneId,
+                roisPath, log,
+                () => { probe.ReloadRois(); probe.ReloadLayoutPresets(); }, // 校准窗现在两个文件都写（用户框→rois.json，预设框→layout-overrides.json）
                 _host.Services.GetRequiredService<SceneRecognizer>(),
-                _host.Services.GetRequiredService<LayoutPresetStore>(),
-                sceneOverridesPath,          // 现场采集场景指纹的覆盖层路径
-                probe.ReloadSceneRefs);      // 采集写入后让运行中的探测重读参考
+                _host.Services.GetRequiredService<LayoutPresetStore>());
             calibrationWindow.Closed += (_, _) => calibrationWindow = null;
             calibrationWindow.Show();
             calibrationWindow.Activate();

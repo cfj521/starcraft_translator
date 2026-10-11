@@ -16,7 +16,7 @@ public class RoiStoreEditTests
             new SceneBucket("1920x1080", new[]
             {
                 new Roi("房间聊天", "Chat", new RelRect(0.1, 0.6, 0.4, 0.3)),
-                new Roi("房间名", "RoomList", new RelRect(0.6, 0.3, 0.2, 0.05),
+                new Roi("房间名", "RoomNameList", new RelRect(0.6, 0.3, 0.2, 0.05),
                     new[] { new RoiColumn(0d, 1d, ColumnKind.RoomName) }),
             }),
             new SceneBucket("3840x2160", new[]
@@ -40,7 +40,7 @@ public class RoiStoreEditTests
     {
         var cfg = Sample();
         var updated = RoiStore.ReplaceRoi(cfg, "browsing", "1920x1080", 1,
-            new Roi("房间名列表", "RoomList", new RelRect(0.6, 0.36, 0.23, 0.03),
+            new Roi("房间名列表", "RoomNameList", new RelRect(0.6, 0.36, 0.23, 0.03),
                 new[] { new RoiColumn(0, 1, ColumnKind.RoomName) }));
 
         Assert.NotNull(updated);

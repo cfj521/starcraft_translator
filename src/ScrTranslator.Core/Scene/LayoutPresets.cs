@@ -3,64 +3,42 @@ using System.Text.Json;
 
 namespace ScrTranslator.Core.Scene;
 
-/// <summary>列表框内的一列：X 是相对**列表框左边缘**的像素偏移（不是屏幕坐标），Width 为该列像素宽。</summary>
-public sealed record ListColumn(ColumnKind Kind, int X, int Width)
-{
-    /// <summary>换算成 ROI 列定义用的相对区间（相对列表框宽度，0~1）。</summary>
-    public (double Start, double End) ToRelative(int listWidth)
-    {
-        if (listWidth <= 0) return (0, 0);
-        return (Math.Clamp(X / (double)listWidth, 0d, 1d), Math.Clamp((X + Width) / (double)listWidth, 0d, 1d));
-    }
-}
-
-/// <summary>自定义游戏列表的网格：整框 + 固定行高 + 需要翻译的列。</summary>
-public sealed record RoomListGrid(int X, int Y, int Width, int Height, int RowHeight, IReadOnlyList<ListColumn> Columns)
-{
-    public int Rows => RowHeight > 0 ? Height / RowHeight : 0;
-}
-
-/// <summary>一个矩形区域（该分辨率下的整数像素）。</summary>
-public sealed record PixelRect(int X, int Y, int Width, int Height);
-
 /// <summary>
-/// 某场景在某分辨率下的**界面布局预设**：聊天框 + （仅寻找房间）房间列表网格。
+/// 某场景在某分辨率下的**界面布局预设**：聊天框 + （仅寻找房间）房间名列表区域 + （仅房间内）房间名称/地图名称。
 ///
 /// 为什么内置而不是校准：这些面板在给定分辨率下位置和尺寸是死的，让用户每次拖框既没准头也没必要。
-/// 数值来源：1080p 从 docs/scenes pictures 的截图量得（列表用绿色人数槽的 y 周期 + 表头亮字团定列；
-/// 聊天框用面板边框；游戏内聊天用 ingame-w/h 两张专用图定出单行最大宽度与最大行数），
-/// 2K/4K 按 4/3、2 倍等比推算并用叠加图逐档目视核验。校准/编辑能力保留，用于改版时覆盖。
+/// 数值来源：1080p 从 docs/scenes pictures 的截图量得，2K/4K 按 4/3、2 倍等比推算并用叠加图逐档目视核验。
+/// 校准/编辑能力保留，用于改版时覆盖。
 ///
-/// 坐标一律是该分辨率下的整数像素，且**分辨率必须精确匹配**——UI 不是严格等比缩放，
-/// 借用邻近分辨率的预设会让框子整体偏移。
+/// 坐标一律是**相对该分辨率的 0~1 比例**（与 rois.json 同一口径），且**分辨率必须精确匹配**——
+/// UI 不是严格等比缩放，借用邻近分辨率的预设会让框子整体偏移。
 /// </summary>
-public sealed record LayoutPreset(string Scene, string Resolution, PixelRect? Chat, RoomListGrid? RoomList)
+public sealed record LayoutPreset(string Scene, string Resolution, RelRect? Chat, RelRect? RoomNameList = null,
+    RelRect? GameName = null, RelRect? MapName = null)
 {
+    /// <summary>预设 ROI 名字的特殊标记。名字带标记 = 预设：校准窗靠它在保存时分流
+    /// （带标记的写 layout-overrides.json 覆盖层，不带的写 rois.json 用户框），运行时日志/调试面板也据此区分。</summary>
+    public const string PresetNamePrefix = "%preset%";
+
     /// <summary>
-    /// 展开成普通 ROI 列表，这样运行时**完全复用**既有通路（逐 ROI 裁剪 → OCR → 按类型/列决定翻不翻），
-    /// 不必为"预设"另写一套流程。名字带"(预设)"以便在区域页与校准结果区分。
+    /// 展开成普通 ROI 列表，这样运行时**完全复用**既有通路（逐 ROI 裁剪 → OCR → 按类型决定翻不翻），
+    /// 不必为"预设"另写一套流程。名字带 <see cref="PresetNamePrefix"/> 标记以便与用户校准框区分。
     /// </summary>
     public IReadOnlyList<Roi> ToRois()
     {
-        var (fw, fh) = ParseSize(Resolution);
         var list = new List<Roi>();
         if (Chat is { } chat)
-            list.Add(new Roi($"{Scene}·聊天(预设)", "Chat", Rel(chat, fw, fh)));
-        if (RoomList is not null)
-        {
-            var g = RoomList;
-            var cols = g.Columns
-                .Select(c => { var (s, e) = c.ToRelative(g.Width); return new RoiColumn(s, e, c.Kind); })
-                .ToList();
-            list.Add(new Roi($"{Scene}·房间列表(预设)", "RoomList",
-                Rel(new PixelRect(g.X, g.Y, g.Width, g.Height), fw, fh), cols));
-        }
+            list.Add(new Roi($"{PresetNamePrefix}Chat", "Chat", chat));
+        if (RoomNameList is { } rnl)
+            list.Add(new Roi($"{PresetNamePrefix}RoomNameList", "RoomNameList", rnl));
+        if (GameName is { } gn)
+            list.Add(new Roi($"{PresetNamePrefix}GameName", "GameName", gn));
+        if (MapName is { } mn)
+            list.Add(new Roi($"{PresetNamePrefix}MapName", "MapName", mn));
         return list;
     }
 
-    static RelRect Rel(PixelRect r, int fw, int fh) => new(
-        r.X / (double)fw, r.Y / (double)fh, r.Width / (double)fw, r.Height / (double)fh);
-
+    /// <summary>解析分辨率键（"1920x1080"→(1920,1080)）。仅旧 roomList 网格格式的像素→相对换算要用。</summary>
     internal static (int W, int H) ParseSize(string resolution)
     {
         var parts = (resolution ?? "").Split('x');
@@ -193,13 +171,10 @@ public sealed class LayoutPresetStore
                 firstRes = false;
                 sb.Append($"\n      \"{p.Resolution}\": {{");
                 var parts = new List<string>();
-                if (p.Chat is { } c) parts.Add($" \"chat\": [{c.X}, {c.Y}, {c.Width}, {c.Height}]");
-                if (p.RoomList is { } r)
-                {
-                    var cols = string.Join(", ", r.Columns.Select(col =>
-                        "{ \"kind\": \"" + col.Kind + "\", \"x\": " + col.X + ", \"width\": " + col.Width + " }"));
-                    parts.Add($" \"roomList\": {{ \"list\": [{r.X}, {r.Y}, {r.Width}, {r.Height}], \"rowHeight\": {r.RowHeight}, \"columns\": [{cols}] }}");
-                }
+                if (p.Chat is { } c) parts.Add($" \"chat\": [{c.X}, {c.Y}, {c.W}, {c.H}]");
+                if (p.RoomNameList is { } rnl) parts.Add($" \"roomNameList\": [{rnl.X}, {rnl.Y}, {rnl.W}, {rnl.H}]");
+                if (p.GameName is { } gn) parts.Add($" \"gameName\": [{gn.X}, {gn.Y}, {gn.W}, {gn.H}]");
+                if (p.MapName is { } mn) parts.Add($" \"mapName\": [{mn.X}, {mn.Y}, {mn.W}, {mn.H}]");
                 sb.Append(string.Join(",", parts));
                 sb.Append(" }");
             }
@@ -253,40 +228,44 @@ public sealed class LayoutPresetStore
     {
         try
         {
-            PixelRect? chat = null;
-            if (el.TryGetProperty("chat", out var c) && c.ValueKind == JsonValueKind.Array)
+            RelRect? chat = ParseRect(el, "chat", scene, resolution, warnings);
+
+            // 新格式：roomNameList 是简单矩形 [x, y, w, h]（相对 0~1）。
+            // 旧格式兼容：roomList 是网格对象 { list, rowHeight, columns } —— 只取 list 矩形（当时存的是像素），换算成相对。
+            RelRect? roomNameList = ParseRect(el, "roomNameList", scene, resolution, warnings);
+            if (roomNameList is null && el.TryGetProperty("roomList", out var oldG) && oldG.ValueKind == JsonValueKind.Object)
             {
-                var a = c.EnumerateArray().Select(e => e.GetInt32()).ToArray();
-                if (a.Length == 4 && a[2] > 0 && a[3] > 0) chat = new PixelRect(a[0], a[1], a[2], a[3]);
-                else warnings.Add($"{scene}/{resolution} 的 chat 矩形非法：[{string.Join(",", a)}]");
+                var list = oldG.GetProperty("list").EnumerateArray().Select(e => e.GetDouble()).ToArray();
+                var (fw, fh) = LayoutPreset.ParseSize(resolution);
+                if (list.Length == 4 && list[2] > 0 && list[3] > 0)
+                    roomNameList = new RelRect(list[0] / fw, list[1] / fh, list[2] / fw, list[3] / fh);
+                else warnings.Add($"{scene}/{resolution} 的旧 roomList 参数非法，已跳过");
             }
 
-            RoomListGrid? grid = null;
-            if (el.TryGetProperty("roomList", out var g) && g.ValueKind == JsonValueKind.Object)
-            {
-                var list = g.GetProperty("list").EnumerateArray().Select(e => e.GetInt32()).ToArray();
-                int rowHeight = g.GetProperty("rowHeight").GetInt32();
-                var cols = new List<ListColumn>();
-                foreach (var col in g.GetProperty("columns").EnumerateArray())
-                    cols.Add(new ListColumn(
-                        ColumnKinds.Parse(col.GetProperty("kind").GetString() ?? "Other"),
-                        col.GetProperty("x").GetInt32(), col.GetProperty("width").GetInt32()));
-                if (list.Length != 4 || list[2] <= 0 || list[3] <= 0 || rowHeight <= 0 || cols.Count == 0)
-                    warnings.Add($"{scene}/{resolution} 的 roomList 参数非法（list={list.Length} rowHeight={rowHeight} columns={cols.Count}）");
-                else grid = new RoomListGrid(list[0], list[1], list[2], list[3], rowHeight, cols);
-            }
+            RelRect? gameName = ParseRect(el, "gameName", scene, resolution, warnings);
+            RelRect? mapName = ParseRect(el, "mapName", scene, resolution, warnings);
 
-            if (chat is null && grid is null)
+            if (chat is null && roomNameList is null && gameName is null && mapName is null)
             {
-                warnings.Add($"{scene}/{resolution} 既无 chat 也无 roomList，已跳过");
+                warnings.Add($"{scene}/{resolution} 既无 chat/roomNameList 也无 gameName/mapName，已跳过");
                 return null;
             }
-            return new LayoutPreset(scene, resolution, chat, grid);
+            return new LayoutPreset(scene, resolution, chat, roomNameList, gameName, mapName);
         }
         catch (Exception ex)
         {
             warnings.Add($"{scene}/{resolution} 解析失败：{ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>解析 <c>[x, y, w, h]</c> 相对矩形（0~1，全精度）。属性缺省→null（该区域无预设）；值非法→告警并返回 null。</summary>
+    static RelRect? ParseRect(JsonElement el, string name, string scene, string resolution, List<string> warnings)
+    {
+        if (!el.TryGetProperty(name, out var p) || p.ValueKind != JsonValueKind.Array) return null;
+        var a = p.EnumerateArray().Select(e => e.GetDouble()).ToArray();
+        if (a.Length == 4 && a[2] > 0 && a[3] > 0) return new RelRect(a[0], a[1], a[2], a[3]);
+        warnings.Add($"{scene}/{resolution} 的 {name} 矩形非法：[{string.Join(",", a)}]");
+        return null;
     }
 }

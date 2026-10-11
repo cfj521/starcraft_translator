@@ -11,6 +11,7 @@ using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
 using ScrTranslator.Core;
 using ScrTranslator.Core.Scene;
+using SkiaSharp;
 
 namespace ScrTranslator.App.Calibration;
 
@@ -18,10 +19,9 @@ namespace ScrTranslator.App.Calibration;
 /// F8 打开（App.xaml.cs）；Esc 取消不存、Enter 归一化写 rois.json（RoiStore.Save）。</summary>
 public partial class CalibrationWindow : Window
 {
-    /// <summary>本次校准写入的场景键。**由校准窗自己检测得出**（打开方传的值只作兜底），
-    /// 所以它不是 readonly：OnLoaded 里检测到真实场景后会覆盖。</summary>
+    /// <summary>本次校准写入的场景键。**由校准窗自己抓一帧指纹判定**（OnLoaded 里做），
+    /// 所以它不是 readonly：检测到真实场景后会覆盖初始默认值。</summary>
     private string _sceneId;
-    private GameRace _detectedRace = GameRace.Unknown; // DetectSceneOrKeep 检测出的种族（采集面板预填用）
     private readonly SceneRecognizer? _scene;
     private readonly LayoutPresetStore? _layout;
     private const double HandleSize = 8;
@@ -31,25 +31,22 @@ public partial class CalibrationWindow : Window
     private readonly string _roisJsonPath;
     private readonly FileLogger? _log;
     private readonly Action? _onSaved;
-    // 现场采集场景指纹：覆盖层路径（null=不启用）+ 写入后回调（让运行中的探测重读参考）。
-    private readonly string? _sceneOverridesPath;
-    private readonly Action? _onSceneRefsSaved;
-    private Border? _capturePanel;
-    private ComboBox _captureSceneCombo = null!;
-    private ComboBox _captureRaceCombo = null!;
-    private TextBlock? _captureStatus;
 
     private readonly List<CalibBox> _boxes = new();
     private CalibBox? _selected;
-    private readonly List<FrameworkElement> _presetDecorations = new(); // 预设参考框（只读，不写盘）
+    private int _colorCounter; // 已分配色号：预设框与用户框共用，按创建顺序分配，保证屏上所有区域互不同色
 
-    private enum Mode { Idle, Drawing, ResizingCorner, DraggingDivider }
+    private enum Mode { Idle, Drawing, ResizingCorner, DraggingDivider, MovingBox }
     private Mode _mode = Mode.Idle;
     private Point _dragStart;
     private Rectangle? _drawPreview;
     private int _resizeCorner; // 0=TL 1=TR 2=BL 3=BR
     private Rect _resizeStartRect;
     private int _dividerIndex;
+    // 整框平移：按住框体（非角柄/分割线）拖动 = 平移整个框；点击不动 = 只选中
+    private CalibBox? _movingBox;
+    private Point _moveStart;
+    private Rect _moveStartRect;
     private Border? _newBoxPanel;
     private Rect? _pendingRect;
     // 操作条拖拽：按住它自己（非控件区）可以挪动，避免挡住正在对齐的区域
@@ -65,21 +62,28 @@ public partial class CalibrationWindow : Window
     /// 场景=当前是哪个界面，ROI=该界面里要框出来翻的一块区域）。</summary>
     private static readonly Option<RoiType>[] RoiTypeOptions =
     {
-        new(RoiType.Chat, "聊天"), new(RoiType.RoomList, "房间名列表"), new(RoiType.MapInfo, "地图信息"),
+        new(RoiType.Chat, "聊天"), new(RoiType.RoomNameList, "房间名列表"), new(RoiType.MapInfo, "地图信息"),
+        new(RoiType.GameName, "房间名称"), new(RoiType.MapName, "地图名称"),
     };
     private static readonly Option<ColumnKind>[] ColumnKindOptions =
     {
         new(ColumnKind.RoomName, "房间名"), new(ColumnKind.MapName, "地图"),
         new(ColumnKind.PlayerId, "玩家ID"), new(ColumnKind.Other, "其它"),
     };
-    /// <summary>采集面板的场景选项（四态）。游戏内会再配一个种族选项，拼成参考 id（如 ingame_t）。</summary>
-    private static readonly Option<string>[] CaptureSceneOptions =
+    /// <summary>区域专属配色：每个区域一个**不同**颜色的边框（不再按类型着色），预设框与用户框共用此表、
+    /// 预设先取色、用户框从其计数之后接着取，循环使用；无内填充，纯边框标识。</summary>
+    private static readonly Brush[] RegionColors =
     {
-        new(GameSceneIds.Browsing, "寻找房间"), new(GameSceneIds.Room, "房间内"), new(GameSceneIds.InGame, "游戏内"),
-    };
-    private static readonly Option<string>[] CaptureRaceOptions =
-    {
-        new("t", "人族"), new("p", "神族"), new("z", "虫族"),
+        new SolidColorBrush(Color.FromRgb(255, 80,  80)),  // 红
+        new SolidColorBrush(Color.FromRgb( 80, 255, 100)), // 绿
+        new SolidColorBrush(Color.FromRgb( 80, 160, 255)), // 蓝
+        new SolidColorBrush(Color.FromRgb(255, 220,  60)), // 黄
+        new SolidColorBrush(Color.FromRgb(255, 100, 255)), // 品红
+        new SolidColorBrush(Color.FromRgb( 80, 255, 255)), // 青
+        new SolidColorBrush(Color.FromRgb(255, 160,  60)), // 橙
+        new SolidColorBrush(Color.FromRgb(180, 120, 255)), // 紫
+        new SolidColorBrush(Color.FromRgb(255, 140, 160)), // 粉
+        new SolidColorBrush(Color.FromRgb(140, 255, 140)), // 黄绿
     };
 
     /// <summary>一个已框选区域的编辑态：Canvas 内 DIP 矩形 + 可选列定义（仅 RoomList 用）。</summary>
@@ -96,33 +100,37 @@ public partial class CalibrationWindow : Window
         public Rectangle[]? Handles;
         public readonly List<Line> DividerLines = new();
         public Border? ColumnPanel;
+        public Brush Color = null!; // 区域专属边框色（NextColor 按创建顺序分配，保证屏上所有区域互不同色）
+
+        /// <summary>名字带 <see cref="LayoutPreset.PresetNamePrefix"/>（%preset%）特殊标记 = 预设框。
+        /// 预设框与用户框共用同一套拖拽/调角/平移逻辑，但保存时走不同落盘：
+        /// 用户框写 rois.json，预设框写 layout-overrides.json（更新对应 LayoutPreset 字段）。
+        /// 靠名字判断（而不是单独的 bool 字段），这样框被改名/重读盘后路由规则依然成立。</summary>
+        public bool IsPreset => Name.StartsWith(LayoutPreset.PresetNamePrefix);
     }
 
     /// <param name="onSaved">保存成功（Enter 触发 SaveAndClose 走完写盘且未抛异常）后调用；
-    /// 供 App.xaml.cs 接线让运行中的 Phase1Probe.ReloadRois()，使首次校准/改动无需重启即可生效。</param>
-    /// <param name="sceneId">打开方认为的当前场景，仅作**兜底**：校准窗自己会抓一帧做指纹检测覆盖它，
-    /// 所以 F9 没开也能定准场景。</param>
-    /// <param name="scene">场景识别器（图像指纹）。为 null 时跳过检测，沿用传入的 sceneId。</param>
-    /// <param name="layout">布局预设：校准窗把它们画成只读参考框，省得用户重复框已有的区域。</param>
-    /// <param name="sceneOverridesPath">现场采集的场景指纹覆盖层路径；null 时不显示采集面板。</param>
-    /// <param name="onSceneRefsSaved">采集写入覆盖层后调用（让运行中的探测重读参考，免重启）。</param>
-    public CalibrationWindow(string roisJsonPath, FileLogger? log = null, Action? onSaved = null, string? sceneId = null,
-        SceneRecognizer? scene = null, LayoutPresetStore? layout = null,
-        string? sceneOverridesPath = null, Action? onSceneRefsSaved = null)
+    /// 供 App.xaml.cs 接线让运行中的探测重载 rois.json 与布局预设（校准窗两个文件都写），改动无需重启即可生效。</param>
+    /// <param name="scene">场景识别器（图像指纹）。为 null 时跳过检测，用默认场景。</param>
+    /// <param name="layout">布局预设：校准窗把它们建成可交互编辑框（名字带 %preset% 标记），保存时写回 layout-overrides.json。</param>
+    public CalibrationWindow(string roisJsonPath, FileLogger? log = null, Action? onSaved = null,
+        SceneRecognizer? scene = null, LayoutPresetStore? layout = null)
     {
         InitializeComponent();
         _roisJsonPath = roisJsonPath;
         _log = log;
         _onSaved = onSaved;
-        _sceneId = sceneId ?? GameSceneIds.Browsing;
+        // 不用打开方的历史场景：默认"其他界面"（=未判定），窗口一创建就用 WGC 抓一帧自己判定（DetectScene），匹配才覆盖
+        _sceneId = GameSceneIds.Other;
         _scene = scene;
         _layout = layout;
-        _sceneOverridesPath = sceneOverridesPath;
-        _onSceneRefsSaved = onSceneRefsSaved;
         Left = 0;
         Top = 0;
         Width = SystemParameters.PrimaryScreenWidth;
         Height = SystemParameters.PrimaryScreenHeight;
+        // 场景由窗口创建后自己判定（WGC 窗口捕获，不受遮挡影响）——详见 DetectScene
+        FindGameRect();
+        DetectScene();
         Loaded += OnLoaded;
     }
 
@@ -132,245 +140,115 @@ public partial class CalibrationWindow : Window
         _dpiX = dpi.DpiScaleX;
         _dpiY = dpi.DpiScaleY;
 
+        // 场景已在构造器里判定完（DetectScene）。这里只画
+        DrawGameOutline();
+        DrawPresetBoxes();
+        LoadExisting();
+
+        Focusable = true;
+        Focus();
+        Keyboard.Focus(this);
+
+        // 操作条打开期间，整个窗口失活（Alt+Tab 切走）也响一声——它还在等输入名称/类型
+        Deactivated += (_, _) => { if (_newBoxPanel is not null) System.Media.SystemSounds.Beep.Play(); };
+    }
+
+    /// <summary>找游戏窗口的物理像素矩形（找不到退化为整个主屏）。判定全在物理像素里跑，不依赖 DIP。</summary>
+    private void FindGameRect()
+    {
         var hwnd = WindowFinder.FindByProcess("StarCraft");
         var rect = hwnd == IntPtr.Zero ? System.Drawing.Rectangle.Empty : NativeMethods.GetWindowScreenRect(hwnd);
         if (rect.IsEmpty || rect.Width <= 0 || rect.Height <= 0)
         {
             _log?.Log("[calibration] 未找到 StarCraft 窗口，退化为使用主屏幕范围作为校准基准");
+            double scale = NativeMethods.GetDpiForSystem() / 96.0;
             rect = new System.Drawing.Rectangle(0, 0,
-                (int)Math.Round(SystemParameters.PrimaryScreenWidth * _dpiX),
-                (int)Math.Round(SystemParameters.PrimaryScreenHeight * _dpiY));
+                (int)Math.Round(SystemParameters.PrimaryScreenWidth * scale),
+                (int)Math.Round(SystemParameters.PrimaryScreenHeight * scale));
         }
         _gameRect = rect;
-
-        // 场景由校准窗自己检测（不依赖 F9 是否开着），检测不到才沿用打开方传进来的值
-        DetectSceneOrKeep();
-
-        DrawGameOutline();
-        DrawPresetBoxes();
-        LoadExisting();
-        BuildCapturePanel(); // 最后建，盖在最上层；采集面板的预填用 DetectSceneOrKeep 检测出的场景
-
-        Focusable = true;
-        Focus();
-        Keyboard.Focus(this);
     }
 
     /// <summary>
-    /// 抓游戏窗口那块屏幕做指纹场景检测。
-    ///
-    /// 用 CopyFromScreen 而不是 PrintWindow：本窗打开的前提就是"游戏在前台"（App.xaml.cs 已挡），
-    /// 所以那块像素就是游戏画面本身，所见即所测，还省掉一套 GDI 互操作。
+    /// 抓一帧游戏画面做指纹场景判定。WGC 窗口捕获——与探测同一套 CaptureService，
+    /// 直接拿游戏窗口的 D3D 渲染输出，本窗的暗罩盖住屏幕也无所谓（探测没有屏幕捕获
+    /// 兜底，校准窗也不设）。
     /// 这样校准**不依赖 F9 是否开启**——没开翻译也能定准当前场景，框的区域才会落到对的场景桶里。
     /// </summary>
-    private void DetectSceneOrKeep()
+    private void DetectScene()
     {
         if (_scene is null) return;
+        SKBitmap? frame = null;
         try
         {
-            using var bmp = new System.Drawing.Bitmap(_gameRect.Width, _gameRect.Height,
-                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            int stride;
-            byte[] buf;
-            using (var g = System.Drawing.Graphics.FromImage(bmp))
-                g.CopyFromScreen(_gameRect.Left, _gameRect.Top, 0, 0, bmp.Size);
-            var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
-                System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            stride = Math.Abs(data.Stride);
-            buf = new byte[stride * bmp.Height];
-            System.Runtime.InteropServices.Marshal.Copy(data.Scan0, buf, 0, buf.Length);
-            bmp.UnlockBits(data);
-
-            var rec = _scene.Recognize(new FramePixels(buf, bmp.Width, bmp.Height, stride, 4, 2, 1, 0));
-            _log?.Log($"[calibration] 场景检测：{rec.Summary}");
-            if (rec.IsMatched) { _sceneId = rec.Scene.ToId(); _detectedRace = rec.Race; }
-        }
-        catch (Exception ex)
-        {
-            _log?.Log($"[calibration] 场景检测失败，沿用传入场景 {_sceneId}: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// 建"采集当前场景指纹"面板（右上角）。把当前帧算成所选场景在该分辨率的块均值指纹，写进覆盖层
-    /// scene-overrides.json——这是覆盖层唯一的写入入口，补上"现场补新分辨率参考"的断链。
-    /// 预填用 DetectSceneOrKeep 检测出的场景/种族；检测不到（新分辨率）时用户手动选。
-    /// </summary>
-    private void BuildCapturePanel()
-    {
-        if (_sceneOverridesPath is null || _scene is null) return; // 没传覆盖层路径或未启用识别 → 不显示采集面板
-
-        _captureSceneCombo = new ComboBox
-        {
-            Width = 100,
-            ItemsSource = CaptureSceneOptions,
-            DisplayMemberPath = "Label",
-            SelectedValuePath = "Value",
-        };
-        _captureRaceCombo = new ComboBox
-        {
-            Width = 78,
-            ItemsSource = CaptureRaceOptions,
-            DisplayMemberPath = "Label",
-            SelectedValuePath = "Value",
-            IsEnabled = false,
-        };
-        _captureStatus = new TextBlock
-        {
-            Foreground = Brushes.LightGray,
-            FontSize = 11,
-            Margin = new Thickness(8, 6, 8, 6),
-            Text = "采集当前帧 → 写入 scene-overrides.json",
-        };
-
-        // 预填：检测出的四态场景 + 种族
-        string detectedScene = GameSceneIds.FromId(_sceneId).ToId();
-        _captureSceneCombo.SelectedValue = detectedScene;
-        string? detectedRace = _detectedRace switch
-        {
-            GameRace.Terran => "t", GameRace.Protoss => "p", GameRace.Zerg => "z", _ => null,
-        };
-        if (detectedRace is not null) _captureRaceCombo.SelectedValue = detectedRace;
-        _captureRaceCombo.IsEnabled = detectedScene == GameSceneIds.InGame;
-        _captureSceneCombo.SelectionChanged += (_, _) =>
-            _captureRaceCombo.IsEnabled = _captureSceneCombo.SelectedValue as string == GameSceneIds.InGame;
-
-        var captureBtn = new Button { Content = "采集", Width = 56, Margin = new Thickness(8, 0, 0, 0), IsDefault = true };
-        captureBtn.Click += (_, _) => DoCapture();
-
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 6, 8, 2) };
-        row.Children.Add(new TextBlock { Text = "场景:", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
-        row.Children.Add(_captureSceneCombo);
-        row.Children.Add(new TextBlock { Text = "种族:", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0) });
-        row.Children.Add(_captureRaceCombo);
-        row.Children.Add(captureBtn);
-
-        var content = new StackPanel();
-        content.Children.Add(new TextBlock { Text = "采集当前场景指纹", Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.Bold, Margin = new Thickness(8, 6, 8, 2) });
-        content.Children.Add(row);
-        content.Children.Add(_captureStatus);
-
-        _capturePanel = new Border
-        {
-            Background = new SolidColorBrush(Color.FromArgb(235, 30, 30, 30)),
-            BorderBrush = Brushes.White,
-            BorderThickness = new Thickness(1),
-            Child = content,
-        };
-        // 面板上的点击（含空白处）吃掉，别穿透到画布误画 ROI 框
-        _capturePanel.MouseLeftButtonDown += (_, e) => e.Handled = true;
-        RootCanvas.Children.Add(_capturePanel);
-
-        // 量尺寸后贴右上角，留 16px 边距
-        _capturePanel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        double pw = _capturePanel.DesiredSize.Width, ph = _capturePanel.DesiredSize.Height;
-        Canvas.SetLeft(_capturePanel, Math.Max(0, RootCanvas.ActualWidth - pw - 16));
-        Canvas.SetTop(_capturePanel, 40);
-    }
-
-    /// <summary>
-    /// 采集：抓当前游戏帧，用所选场景的出厂 1080p 基准区域（缩放到当前分辨率）算块均值指纹，写进覆盖层。
-    /// 成功后回调 onSceneRefsSaved 让运行中的探测重读参考，免重启。
-    /// </summary>
-    private void DoCapture()
-    {
-        if (_captureStatus is null) return;
-        string scene = _captureSceneCombo.SelectedValue as string ?? GameSceneIds.Browsing;
-        string? race = scene == GameSceneIds.InGame ? (_captureRaceCombo.SelectedValue as string) : null;
-        string sceneId = race is null ? scene : $"{scene}_{race}";
-        string label = scene == GameSceneIds.InGame
-            ? $"游戏内·{(race switch { "t" => "人族", "p" => "神族", "z" => "虫族", _ => "?" })}"
-            : GameSceneIds.FromId(scene).Label();
-
-        var baseRegions = SceneRefCapture.BaseRegions(_scene!.Store, sceneId);
-        if (baseRegions is null)
-        {
-            _captureStatus.Foreground = Brushes.OrangeRed;
-            _captureStatus.Text = $"场景【{label}】无出厂参考，无法采集（需先有 1080p 基准）";
-            return;
-        }
-
-        try
-        {
-            // 抓当前游戏窗口那块屏幕（同 DetectSceneOrKeep：游戏在前台，所见即所测）
-            byte[] buf; int stride;
-            using (var bmp = new System.Drawing.Bitmap(_gameRect.Width, _gameRect.Height,
-                     System.Drawing.Imaging.PixelFormat.Format32bppArgb))
-            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            frame = CaptureOneFrameWgc();
+            if (frame is null)
             {
-                g.CopyFromScreen(_gameRect.Left, _gameRect.Top, 0, 0, bmp.Size);
-                var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
-                    System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                stride = Math.Abs(data.Stride);
-                buf = new byte[stride * bmp.Height];
-                System.Runtime.InteropServices.Marshal.Copy(data.Scan0, buf, 0, buf.Length);
-                bmp.UnlockBits(data);
+                _log?.Log("[calibration] WGC 捕获不可用，场景未判定，保持其他界面");
+                return;
             }
-
-            var store = _scene.Store;
-            var (regions, regionBytes) = SceneRefCapture.Capture(
-                new FramePixels(buf, _gameRect.Width, _gameRect.Height, stride, 4, 2, 1, 0),
-                baseRegions, _gameRect.Width, _gameRect.Height, store.BaseWidth, store.BlockSize);
-            SceneRefCapture.SaveOverride(_sceneOverridesPath!, sceneId, label, scene, race,
-                _gameRect.Width, _gameRect.Height, "现场采集", regions, regionBytes);
-            _onSceneRefsSaved?.Invoke();
-            _log?.Log($"[calibration] 已采集场景指纹 {sceneId} @ {_gameRect.Width}x{_gameRect.Height} → {_sceneOverridesPath}");
-
-            _captureStatus.Foreground = Brushes.LightGreen;
-            _captureStatus.Text = $"✓ 已采集【{label}】@ {_gameRect.Width}x{_gameRect.Height}，写入覆盖层并即时生效";
+            var rec = _scene.Recognize(frame.AsFramePixels()); // 零拷贝视图，只在 Recognize 调用内同步使用
+            _log?.Log($"[calibration] 场景检测（WGC）：{rec.Summary}");
+            // 只有匹配才覆盖默认值；未匹配（低于阈值/该分辨率无参考）保持"其他界面"
+            if (rec.IsMatched) _sceneId = rec.Scene.ToId();
         }
         catch (Exception ex)
         {
-            _captureStatus.Foreground = Brushes.OrangeRed;
-            _captureStatus.Text = $"采集失败：{ex.Message}";
+            _log?.Log($"[calibration] 场景检测失败，使用默认场景 {_sceneId}: {ex.Message}");
         }
+        finally { frame?.Dispose(); }
     }
 
-    /// <summary>把当前场景/分辨率的布局预设画成**只读参考框**（虚线 + 标签）。
-    /// 目的：让用户一眼看见"这块系统已经知道了"，不必重复框；它们不参与拖拽也不写盘。</summary>
+    /// <summary>WGC 窗口捕获：抓一帧游戏窗口的 D3D 渲染输出（复用探测的 CaptureService，抓完即弃）。
+    /// 不受遮挡影响——直接拿窗口渲染输出，本窗盖不盖住屏幕都无所谓。
+    /// 返回 null 的情况：找不到游戏窗口 / 系统不支持窗口捕获 / 3 秒内没等到帧
+    /// （用户首次还没允许捕获时系统会弹同意框，等不到帧；同意过后下次即达）。</summary>
+    private SKBitmap? CaptureOneFrameWgc()
+    {
+        var hwnd = WindowFinder.FindByProcess("StarCraft");
+        if (hwnd == IntPtr.Zero) return null;
+        var cap = new CaptureService();
+        var tcs = new TaskCompletionSource<SKBitmap>(TaskCreationOptions.RunContinuationsAsynchronously);
+        cap.FrameArrived += sk => tcs.TrySetResult(sk);
+        if (!cap.Start(hwnd)) { cap.Dispose(); return null; }
+        try
+        {
+            if (!tcs.Task.Wait(TimeSpan.FromSeconds(3))) return null;
+            return tcs.Task.Result;
+        }
+        finally { cap.Dispose(); }
+    }
+
+    /// <summary>把当前场景/分辨率的布局预设建成**可交互编辑框**（可选中/整框平移/拖角改大小），
+    /// 改动随 Enter 写进 layout-overrides.json。目的：用户对着游戏画面直接拖调预设区域，不必去配置页改坐标。</summary>
     private void DrawPresetBoxes()
     {
         var p = _layout?.Find(_sceneId, _gameRect.Width, _gameRect.Height);
         if (p is null) return;
-        var parts = new List<(PixelRect Rect, string Label)>();
-        if (p.Chat is { } c) parts.Add((c, "聊天(预设)"));
-        if (p.RoomList is { } g)
+        if (p.Chat is { } chat) AddPresetBox(RoiType.Chat, "(预设)聊天区域", chat);
+        if (p.RoomNameList is { } rnl) AddPresetBox(RoiType.RoomNameList, "(预设)房间名列表区域", rnl);
+        if (p.GameName is { } gn) AddPresetBox(RoiType.GameName, "(预设)房间名称区域", gn);
+        if (p.MapName is { } mn) AddPresetBox(RoiType.MapName, "(预设)地图名称区域", mn);
+    }
+
+    /// <summary>把一个预设区域建成可交互 CalibBox，加入 _boxes 并画出来。
+    /// 名字带 <see cref="LayoutPreset.PresetNamePrefix"/> 标记（%preset% + 显示标签），
+    /// 保存时据此分流到 layout-overrides.json，与用户框（写 rois.json）分开。</summary>
+    private void AddPresetBox(RoiType type, string label, RelRect rect)
+    {
+        var dip = PhysicalToDipRect(new System.Drawing.Rectangle(
+            _gameRect.Left + (int)Math.Round(rect.X * _gameRect.Width),
+            _gameRect.Top + (int)Math.Round(rect.Y * _gameRect.Height),
+            (int)Math.Round(rect.W * _gameRect.Width),
+            (int)Math.Round(rect.H * _gameRect.Height)));
+        var box = new CalibBox
         {
-            parts.Add((new PixelRect(g.X, g.Y, g.Width, g.Height), "房间列表(预设)"));
-            foreach (var col in g.Columns)
-                parts.Add((new PixelRect(g.X + col.X, g.Y, col.Width, g.Height), $"列·{ColumnKindLabel(col.Kind)}"));
-        }
-        foreach (var (r, label) in parts)
-        {
-            var dip = PhysicalToDipRect(new System.Drawing.Rectangle(_gameRect.Left + r.X, _gameRect.Top + r.Y, r.Width, r.Height));
-            var box = new Rectangle
-            {
-                Width = Math.Max(1, dip.Width),
-                Height = Math.Max(1, dip.Height),
-                Stroke = Brushes.DeepSkyBlue,
-                StrokeThickness = 1.5,
-                StrokeDashArray = new DoubleCollection { 3, 3 },
-                Fill = new SolidColorBrush(Color.FromArgb(28, 0, 191, 255)),
-                IsHitTestVisible = false,   // 参考框不吃鼠标，别挡住下面的框选
-            };
-            Canvas.SetLeft(box, dip.X);
-            Canvas.SetTop(box, dip.Y);
-            var tag = new TextBlock
-            {
-                Text = label,
-                Foreground = Brushes.DeepSkyBlue,
-                FontSize = 11,
-                Background = new SolidColorBrush(Color.FromArgb(180, 0, 0, 0)),
-                Padding = new Thickness(3, 0, 3, 0),
-                IsHitTestVisible = false,
-            };
-            Canvas.SetLeft(tag, dip.X);
-            Canvas.SetTop(tag, Math.Max(0, dip.Y - 16));
-            RootCanvas.Children.Add(box);
-            RootCanvas.Children.Add(tag);
-            _presetDecorations.Add(box);
-            _presetDecorations.Add(tag);
-        }
+            Name = LayoutPreset.PresetNamePrefix + label,
+            Type = type,
+            CanvasRect = dip,
+        };
+        _boxes.Add(box);
+        AddBoxVisual(box);
     }
 
     private static string ColumnKindLabel(ColumnKind k) => k switch
@@ -421,10 +299,7 @@ public partial class CalibrationWindow : Window
             bucket = buckets.FirstOrDefault(b => b.Resolution == resKey);
 
         if (bucket is null)
-        {
-            HintText.Text += " — 该场景在此分辨率下还没有校准区域";
             return;
-        }
 
         foreach (var roi in bucket.Rois)
         {
@@ -445,8 +320,8 @@ public partial class CalibrationWindow : Window
                 box.Dividers.AddRange(roi.Columns.Skip(1).Select(c => c.RelStart));
                 box.Kinds = roi.Columns.Select(c => c.Kind).ToList();
             }
-            AddBoxVisual(box);
             _boxes.Add(box);
+            AddBoxVisual(box);
         }
     }
 
@@ -459,8 +334,9 @@ public partial class CalibrationWindow : Window
 
     private void OnCanvasMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (_newBoxPanel is not null) return; // 新建面板打开时，画布点击不生效
+        // 焦点先让给窗口：操作条还开着时点画布，nameBox 失焦 → 触发它的 LostFocus 提示音
         Focus();
+        if (_newBoxPanel is not null) return; // 新建面板打开时，画布点击不生效
         DeselectCurrent();
 
         var p = e.GetPosition(RootCanvas);
@@ -471,7 +347,6 @@ public partial class CalibrationWindow : Window
             Stroke = Brushes.White,
             StrokeThickness = 1.5,
             StrokeDashArray = new DoubleCollection { 4, 2 },
-            Fill = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
         };
         Canvas.SetLeft(_drawPreview, p.X);
         Canvas.SetTop(_drawPreview, p.Y);
@@ -493,15 +368,27 @@ public partial class CalibrationWindow : Window
             case Mode.Drawing: UpdateDrawPreview(p); break;
             case Mode.ResizingCorner: UpdateResize(p); break;
             case Mode.DraggingDivider: UpdateDividerDrag(p); break;
+            case Mode.MovingBox: UpdateMove(p); break;
         }
     }
 
     private void OnCanvasMouseUp(object sender, MouseButtonEventArgs e)
     {
         if (RootCanvas.IsMouseCaptured) RootCanvas.ReleaseMouseCapture();
+        var upPos = e.GetPosition(RootCanvas);
         switch (_mode)
         {
-            case Mode.Drawing: FinishDrawing(); break;
+            case Mode.Drawing:
+                if (upPos == _dragStart) // 真单击（鼠标一个像素都没动）：直接忽略，不弹操作条也不留半个框
+                {
+                    if (_drawPreview is not null) { RootCanvas.Children.Remove(_drawPreview); _drawPreview = null; }
+                    break;
+                }
+                FinishDrawing();
+                break;
+            case Mode.MovingBox:
+                _movingBox = null;
+                break; // 平移已随 UpdateMove 实时提交，松开只需回到 Idle
             case Mode.ResizingCorner:
             case Mode.DraggingDivider:
                 break; // 状态已随 Update* 实时提交，松开只需回到 Idle
@@ -611,6 +498,17 @@ public partial class CalibrationWindow : Window
             e.Handled = true;
         };
 
+        // 操作条打开期间丢了焦点（点到了画布别处、Alt+Tab 切走）就响一声提醒：它还在等输入名称/类型。
+        // 焦点事件沿视觉树冒泡，Border 上挂一个 LostFocus 就能接住内部所有控件的失焦；
+        // 焦点在条内移动（输入框→下拉框）不算"丢"，不响。
+        border.LostFocus += (_, _) =>
+        {
+            if (_newBoxPanel != border) return; // 面板已关闭（确定/取消），忽略
+            var fe = Keyboard.FocusedElement;
+            if (fe is DependencyObject feDo && IsWithinSubtree(feDo, border)) return;
+            System.Media.SystemSounds.Beep.Play();
+        };
+
         RootCanvas.Children.Add(border);
         _newBoxPanel = border;
         _pendingRect = rect;
@@ -628,8 +526,8 @@ public partial class CalibrationWindow : Window
             string name = string.IsNullOrWhiteSpace(nameBox.Text) ? "新区域" : nameBox.Text.Trim();
             var type = typeCombo.SelectedValue is RoiType t ? t : RoiType.Chat;
             var box = new CalibBox { Name = name, Type = type, CanvasRect = _pendingRect!.Value };
-            AddBoxVisual(box);
             _boxes.Add(box);
+            AddBoxVisual(box);
             ClosePendingPanel();
             SelectBox(box);
         };
@@ -647,6 +545,14 @@ public partial class CalibrationWindow : Window
         double maxY = Math.Max(0, RootCanvas.ActualHeight - panel.DesiredSize.Height);
         Canvas.SetLeft(panel, Math.Clamp(x, 0, maxX));
         Canvas.SetTop(panel, Math.Clamp(y, 0, maxY));
+    }
+
+    /// <summary>判断 el 是不是 root 本身或它的后代（沿视觉树逐级上溯）。</summary>
+    private static bool IsWithinSubtree(DependencyObject el, DependencyObject root)
+    {
+        for (var d = el; d is not null; d = VisualTreeHelper.GetParent(d))
+            if (d == root) return true;
+        return false;
     }
 
     /// <summary>DIP 画布坐标 → 游戏窗口内的物理像素，拼成"坐标/尺寸/场景/分辨率"一行。</summary>
@@ -668,18 +574,29 @@ public partial class CalibrationWindow : Window
 
     // ── 已有框：选中/拖角调整/删除 ───────────────────────────────────────
 
+    /// <summary>按创建顺序取下一个区域专属色（预设框与用户框共用，循环使用），保证屏上所有区域互不同色。</summary>
+    private Brush NextColor() => RegionColors[_colorCounter++ % RegionColors.Length];
+
     private void AddBoxVisual(CalibBox box)
     {
+        box.Color = NextColor();
         box.Visual = new Rectangle
         {
             Width = box.CanvasRect.Width,
             Height = box.CanvasRect.Height,
-            Stroke = TypeColor(box.Type),
+            Stroke = box.Color,
             StrokeThickness = 2,
+            StrokeDashArray = new DoubleCollection { 6, 3 },
             Fill = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
             Cursor = Cursors.Hand,
         };
-        box.Visual.MouseLeftButtonDown += (_, e) => { SelectBox(box); e.Handled = true; };
+        // 点框体 = 选中 + 准备平移；拖走 = 整框平移（UpdateMove），点住不动 = 只选中
+        box.Visual.MouseLeftButtonDown += (_, e) =>
+        {
+            SelectBox(box);
+            StartMove(box, e.GetPosition(RootCanvas));
+            e.Handled = true;
+        };
         Canvas.SetLeft(box.Visual, box.CanvasRect.X);
         Canvas.SetTop(box.Visual, box.CanvasRect.Y);
         RootCanvas.Children.Add(box.Visual);
@@ -706,14 +623,23 @@ public partial class CalibrationWindow : Window
         box.Visual.Stroke = Brushes.Yellow;
         box.Visual.StrokeThickness = 3;
         CreateHandles(box);
-        if (box.Type == RoiType.RoomList) CreateColumnUi(box);
+    }
+
+    /// <summary>开始整框平移：记下起点与原始矩形，随后鼠标移动由 <see cref="UpdateMove"/> 实时拖动。</summary>
+    private void StartMove(CalibBox box, Point p)
+    {
+        _movingBox = box;
+        _moveStart = p;
+        _moveStartRect = box.CanvasRect;
+        _mode = Mode.MovingBox;
+        RootCanvas.CaptureMouse();
     }
 
     private void DeselectCurrent()
     {
         if (_selected is null) return;
         var box = _selected;
-        box.Visual.Stroke = TypeColor(box.Type);
+        box.Visual.Stroke = box.Color;
         box.Visual.StrokeThickness = 2;
         RemoveHandles(box);
         RemoveColumnUi(box);
@@ -802,7 +728,21 @@ public partial class CalibrationWindow : Window
         _selected.CanvasRect = newRect;
         ApplyBoxVisual(_selected);
         PositionHandles(_selected);
-        if (_selected.Type == RoiType.RoomList) RepositionColumnUi(_selected);
+    }
+
+    /// <summary>整框平移：按住框体拖动，整个框跟着走（夹在画布内）。与拖角调整不同——只挪位置不改尺寸。</summary>
+    private void UpdateMove(Point p)
+    {
+        if (_movingBox is null) return;
+        double dx = p.X - _moveStart.X, dy = p.Y - _moveStart.Y;
+        double maxX = Math.Max(0, RootCanvas.ActualWidth - _moveStartRect.Width);
+        double maxY = Math.Max(0, RootCanvas.ActualHeight - _moveStartRect.Height);
+        _movingBox.CanvasRect = new Rect(
+            Math.Clamp(_moveStartRect.X + dx, 0, maxX),
+            Math.Clamp(_moveStartRect.Y + dy, 0, maxY),
+            _moveStartRect.Width, _moveStartRect.Height);
+        ApplyBoxVisual(_movingBox);
+        PositionHandles(_movingBox);
     }
 
     private void ApplyBoxVisual(CalibBox box)
@@ -816,22 +756,22 @@ public partial class CalibrationWindow : Window
         if (box.DividerLines.Count > 0) RedrawDividerLines(box);
     }
 
-    private static string LabelFor(CalibBox box) => $"{box.Name} [{TypeLabel(box.Type)}]";
-
-    private static Brush TypeColor(RoiType t) => t switch
+    /// <summary>预设框剥掉 %preset% 标记再显示（标记只用于路由，不给人看）；用户框照常附类型标签。</summary>
+    private static string LabelFor(CalibBox box)
     {
-        RoiType.Chat => Brushes.DeepSkyBlue,
-        RoiType.RoomList => Brushes.Orange,
-        RoiType.MapInfo => Brushes.YellowGreen,
-        _ => Brushes.White,
-    };
+        string name = box.IsPreset ? box.Name[LayoutPreset.PresetNamePrefix.Length..] : box.Name;
+        return box.IsPreset ? name : $"{name} [{TypeLabel(box.Type)}]";
+    }
+
 
     /// <summary>已框区域的类型标签（与 <see cref="RoiTypeOptions"/> 的显示名保持一致）。</summary>
     private static string TypeLabel(RoiType t) => t switch
     {
         RoiType.Chat => "聊天",
-        RoiType.RoomList => "房间名列表",
+        RoiType.RoomNameList => "房间名列表",
         RoiType.MapInfo => "地图信息",
+        RoiType.GameName => "房间名称",
+        RoiType.MapName => "地图名称",
         _ => "?",
     };
 
@@ -995,40 +935,38 @@ public partial class CalibrationWindow : Window
 
     // ── 保存 ─────────────────────────────────────────────────────────────
 
+    /// <summary>把框（画布相对坐标）换算成 rois.json 里的 ROI（游戏画面相对坐标）。gameRect 是游戏窗口的物理像素矩形。</summary>
+    private static Roi BoxToRoi(CalibBox box, System.Drawing.Rectangle gameRect, double dpiX, double dpiY)
+    {
+        double physLeft = box.CanvasRect.Left * dpiX;
+        double physTop = box.CanvasRect.Top * dpiY;
+        double physW = box.CanvasRect.Width * dpiX;
+        double physH = box.CanvasRect.Height * dpiY;
+
+        var rect = new RelRect(
+            (physLeft - gameRect.Left) / gameRect.Width,
+            (physTop - gameRect.Top) / gameRect.Height,
+            physW / gameRect.Width,
+            physH / gameRect.Height);
+
+        // 所有类型（含房间名列表）都是单一区域，不再分列 → columns 恒为 null
+        return new Roi(box.Name, box.Type.ToString(), rect);
+    }
+
     private void SaveAndClose()
     {
         try
         {
-            var rois = new List<Roi>();
+            // 两文件分流，靠名字里的 %preset% 标记区分（不靠别的字段）：
+            // 用户框 → rois.json 的单 rois 列表；预设框 → layout-overrides.json（更新对应 LayoutPreset 字段）。
+            var presetBoxes = new List<CalibBox>();
+            var userRois = new List<Roi>();
             foreach (var box in _boxes)
-            {
-                double physLeft = box.CanvasRect.Left * _dpiX;
-                double physTop = box.CanvasRect.Top * _dpiY;
-                double physW = box.CanvasRect.Width * _dpiX;
-                double physH = box.CanvasRect.Height * _dpiY;
-
-                var rect = new RelRect(
-                    (physLeft - _gameRect.Left) / _gameRect.Width,
-                    (physTop - _gameRect.Top) / _gameRect.Height,
-                    physW / _gameRect.Width,
-                    physH / _gameRect.Height);
-
-                IReadOnlyList<RoiColumn>? columns = null;
-                if (box.Type == RoiType.RoomList)
-                {
-                    var bounds = new List<double> { 0.0 };
-                    bounds.AddRange(box.Dividers);
-                    bounds.Add(1.0);
-                    var cols = new List<RoiColumn>();
-                    for (int i = 0; i < bounds.Count - 1; i++)
-                        cols.Add(new RoiColumn(bounds[i], bounds[i + 1], box.Kinds[i]));
-                    columns = cols;
-                }
-                rois.Add(new Roi(box.Name, box.Type.ToString(), rect, columns));
-            }
+                if (box.IsPreset) presetBoxes.Add(box);
+                else userRois.Add(BoxToRoi(box, _gameRect, _dpiX, _dpiY));
 
             string resKey = $"{_gameRect.Width}x{_gameRect.Height}";
-            var newBucket = new SceneBucket(resKey, rois);
+            var newBucket = new SceneBucket(resKey, userRois);
 
             RoiConfig existing;
             try { existing = RoiStore.Load(_roisJsonPath); }
@@ -1042,7 +980,17 @@ public partial class CalibrationWindow : Window
             scenes[_sceneId] = buckets;
 
             RoiStore.Save(new RoiConfig(scenes), _roisJsonPath);
-            _log?.Log($"[calibration] 保存 {rois.Count} 个区域到场景[{GameSceneIds.FromId(_sceneId).Label()}]（{resKey}）@ {_roisJsonPath}");
+
+            // 预设框 → 覆盖层：以当前生效的预设（出厂+覆盖合并值）为基线，逐个应用编辑后整条写回。
+            // 出厂 layout-presets.json 永不被碰（SaveOverride 只写覆盖层文件）。
+            var preset = _layout?.Find(_sceneId, _gameRect.Width, _gameRect.Height);
+            if (preset is not null)
+                foreach (var box in presetBoxes)
+                    preset = ApplyPresetBox(preset, box, _gameRect, _dpiX, _dpiY);
+            if (preset is not null && presetBoxes.Count > 0)
+                LayoutPresetStore.SaveOverride(_layout!.OverridesPath, preset);
+
+            _log?.Log($"[calibration] 保存 {userRois.Count + presetBoxes.Count} 个区域（用户 {userRois.Count}→rois.json，预设 {presetBoxes.Count}→layout-overrides.json）到场景[{GameSceneIds.FromId(_sceneId).Label()}]（{resKey}）@ {_roisJsonPath}");
             _onSaved?.Invoke();
         }
         catch (Exception ex)
@@ -1052,5 +1000,36 @@ public partial class CalibrationWindow : Window
             return; // 不关窗口，允许重试或 Esc 退出
         }
         Close();
+    }
+
+    /// <summary>把一个预设框的编辑（位置/尺寸/RoomList 列）写回对应 LayoutPreset 字段，返回新预设（record 不可变）。
+    /// 像素 = 画布 DIP → 物理像素 → 游戏窗口内相对像素，与 BoxToRoi 同一套换算。</summary>
+    private static LayoutPreset ApplyPresetBox(LayoutPreset preset, CalibBox box, System.Drawing.Rectangle gameRect, double dpiX, double dpiY)
+    {
+        int px = (int)Math.Round(box.CanvasRect.Left * dpiX - gameRect.Left);
+        int py = (int)Math.Round(box.CanvasRect.Top * dpiY - gameRect.Top);
+        int pw = Math.Max(1, (int)Math.Round(box.CanvasRect.Width * dpiX));
+        int ph = Math.Max(1, (int)Math.Round(box.CanvasRect.Height * dpiY));
+
+        // 相对坐标 = 物理像素 / 游戏窗口物理尺寸，与 rois.json 同一口径（0~1 夹住）。
+        var rel = new RelRect(
+            Math.Clamp(px / (double)gameRect.Width, 0d, 1d),
+            Math.Clamp(py / (double)gameRect.Height, 0d, 1d),
+            Math.Clamp(pw / (double)gameRect.Width, 0d, 1d),
+            Math.Clamp(ph / (double)gameRect.Height, 0d, 1d));
+
+        switch (box.Type)
+        {
+            case RoiType.Chat:
+                return preset with { Chat = rel };
+            case RoiType.GameName:
+                return preset with { GameName = rel };
+            case RoiType.MapName:
+                return preset with { MapName = rel };
+            case RoiType.RoomNameList:
+                return preset with { RoomNameList = rel };
+            default:
+                return preset;
+        }
     }
 }

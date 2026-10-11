@@ -5,8 +5,6 @@
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
         ShowInTaskbar="False">
     <StackPanel Margin="12">
-        <TextBlock x:Name="OwnerText" Text="—" Foreground="Gray" Margin="0,0,0,8"/>
-
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="76"/>
@@ -25,13 +23,13 @@
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Grid.Column="0" Text="场景" VerticalAlignment="Center"/>
-            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="SceneCombo"/>
+            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="SceneCombo" Padding="2,0,2,0"/>
 
             <TextBlock Grid.Row="2" Grid.Column="0" Text="名称" VerticalAlignment="Center"/>
             <TextBox Grid.Row="2" Grid.Column="1" x:Name="NameBox"/>
 
             <TextBlock Grid.Row="4" Grid.Column="0" Text="类型" VerticalAlignment="Center"/>
-            <ComboBox Grid.Row="4" Grid.Column="1" x:Name="TypeCombo"/>
+            <ComboBox Grid.Row="4" Grid.Column="1" x:Name="TypeCombo" Padding="2,0,2,0"/>
 
             <Grid Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2">
                 <Grid.ColumnDefinitions>
@@ -58,10 +56,7 @@
             </Grid>
         </Grid>
 
-        <TextBlock Text="坐标为该分辨率下的整数像素；改场景＝把这条挪到另一个场景的区域集"
-                   Foreground="Gray" TextWrapping="Wrap" Margin="0,8,0,8" FontSize="11"/>
-
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
             <TextBlock x:Name="ErrorText" Foreground="Red" VerticalAlignment="Center" Margin="0,0,12,0"/>
             <Button Content="确定" Width="70" Margin="0,0,8,0" IsDefault="True" Click="OnOk"/>
             <Button Content="取消" Width="70" IsCancel="True"/>

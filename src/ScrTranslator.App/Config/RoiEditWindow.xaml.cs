@@ -35,7 +35,7 @@ public partial class RoiEditWindow : Window
     public string ResultSceneId { get; private set; }
 
     public RoiEditWindow(string resolution, int bucketWidth, int bucketHeight,
-        string sceneId, Roi current)
+        string sceneId, Roi current, bool isPreset = false)
     {
         InitializeComponent();
         _current = current;
@@ -44,7 +44,6 @@ public partial class RoiEditWindow : Window
         Result = current;
         ResultSceneId = sceneId;
 
-        OwnerText.Text = $"归属分辨率：{resolution}（坐标为该分辨率整数像素）";
         NameBox.Text = current.Name;
 
         var sceneOptions = new[]
@@ -58,8 +57,9 @@ public partial class RoiEditWindow : Window
 
         TypeCombo.ItemsSource = new[]
         {
-            new Option<RoiType>(RoiType.Chat, "聊天"), new Option<RoiType>(RoiType.RoomList, "房间名列表"),
-            new Option<RoiType>(RoiType.MapInfo, "地图信息"),
+            new Option<RoiType>(RoiType.Chat, "聊天"), new Option<RoiType>(RoiType.RoomNameList, "房间名列表"),
+            new Option<RoiType>(RoiType.MapInfo, "地图信息"), new Option<RoiType>(RoiType.GameName, "房间名称"),
+            new Option<RoiType>(RoiType.MapName, "地图名称"),
         };
         TypeCombo.SelectedItem = ((Option<RoiType>[])TypeCombo.ItemsSource).First(o => o.Value == RoiTypes.Parse(current.Type));
 
@@ -68,6 +68,15 @@ public partial class RoiEditWindow : Window
         YBox.Text = px.Y.ToString(CultureInfo.InvariantCulture);
         WBox.Text = px.W.ToString(CultureInfo.InvariantCulture);
         HBox.Text = px.H.ToString(CultureInfo.InvariantCulture);
+
+        // 预设模式：场景/名称/类型固定，只允许调矩形 → 禁用这三个输入，只留下坐标可编辑。
+        // （复用的就是普通校准区域的编辑窗，不为预设另搭一套 UI。）
+        if (isPreset)
+        {
+            SceneCombo.IsEnabled = false;
+            NameBox.IsEnabled = false;
+            TypeCombo.IsEnabled = false;
+        }
     }
 
     private (int X, int Y, int W, int H) ToPixels(RelRect r) =>

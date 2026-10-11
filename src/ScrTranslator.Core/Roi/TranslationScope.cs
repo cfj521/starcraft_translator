@@ -15,13 +15,10 @@ public static class TranslationScope
     {
         RoiType.Chat => s.Chat,
         RoiType.MapInfo => s.MapInfo,
-        RoiType.RoomList => column switch
-        {
-            ColumnKind.RoomName => s.RoomName,
-            ColumnKind.MapName => s.MapInfo,
-            ColumnKind.PlayerId => s.PlayerId,
-            _ => false, // Other / null(未命中列) → 不翻
-        },
+        RoiType.GameName => s.RoomName, // 房间(游戏)名称：随"房间名"开关
+        RoiType.MapName => s.MapInfo, // 地图名称：随"地图"开关
+        // 房间名列表已简化为单一区域（不再分列），column 恒为 RoomName → 随"房间名"开关
+        RoiType.RoomNameList => s.RoomName,
         _ => false,
     };
 

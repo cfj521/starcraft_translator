@@ -13,19 +13,22 @@ public class TranslationScopeTests
     [Fact] public void MapInfo_TakesMapFlag()
         => Assert.False(TranslationScope.ShouldTranslate(RoiType.MapInfo, null, All with { MapInfo = false }));
 
-    [Fact] public void RoomList_RoomNameColumn_TakesRoomNameFlag()
-        => Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomList, ColumnKind.RoomName, Default));
-    [Fact] public void RoomList_MapNameColumn_TakesMapInfoFlag()
-        => Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomList, ColumnKind.MapName, Default));
-    [Fact] public void RoomList_PlayerIdColumn_TakesPlayerIdFlag_DefaultOff()
+    [Fact] public void GameName_TakesRoomNameFlag()
     {
-        Assert.False(TranslationScope.ShouldTranslate(RoiType.RoomList, ColumnKind.PlayerId, Default));
-        Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomList, ColumnKind.PlayerId, Default with { PlayerId = true }));
+        Assert.True(TranslationScope.ShouldTranslate(RoiType.GameName, null, All));
+        Assert.False(TranslationScope.ShouldTranslate(RoiType.GameName, null, All with { RoomName = false }));
     }
-    [Fact] public void RoomList_OtherOrNullColumn_False()
+    [Fact] public void MapName_TakesMapInfoFlag()
+        => Assert.False(TranslationScope.ShouldTranslate(RoiType.MapName, null, All with { MapInfo = false }));
+
+    // 房间名列表已简化为单一区域（不再分列）：无论传什么列，都随"房间名"开关
+    [Fact] public void RoomNameList_TakesRoomNameFlag_IgnoresColumn()
     {
-        Assert.False(TranslationScope.ShouldTranslate(RoiType.RoomList, ColumnKind.Other, All));
-        Assert.False(TranslationScope.ShouldTranslate(RoiType.RoomList, null, All)); // 有列语义但未命中列
+        Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomNameList, ColumnKind.RoomName, Default));
+        Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomNameList, ColumnKind.MapName, Default));
+        Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomNameList, ColumnKind.PlayerId, Default));
+        Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomNameList, null, Default));
+        Assert.False(TranslationScope.ShouldTranslate(RoiType.RoomNameList, ColumnKind.RoomName, Default with { RoomName = false }));
     }
 
     [Fact] public void HitColumn_NoColumns_Null()
@@ -43,7 +46,7 @@ public class TranslationScopeTests
         Assert.Null(TranslationScope.HitColumn(cols, 0.5));
     }
 
-    // RoomList 无列定义 → 整块按 RoomName(兼容 Phase 2)
-    [Fact] public void RoomList_NoColumnsSemantics_ControllerPassesRoomName()
-        => Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomList, ColumnKind.RoomName, Default));
+    // RoomNameList 无列定义 → 整块按 RoomName
+    [Fact] public void RoomNameList_NoColumnsSemantics_ControllerPassesRoomName()
+        => Assert.True(TranslationScope.ShouldTranslate(RoiType.RoomNameList, ColumnKind.RoomName, Default));
 }

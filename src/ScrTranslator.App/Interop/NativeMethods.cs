@@ -62,6 +62,10 @@ internal static class NativeMethods
             ? System.Drawing.Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom)
             : System.Drawing.Rectangle.Empty;
 
+    /// <summary>系统主显示器 DPI（96=100%）。找不到游戏窗口时用主屏物理矩形兜底——那时尚无窗口句柄拿不到按窗口 DPI。</summary>
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForSystem();
+
     // ── 窗口状态探测（Phase 5 异常恢复看门狗用） ─────────────────────────────
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

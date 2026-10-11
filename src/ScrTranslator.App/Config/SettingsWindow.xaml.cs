@@ -52,9 +52,6 @@ public partial class SettingsWindow : Window
     /// PresetPart 标明改的是预设的哪一块（chat / roomList），校准行为空串。</summary>
     private sealed record RoiRow(string SceneId, string Scene, string Resolution, int Index,
                                  string Name, string Type, string TopLeft, string Size, bool Preset, string PresetPart);
-    /// <summary>列区域表的一行。RoiIndex/ColIndex 定位所属框的第几列；Preset=true 时改它写覆盖层。</summary>
-    private sealed record ColumnRow(string Owner, string SceneId, string Resolution, int RoiIndex, int ColIndex,
-                                    bool Preset, string Name, string TopLeft, string Size);
     private sealed record HotkeyRow(string Key, string Function, string Current);
 
     /// <summary>provider 池的一行。Enabled/Status/StatusTooltip/Model 走 INotifyPropertyChanged 让列表实时刷新。
@@ -353,7 +350,6 @@ public partial class SettingsWindow : Window
             // 预设参考分辨率：精确命中则用自身，否则取最接近的预设档（当前分辨率不在预设里时仍有参考行，列表不空）
             string refRes = ClosestPresetResolution(curW, curH, _layout.Presets.Select(p => p.Resolution));
             var rows = new List<RoiRow>();
-            var colRows = new List<ColumnRow>();
 
             // --- 校准的 ROI ---
             foreach (var (sceneId, buckets) in cfg.Scenes)
@@ -371,16 +367,6 @@ public partial class SettingsWindow : Window
                         int boxW = Px(roi.Rect.W, bw), boxH = Px(roi.Rect.H, bh);
                         rows.Add(new RoiRow(sceneId, sceneLabel, bucket.Resolution, idx, roi.Name, TypeLabel(t),
                             $"{boxX}, {boxY}", $"{boxW} × {boxH}", false, ""));
-
-                        // 只有房间名列表型的框才有"列"，其余 ROI 的列定义不参与这张表
-                        if (t == RoiType.RoomList && roi.Columns is { Count: > 0 })
-                            for (int ci = 0; ci < roi.Columns.Count; ci++)
-                            {
-                                var c = roi.Columns[ci];
-                                int cx = Px(c.RelStart, bw), cw = Px(c.RelEnd - c.RelStart, bw);
-                                colRows.Add(new ColumnRow($"{sceneLabel} / {roi.Name}", sceneId, bucket.Resolution,
-                                    idx, ci, false, $"{ColumnKindLabel(c.Kind)}（校准）", $"{cx}, {boxY}", $"{cw} × {boxH}"));
-                            }
                     }
                 }
             }
@@ -392,25 +378,17 @@ public partial class SettingsWindow : Window
             {
                 if (p.Resolution != refRes) continue;
                 string sceneLabel = GameSceneIds.FromId(p.Scene).Label();
+                var (pw, ph) = ParseResolution(p.Resolution);
                 if (p.Chat is { } chat)
-                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, $"{p.Scene}·聊天(预设)", "聊天",
-                        $"{chat.X}, {chat.Y}", $"{chat.Width} × {chat.Height}", true, "chat"));
-                if (p.RoomList is { } g)
-                {
-                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, $"{p.Scene}·房间列表(预设)",
-                        "房间名列表", $"{g.X}, {g.Y}", $"{g.Width} × {g.Height}", true, "roomList"));
-                    for (int ci = 0; ci < g.Columns.Count; ci++)
-                    {
-                        var c = g.Columns[ci];
-                        colRows.Add(new ColumnRow($"{sceneLabel} / 房间列表(预设)", p.Scene, p.Resolution,
-                            -1, ci, true, $"{ColumnKindLabel(c.Kind)}（预设）", $"{g.X + c.X}, {g.Y}", $"{c.Width} × {g.Height}"));
-                    }
-                }
+                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, "(预设)聊天区域", "聊天",
+                        $"{Px(chat.X, pw)}, {Px(chat.Y, ph)}", $"{Px(chat.W, pw)} × {Px(chat.H, ph)}", true, "chat"));
+                if (p.RoomNameList is { } rnl)
+                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, "(预设)房间名列表区域",
+                        "房间名列表", $"{Px(rnl.X, pw)}, {Px(rnl.Y, ph)}", $"{Px(rnl.W, pw)} × {Px(rnl.H, ph)}", true, "roomNameList"));
             }
 
             RegionHintText.Text = $"当前分辨率 {curRes}";
             RoiListView.ItemsSource = rows;
-            ColumnsListView.ItemsSource = colRows;
         }
         catch (Exception ex)
         {
@@ -460,8 +438,10 @@ public partial class SettingsWindow : Window
     private static string TypeLabel(RoiType t) => t switch
     {
         RoiType.Chat => "聊天",
-        RoiType.RoomList => "房间名列表",
+        RoiType.RoomNameList => "房间名列表",
         RoiType.MapInfo => "地图信息",
+        RoiType.GameName => "房间名称",
+        RoiType.MapName => "地图名称",
         _ => t.ToString(),
     };
 
@@ -474,13 +454,6 @@ public partial class SettingsWindow : Window
     {
         if (IsOnGridViewHeader(e)) return;
         OnEditRoiClick(sender, e);
-    }
-
-    /// <summary>双击列表 = 编辑选中列。点在表头上则忽略（表头双击的自适应列宽是 GridViewColumnHeader 的内置行为，事件会冒泡到这里）。</summary>
-    private void OnColumnListDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        if (IsOnGridViewHeader(e)) return;
-        OnEditColumnClick(sender, e);
     }
 
     /// <summary>双击点是否落在列头上（沿视觉树向上找 GridViewColumnHeader）。</summary>
@@ -497,14 +470,6 @@ public partial class SettingsWindow : Window
         bool hasSel = RoiListView.SelectedItem is not null;
         EditRoiButton.IsEnabled = hasSel;
         DeleteRoiButton.IsEnabled = hasSel;
-    }
-
-    /// <summary>列表表选中态 → 编辑/删除按钮可用性。无选中项时按钮置灰，点不到。</summary>
-    private void OnColumnListSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        bool hasSel = ColumnsListView.SelectedItem is not null;
-        EditColumnButton.IsEnabled = hasSel;
-        DeleteColumnButton.IsEnabled = hasSel;
     }
 
     /// <summary>编辑选中区域：预设行走覆盖层，校准行走 rois.json。</summary>
@@ -539,19 +504,25 @@ public partial class SettingsWindow : Window
         if (p is null) { MessageBox.Show(this, "找不到该预设。", "编辑区域"); return; }
 
         bool isChat = row.PresetPart == "chat";
-        var rect = isChat
-            ? (p.Chat is { } c ? (c.X, c.Y, c.Width, c.Height) : (0, 0, 0, 0))
-            : (p.RoomList!.X, p.RoomList.Y, p.RoomList.Width, p.RoomList.Height);
-        var dlg = new PresetEditWindow(row.Scene, row.Resolution, row.Name, rect, isChat ? null : p.RoomList!.RowHeight)
+        var (rx, ry, rw, rh) = isChat
+            ? (p.Chat is { } c ? (c.X, c.Y, c.W, c.H) : (0d, 0d, 0d, 0d))
+            : (p.RoomNameList is { } r ? (r.X, r.Y, r.W, r.H) : (0d, 0d, 0d, 0d));
+        var (bw, bh) = ParseResolution(row.Resolution);
+
+        // 复用普通校准区域的编辑窗：喂一个临时 Roi（相对坐标直接喂进去），
+        // 预设模式禁用场景/名称/类型，用户只能调矩形。
+        var dummy = new Roi(row.Name, isChat ? "Chat" : "RoomNameList",
+            new RelRect(rx, ry, rw, rh));
+        var dlg = new RoiEditWindow(row.Resolution, bw, bh, row.SceneId, dummy, isPreset: true)
         {
             Owner = this,
         };
         if (dlg.ShowDialog() != true) return;
 
-        var (x, y, w, h) = dlg.Rect;
+        // 编辑窗读回的就是相对坐标，直接存回预设（不再换算成像素）。
         var next = isChat
-            ? p with { Chat = new PixelRect(x, y, w, h) }
-            : p with { RoomList = p.RoomList! with { X = x, Y = y, Width = w, Height = h, RowHeight = dlg.RowHeight ?? p.RoomList.RowHeight } };
+            ? p with { Chat = dlg.Result.Rect }
+            : p with { RoomNameList = dlg.Result.Rect };
 
         try
         {
@@ -593,97 +564,6 @@ public partial class SettingsWindow : Window
         CommitRois(updated, $"区域“{row.Name}”未能删除。");
     }
 
-    /// <summary>编辑选中的列区域：预设列写覆盖层，校准列写 rois.json。</summary>
-    private void OnEditColumnClick(object sender, RoutedEventArgs e)
-    {
-        if (ColumnsListView.SelectedItem is not ColumnRow row) { MessageBox.Show(this, "请先在列表里选中一列。", "编辑列区域"); return; }
-
-        if (row.Preset)
-        {
-            var p = FindPresetByName(row);
-            if (p?.RoomList is not { } g) { MessageBox.Show(this, "找不到所属列表框。", "编辑列区域"); return; }
-            var col = g.Columns[row.ColIndex];
-            var dlg = new ColumnEditWindow(row.Owner, col.Kind.ToString(), g.X + col.X, col.Width, g.X, g.Width) { Owner = this };
-            if (dlg.ShowDialog() != true) return;
-            var cols = g.Columns.ToList();
-            cols[row.ColIndex] = col with { Kind = ColumnKinds.Parse(dlg.Kind), X = dlg.Relative.X, Width = dlg.Relative.Width };
-            try
-            {
-                LayoutPresetStore.SaveOverride(_layoutOverridesPath, p with { RoomList = g with { Columns = cols } });
-                ReloadLayoutStore();
-                LoadRoiList();
-                _onRoisChanged?.Invoke();
-            }
-            catch (Exception ex) { MessageBox.Show(this, $"保存失败：{ex.Message}", "编辑列区域"); }
-            return;
-        }
-
-        var cfg = RoiStore.Load(_roisJsonPath);
-        var roi = cfg.Scenes[row.SceneId].First(b => b.Resolution == row.Resolution).Rois[row.RoiIndex];
-        if (roi.Columns is not { Count: > 0 }) { MessageBox.Show(this, "该区域没有列定义。", "编辑列区域"); return; }
-        var (bw, bh) = ParseResolution(row.Resolution);
-        int boxX = Px(roi.Rect.X, bw), boxW = Px(roi.Rect.W, bw);
-        var target = roi.Columns[row.ColIndex];
-        var dlg2 = new ColumnEditWindow(row.Owner, target.Kind.ToString(),
-            boxX + (int)Math.Round(target.RelStart * boxW), (int)Math.Round((target.RelEnd - target.RelStart) * boxW),
-            boxX, boxW)
-        {
-            Owner = this,
-        };
-        if (dlg2.ShowDialog() != true) return;
-
-        // 校准的列存的是"相对框宽"的比例，改完换算回去
-        var list = roi.Columns.ToList();
-        list[row.ColIndex] = new RoiColumn(
-            dlg2.Relative.X / (double)boxW,
-            (dlg2.Relative.X + dlg2.Relative.Width) / (double)boxW,
-            ColumnKinds.Parse(dlg2.Kind));
-        var updated = RoiStore.ReplaceRoi(cfg, row.SceneId, row.Resolution, row.RoiIndex, roi with { Columns = list });
-        if (updated is null) { MessageBox.Show(this, "定位失败：列表可能已过期。", "编辑列区域"); return; }
-        CommitRois(updated, "列区域未能写入 rois.json。");
-    }
-
-    /// <summary>删除选中的列区域。</summary>
-    private void OnDeleteColumnClick(object sender, RoutedEventArgs e)
-    {
-        if (ColumnsListView.SelectedItem is not ColumnRow row) { MessageBox.Show(this, "请先在列表里选中一列。", "删除列区域"); return; }
-        if (MessageBox.Show(this, $"确定删除 {row.Owner} 的第 {row.ColIndex + 1} 列（{row.Name}）？",
-                "删除列区域", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
-
-        if (row.Preset)
-        {
-            var p = FindPresetByName(row);
-            if (p?.RoomList is not { } g) return;
-            var cols = g.Columns.ToList();
-            cols.RemoveAt(row.ColIndex);
-            try
-            {
-                LayoutPresetStore.SaveOverride(_layoutOverridesPath, p with { RoomList = g with { Columns = cols } });
-                ReloadLayoutStore();
-                LoadRoiList();
-                _onRoisChanged?.Invoke();
-            }
-            catch (Exception ex) { MessageBox.Show(this, $"保存失败：{ex.Message}", "删除列区域"); }
-            return;
-        }
-
-        var cfg = RoiStore.Load(_roisJsonPath);
-        var roi = cfg.Scenes[row.SceneId].First(b => b.Resolution == row.Resolution).Rois[row.RoiIndex];
-        if (roi.Columns is not { Count: > 0 }) return;
-        var list = roi.Columns.ToList();
-        list.RemoveAt(row.ColIndex);
-        var updated = RoiStore.ReplaceRoi(cfg, row.SceneId, row.Resolution, row.RoiIndex, roi with { Columns = list });
-        if (updated is null) return;
-        CommitRois(updated, "列区域未能删除。");
-    }
-
-    LayoutPreset? FindPresetByName(ColumnRow row)
-    {
-        foreach (var p in _layout.Presets)
-            if (p.Scene == row.SceneId && p.Resolution == row.Resolution) return p;
-        return null;
-    }
-
     /// <summary>落盘 + 重画列表 + 让正在跑的探测热重载（与校准窗保存后同一条路径）。</summary>
     private void CommitRois(RoiConfig cfg, string failMessage)
     {
@@ -706,14 +586,6 @@ public partial class SettingsWindow : Window
         var t = _holder.Current.Translation;
         TranslatePlayerIdCheck.IsChecked = t.TranslatePlayerId;
     }
-
-    private static string ColumnKindLabel(ColumnKind k) => k switch
-    {
-        ColumnKind.RoomName => "房间名",
-        ColumnKind.MapName => "地图",
-        ColumnKind.PlayerId => "玩家ID",
-        _ => "其它",
-    };
 
     private void LoadHotkeyList(IReadOnlyDictionary<string, HotkeyBinding> hotkeys)
     {
