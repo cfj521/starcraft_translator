@@ -17,7 +17,8 @@ public class SceneRefsShippingTests
 
     static SceneRefStore Store => Loaded.Value;
 
-    static readonly string[] ExpectedResolutions = { "1920x1080", "2560x1440", "3840x2160" };
+    // 方案 B：参考只存 1080p 一档基准（运行时等比缩放到帧分辨率，块数固定），不再按三档分辨率各存一份。
+    static readonly string[] ExpectedResolutions = { "1920x1080" };
 
     [Fact]
     public void ShippingFile_LoadsWithoutErrorsOrWarnings()
@@ -37,8 +38,9 @@ public class SceneRefsShippingTests
     }
 
     [Fact]
-    public void ShippingFile_EveryReferenceCoversAllThreeResolutions()
+    public void ShippingFile_EveryReferenceCoversTheBaseResolution()
     {
+        // 方案 B 只存 1080p 基准一档；每条参考必须有它，运行时才能缩放到任意帧分辨率。
         foreach (var reference in Store.References)
             foreach (var res in ExpectedResolutions)
                 Assert.True(reference.Resolutions.ContainsKey(res), $"{reference.Id} 缺 {res} 参考");

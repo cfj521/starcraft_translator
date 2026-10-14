@@ -16,18 +16,29 @@ namespace ScrTranslator.Core.Scene;
 /// </summary>
 public static class SceneRefCapture
 {
-    /// <summary>把基准区域（1080p 坐标）等比缩放到目标分辨率。与 SceneRefGen.ScaledRect/BlockPx 同一公式。</summary>
-    public static IReadOnlyList<SceneRefRegion> ScaleRegions(IReadOnlyList<SceneRefRegion> baseRegions, double scale, int baseBlockSize)
+    /// <summary>
+    /// 把基准区域（1080p 坐标）缩放到目标分辨率。**统一按高度因子 H/1080 拉伸**（x/y/w/h 同因子），
+    /// 块数固定为 1080p 那套（不随分辨率变），块宽由「缩放后区域宽 / 块数」推导。
+    /// <paramref name="centerCrop"/> 为 true 时叠加**居中水平裁剪**（browsing/room 的金属边框：
+    /// 只裁宽度、高度不裁，x = (基准x − crop) × H/1080，crop = (1920 − 1080·ar)/2）；
+    /// false 时纯 H/1080 拉伸（ingame 的种族装饰区贴左边缘，无裁剪）。
+    /// 指纹长度恒等于出厂 1080p 参考，故 5 条参考通吃所有分辨率。
+    /// </summary>
+    public static IReadOnlyList<SceneRefRegion> ScaleRegions(IReadOnlyList<SceneRefRegion> baseRegions, int width, int height, bool centerCrop)
     {
+        const int baseW = 1920, baseH = 1080;
+        double sy = height / (double)baseH;                  // 统一高度因子 H/1080
+        double crop = centerCrop ? (baseW - baseH * (width / (double)height)) / 2.0 : 0.0;  // 居中水平裁剪（每侧）
         var result = new List<SceneRefRegion>(baseRegions.Count);
         foreach (var r in baseRegions)
         {
-            int w = (int)Math.Round(r.Width * scale);
-            int h = (int)Math.Round(r.Height * scale);
-            int bs = Math.Max(2, (int)Math.Round(baseBlockSize * scale));
-            int bx = Math.Max(1, w / bs), by = Math.Max(1, h / bs);
-            result.Add(new SceneRefRegion(r.Name,
-                (int)Math.Round(r.X * scale), (int)Math.Round(r.Y * scale), w, h, bs, bx, by));
+            int w = (int)Math.Round(r.Width * sy);
+            int h = (int)Math.Round(r.Height * sy);
+            int x = (int)Math.Round((r.X - crop) * sy);
+            int y = (int)Math.Round(r.Y * sy);
+            // 块数沿用 1080p 的 BlocksX/BlocksY；BlockPx 仅作显示，实际块宽 = Width/BlocksX（见 SceneFingerprint.Compute）。
+            int bs = Math.Max(1, w / r.BlocksX);
+            result.Add(new SceneRefRegion(r.Name, x, y, w, h, bs, r.BlocksX, r.BlocksY));
         }
         return result;
     }
@@ -46,10 +57,9 @@ public static class SceneRefCapture
     /// 返回缩放后的区域与**逐区域**指纹字节（写 JSON 时每个区域要各自带 data，不能拼成一整段再拆）。
     /// </summary>
     public static (IReadOnlyList<SceneRefRegion> Regions, byte[][] RegionBytes) Capture(
-        in FramePixels frame, IReadOnlyList<SceneRefRegion> baseRegions, int width, int height, int baseWidth, int baseBlockSize)
+        in FramePixels frame, IReadOnlyList<SceneRefRegion> baseRegions, int width, int height, bool centerCrop)
     {
-        double scale = (double)width / baseWidth;
-        var regions = ScaleRegions(baseRegions, scale, baseBlockSize);
+        var regions = ScaleRegions(baseRegions, width, height, centerCrop);
         var bytes = new byte[regions.Count][];
         for (int i = 0; i < regions.Count; i++)
         {

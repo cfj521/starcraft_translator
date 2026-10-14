@@ -9,32 +9,33 @@ namespace ScrTranslator.Core.Tests.Scene;
 public class SceneRefCaptureTests
 {
     [Fact]
-    public void ScaleRegions_ScalesGeometryAndRecomputesBlocks()
+    public void ScaleRegions_ScalesGeometryAndKeepsBlockCount()
     {
-        // 用真实 ingame 基准区域 (8,235,1148,415)，块宽 4
+        // 统一 H/1080 拉伸：1920×1080 → 3840×2160（sy=2），无裁剪
         var baseRegions = new[] { new SceneRefRegion("hud-deco-left", 8, 235, 1148, 415, 4, 287, 104) };
-        var scaled = SceneRefCapture.ScaleRegions(baseRegions, 2.0, 4);
+        var scaled = SceneRefCapture.ScaleRegions(baseRegions, 3840, 2160, centerCrop: false);
         var s = scaled.Single();
 
         Assert.Equal(16, s.X);          // 8×2
         Assert.Equal(470, s.Y);         // 235×2
         Assert.Equal(2296, s.Width);    // 1148×2
         Assert.Equal(830, s.Height);    // 415×2
-        Assert.Equal(8, s.BlockPx);     // max(2, round(4×2))
-        Assert.Equal(2296 / 8, s.BlocksX); // 287
-        Assert.Equal(830 / 8, s.BlocksY);  // 103（整除，余 6 像素）
+        Assert.Equal(287, s.BlocksX);   // 块数固定（不随分辨率变）
+        Assert.Equal(104, s.BlocksY);   // 块数固定
+        Assert.Equal(2296 / 287, s.BlockPx); // 块宽 = 缩放后宽 / 块数
         Assert.Equal("hud-deco-left", s.Name); // 名字保留
     }
 
     [Fact]
-    public void ScaleRegions_SmallerScaleKeepsMinBlockPx()
+    public void ScaleRegions_SmallerScaleKeepsBlockCount()
     {
-        // 缩小到 0.5：块宽 round(4×0.5)=2，不小于 2
+        // 统一 H/1080 拉伸：1920×1080 → 960×540（sy=0.5），块数仍固定，块宽 = 8/4 = 2
         var baseRegions = new[] { new SceneRefRegion("r", 0, 0, 16, 16, 4, 4, 4) };
-        var scaled = SceneRefCapture.ScaleRegions(baseRegions, 0.5, 4);
+        var scaled = SceneRefCapture.ScaleRegions(baseRegions, 960, 540, centerCrop: false);
         Assert.Equal(2, scaled[0].BlockPx);
         Assert.Equal(8, scaled[0].Width);   // 16×0.5
-        Assert.Equal(4, scaled[0].BlocksX); // 8/2
+        Assert.Equal(4, scaled[0].BlocksX); // 块数固定
+        Assert.Equal(4, scaled[0].BlocksY); // 块数固定
     }
 
     [Fact]
@@ -50,9 +51,9 @@ public class SceneRefCaptureTests
             buf[i * 4 + 3] = 255;
         }
         var frame = new FramePixels(buf, 16, 16, 16 * 4, 4, 2, 1, 0);
-        // 基准区域 (0,0,16,16)，scale=1（width=baseWidth=16）→ 块宽 4，4×4=16 块
+        // 1080p 基准区域 (0,0,16,16)，目标 1080×1080（sy=1）→ 块宽 4，4×4=16 块
         var (regions, bytes) = SceneRefCapture.Capture(frame,
-            new[] { new SceneRefRegion("r", 0, 0, 16, 16, 4, 4, 4) }, 16, 16, 16, 4);
+            new[] { new SceneRefRegion("r", 0, 0, 16, 16, 4, 4, 4) }, 1080, 1080, centerCrop: false);
 
         Assert.Single(regions);
         // 16×16 像素、块宽 4 → 4×4=16 块，每块 1 个 RGB
@@ -113,9 +114,9 @@ public class SceneRefCaptureTests
         Assert.Equal(2, store.OverrideCount);
         // 新场景 room 被追加
         Assert.True(store.Find("room")!.TryResolution(128, 128, out _));
-        // browsing 既有出厂 64×64，又有现场 256×256
+        // browsing 既有出厂 1920×1080（基准），又有现场 256×256
         var browsing = store.Find("browsing")!;
-        Assert.True(browsing.TryResolution(64, 64, out _));
+        Assert.True(browsing.TryResolution(1920, 1080, out _));
         Assert.True(browsing.TryResolution(256, 256, out _));
         File.Delete(overridePath);
     }

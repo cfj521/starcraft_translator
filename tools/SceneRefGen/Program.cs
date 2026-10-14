@@ -20,38 +20,45 @@ internal static class Program
     const double MinHitRatio = 0.90; // 命中率阈值，低于此判"其他界面"
 
     // ===== 区域定义（1080p 坐标 rect = x,y,w,h）=====
-    // browsing / room 共用顶部金属边框两角（取更小的 room 框，两者重叠）
+    // browsing / room 共用顶部金属边框的"左上主体"。旧版曾取两角，非 16:9 被居中裁剪裁掉边角而失效；
+    // 改用内缩的 frame-left（避开裁剪区），三套比例下静态不变、跨分辨率 100% 命中，单区即可，
+    // frame-right 冗余，已移除（见 tools/FingerprintCheck crosstest）。
     static readonly Region[] FrameRegions =
     {
-        new("frame-top-left", 0, 0, 250, 110),
-        new("frame-top-right", 1650, 0, 270, 110),
+        new("frame-left", 240, 0, 183, 42),
     };
-    // ingame 用底部种族装饰板（唯一既静态又分种族的锚点），左上角+宽高 120x120
-    static readonly Region[] HudDecoRegions =
+    // ingame 用底部信息栏左侧一条窄带：统一按高度因子 H/1080 等比缩放（x/y/w/h 同因子，无居中裁剪），
+    // 跨分辨率静态（实测 5 档 100% 命中），且随种族区分度高（非对角线仅 50~60%，余量 30~40 个百分点）。
+    // 取代旧的两块装饰板（420,930,120,120 / 1200,910,120,120）——它们在 4:3/16:10 被裁掉或残缺，跨比例失效。
+    // 曾试过更大的区域 (0,1004,211,77)：场景识别没问题，但三种族共享静态内容太多，非对角线升到 78~86%、
+    // 种族区分（尤其 p）余量只剩个位数，弹窗/局部动画一来就串，故回退到此窄带。
+    static readonly Region[] IngamRaceRegions =
     {
-        new("hud-deco-left", 420, 930, 120, 120),
-        new("hud-deco-right", 1200, 910, 120, 120),
+        new("race-hud", 0, 712, 188, 11),
     };
 
-    // ===== 场景 → 区域 + 各分辨率参考截图（键=截图宽度；缺的分辨率留空，运行时会退到最近分辨率）=====
+    // ===== 场景 → 区域 + 参考截图 =====
+    // 只存 1080p 一档：同比例截图等比归一到 1080p 后指纹完全相同（跨比例靠安全区/纯等比区成立），
+    // 运行时把任意分辨率截图归一到 1920×1080 再比对，无需为每个分辨率各存一份。
     static readonly SceneDef[] SceneDefs =
     {
         new("browsing", "寻找房间", "browsing", null, FrameRegions,
-            new() { [1920] = "browsing-1.png", [2560] = "browsing-2.png", [3840] = "browsing-4.png" }),
+            new() { [1920] = "browsing-1920x1080.png" }),
         new("room", "房间内", "room", null, FrameRegions,
-            new() { [1920] = "room-1.png", [2560] = "room-2.png", [3840] = "room-4.png" }),
-        new("ingame_t", "游戏内·人族", "ingame", "t", HudDecoRegions,
-            new() { [1920] = "ingame-1t.png", [2560] = "ingame-2t.png", [3840] = "ingame-4t.png" }),
-        new("ingame_p", "游戏内·神族", "ingame", "p", HudDecoRegions,
-            new() { [1920] = "ingame-1p.png", [2560] = "ingame-2p.png", [3840] = "ingame-4p.png" }),
-        new("ingame_z", "游戏内·虫族", "ingame", "z", HudDecoRegions,
-            new() { [1920] = "ingame-1z.png", [2560] = "ingame-2z.png", [3840] = "ingame-4z.png" }),
+            new() { [1920] = "room-1920x1080.png" }),
+        new("ingame_t", "游戏内·人族", "ingame", "t", IngamRaceRegions,
+            new() { [1920] = "ingame-1920x1080t.png" }),
+        new("ingame_p", "游戏内·神族", "ingame", "p", IngamRaceRegions,
+            new() { [1920] = "ingame-1920x1080p.png" }),
+        new("ingame_z", "游戏内·虫族", "ingame", "z", IngamRaceRegions,
+            new() { [1920] = "ingame-1920x1080z.png" }),
     };
 
     static int Main(string[] args)
     {
         var repoRoot = FindRepoRoot();
-        var imgDir = Path.Combine(repoRoot, "docs", "scenes pictures");
+        // 16:9 参考图在 resources/ss-scenes（文件名带分辨率后缀，如 browsing-1920x1080.png）
+        var imgDir = Path.Combine(repoRoot, "resources", "ss-scenes");
         var outPath = Path.Combine(repoRoot, "src", "ScrTranslator.App", "scene-refs.json");
         if (!Directory.Exists(imgDir)) { Console.Error.WriteLine($"找不到截图目录 {imgDir}"); return 1; }
 
@@ -216,26 +223,36 @@ internal static class Program
 
     static Fingerprint BuildFingerprint(SKBitmap bm, Rect rect, double scale)
     {
+        // 块数仍按名义块宽推导（保持与旧参考相同的网格密度，如 race-hud=47x2），
+        // 但块边界改用**均分**（块宽 = 区域宽/块数，浮点），与运行时 SceneFingerprint.Compute 完全一致。
+        // 旧实现用固定 bs 像素切块，区域高度不能整除 bs 时会漏采底部像素，导致生成端与运行端指纹对不上。
         int bs = BlockPx(scale);
-        int bx = rect.W / bs, by = rect.H / bs;
-        if (bx < 1 || by < 1) throw new InvalidOperationException($"区域过小 {rect.W}x{rect.H} 块 {bs}");
+        int bx = Math.Max(1, rect.W / bs), by = Math.Max(1, rect.H / bs);
         var bytes = new byte[bx * by * 3];
         var (ro, go, bo) = ChannelOffsets(bm);
+        double bsx = rect.W / (double)bx;   // 均分块宽（浮点），与 Compute 同
+        double bsy = rect.H / (double)by;
         unsafe
         {
             byte* p = (byte*)bm.GetPixels();
             for (int gy = 0; gy < by; gy++)
                 for (int gx = 0; gx < bx; gx++)
                 {
+                    int x0 = (int)Math.Round(rect.X + gx * bsx);
+                    int x1 = (int)Math.Round(rect.X + (gx + 1) * bsx);
+                    int y0 = (int)Math.Round(rect.Y + gy * bsy);
+                    int y1 = (int)Math.Round(rect.Y + (gy + 1) * bsy);
                     long sr = 0, sg = 0, sb = 0; int n = 0;
-                    for (int yy = 0; yy < bs; yy++)
-                        for (int xx = 0; xx < bs; xx++)
+                    for (int yy = y0; yy < y1; yy++)
+                        for (int xx = x0; xx < x1; xx++)
                         {
-                            byte* q = p + (long)(rect.Y + gy * bs + yy) * bm.RowBytes + (long)(rect.X + gx * bs + xx) * 4;
+                            byte* q = p + (long)yy * bm.RowBytes + (long)xx * 4;
                             sr += q[ro]; sg += q[go]; sb += q[bo]; n++;
                         }
                     int o = (gy * bx + gx) * 3;
-                    bytes[o] = (byte)(sr / n); bytes[o + 1] = (byte)(sg / n); bytes[o + 2] = (byte)(sb / n);
+                    bytes[o] = (byte)(n == 0 ? 0 : sr / n);
+                    bytes[o + 1] = (byte)(n == 0 ? 0 : sg / n);
+                    bytes[o + 2] = (byte)(n == 0 ? 0 : sb / n);
                 }
         }
         return new Fingerprint(bx, by, bytes);

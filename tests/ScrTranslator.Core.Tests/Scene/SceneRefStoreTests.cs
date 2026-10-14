@@ -3,12 +3,13 @@ using ScrTranslator.Core.Scene;
 namespace ScrTranslator.Core.Tests.Scene;
 
 /// <summary>
-/// 造 scene-refs.json 测试样本。统一用一张 64x64 的"分辨率"+一个 8x8/块宽4 的区域（2x2=4 块，12 字节），
-/// 让测试不必搬 4K 截图也能跑完整解析路径。
+/// 造 scene-refs.json 测试样本。统一用 1920x1080 基准分辨率（= 运行时唯一基准键）+一个 8x8/块宽4 的区域
+/// （2x2=4 块，12 字节），让测试不必搬 4K 截图也能跑完整解析路径。
+/// 方案 B 下运行时把该区域等比缩放到帧分辨率、块数固定，所以参考必须建在 1920x1080 上。
 /// </summary>
 internal static class SceneRefJson
 {
-    public const string ResKey = "64x64";
+    public const string ResKey = "1920x1080";
     public const int Blocks = 4; // 2x2
 
     /// <summary>整块同一灰度的指纹（4 块 ×RGB）。</summary>
@@ -77,7 +78,7 @@ public class SceneRefStoreTests
         var ingame = store.Find("ingame_t")!;
         Assert.Equal(GameScene.InGame, ingame.Scene);      // gameScene 归并成四态
         Assert.Equal(GameRace.Terran, ingame.Race);        // race 单独保留
-        Assert.True(ingame.TryResolution(64, 64, out var res));
+        Assert.True(ingame.TryResolution(1920, 1080, out var res));
         Assert.Equal(12, res.Fingerprint.Length);
         Assert.Single(res.Regions);
         Assert.Equal(2, res.Regions[0].BlocksX);
@@ -141,7 +142,7 @@ public class SceneRefStoreTests
         var store = SceneRefStore.Load(SceneRefJson.TempPathWith(
             SceneRefJson.Build(new[] { ("browsing", "browsing", (string?)null, SceneRefJson.Flat(10)) })));
         var reference = store.References[0];
-        Assert.True(reference.TryResolution(64, 64, out _));
+        Assert.True(reference.TryResolution(1920, 1080, out _));
         Assert.False(reference.TryResolution(128, 128, out _));
         Assert.Equal(new[] { SceneRefJson.ResKey }, reference.AvailableResolutions);
     }

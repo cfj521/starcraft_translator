@@ -61,18 +61,22 @@ public static class SceneFingerprint
         int off = 0;
         foreach (var region in regions)
         {
-            var (x0, y0, _, _) = region.ClampTo(frame.Width, frame.Height);
-            int bs = region.BlockPx;
+            var (x0, y0, w, h) = region.ClampTo(frame.Width, frame.Height);
+            // 方案 B：块数固定（= 1080p 的 BlocksX/BlocksY），块宽 = 缩放后区域宽 / 块数（浮点）。
+            // 在帧上按 1080p 网格采样，指纹长度恒等于出厂参考，跨分辨率可比。
+            double bsx = w / (double)region.BlocksX;
+            double bsy = h / (double)region.BlocksY;
             for (int gy = 0; gy < region.BlocksY; gy++)
             {
                 for (int gx = 0; gx < region.BlocksX; gx++)
                 {
-                    int px = x0 + gx * bs, py = y0 + gy * bs;
+                    int px = (int)Math.Round(x0 + gx * bsx);
+                    int py = (int)Math.Round(y0 + gy * bsy);
+                    int maxX = Math.Min((int)Math.Round(x0 + (gx + 1) * bsx), frame.Width);
+                    int maxY = Math.Min((int)Math.Round(y0 + (gy + 1) * bsy), frame.Height);
                     long sr = 0, sg = 0, sb = 0;
                     int n = 0;
-                    // 块可能被帧边缘切断（参考分辨率与实际帧不符时）：按实际可用像素求均值，
-                    // 全空则写 0（该块必然不命中，等价于丢弃，不会越界读）。
-                    int maxY = Math.Min(py + bs, frame.Height), maxX = Math.Min(px + bs, frame.Width);
+                    // 块可能被帧边缘切断：按实际可用像素求均值，全空则写 0（该块必然不命中）。
                     for (int y = py; y < maxY; y++)
                     {
                         int row = y * frame.RowBytes;

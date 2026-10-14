@@ -78,13 +78,13 @@ public class SceneFingerprintTests
     [Fact]
     public void Compute_RegionPartlyOutsideFrame_DoesNotThrow()
     {
-        // 参考区域比帧还大（分辨率对不上时的兜底路径）：按可用像素求均值，越界块写 0，绝不能越界读崩掉。
+        // 参考区域比帧还大（兜底路径）：先 ClampTo 夹进帧内再算块均值，越界部分不采，绝不能越界读崩掉。
         var buf = SceneTestFrames.Solid(8, 8, 40, 40, 40);
         var regions = new[] { Region(x: 4, y: 4, w: 8, h: 8, blockPx: 4) };
         var fp = new byte[SceneFingerprint.ByteLength(regions)];
         SceneFingerprint.Compute(SceneTestFrames.View(buf, 8, 8), regions, fp);
-        Assert.Contains((byte)40, fp);
-        Assert.Contains((byte)0, fp);
+        // 夹进帧内后整个区域都在帧里（4x4 区域、2x2 块），均值全 40，没有越界零块
+        Assert.All(fp, b => Assert.Equal((byte)40, b));
     }
 
     [Fact]

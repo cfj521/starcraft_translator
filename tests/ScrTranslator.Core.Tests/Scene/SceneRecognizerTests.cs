@@ -12,7 +12,8 @@ public class SceneRecognizerTests
     static SceneRecognizer RecognizerFor(params (string id, string gameScene, string? race, byte[] data)[] scenes)
         => new(SceneRefStore.Load(SceneRefJson.TempPathWith(SceneRefJson.Build(scenes))));
 
-    static FramePixels Frame(byte v) => SceneTestFrames.View(SceneTestFrames.Solid(64, 64, v, v, v), 64, 64);
+    // 方案 B：参考只存 1080p，运行时等比缩放到帧分辨率。测试帧用 1920x1080（scale=1）最简单。
+    static FramePixels Frame(byte v) => SceneTestFrames.View(SceneTestFrames.Solid(1920, 1080, v, v, v), 1920, 1080);
 
     [Fact]
     public void Recognize_PicksTheMatchingReference()
@@ -59,9 +60,9 @@ public class SceneRecognizerTests
     public void Recognize_ThresholdIsTheSingleKnob()
     {
         // 4 块里 3 块命中 = 0.75：阈值 0.9 判不匹配，降到 0.7 就该匹配。
-        var buf = SceneTestFrames.Solid(64, 64, 10, 10, 10);
-        SceneTestFrames.Paint(buf, 64, 4, 4, 4, 4, 250, 250, 250); // 把右下角那块涂花
-        var frame = SceneTestFrames.View(buf, 64, 64);
+        var buf = SceneTestFrames.Solid(1920, 1080, 10, 10, 10);
+        SceneTestFrames.Paint(buf, 1920, 4, 4, 4, 4, 250, 250, 250); // 把右下角那块涂花
+        var frame = SceneTestFrames.View(buf, 1920, 1080);
         var scenes = new[] { ("browsing", "browsing", (string?)null, SceneRefJson.Flat(10)) };
 
         Assert.Equal(SceneMatchStatus.BelowThreshold, RecognizerFor(scenes).Recognize(frame).Status);
@@ -74,14 +75,16 @@ public class SceneRecognizerTests
     }
 
     [Fact]
-    public void Recognize_UnknownResolution_DoesNotGuess_AndListsWhatItHas()
+    public void Recognize_ScalesReferenceToFrameResolution_StillMatches()
     {
+        // 方案 B：参考只存 1080p，运行时把基准区域等比缩放到帧分辨率。
+        // 3840x2160 帧（scale=2）不是"未知分辨率"，照样能命中——不再需要补截图。
         var rec = RecognizerFor(("browsing", "browsing", null, SceneRefJson.Flat(10)))
-            .Recognize(SceneTestFrames.View(SceneTestFrames.Solid(32, 32, 10, 10, 10), 32, 32));
+            .Recognize(SceneTestFrames.View(SceneTestFrames.Solid(3840, 2160, 10, 10, 10), 3840, 2160));
 
-        Assert.Equal(SceneMatchStatus.NoReferenceForResolution, rec.Status);
-        Assert.Equal(GameScene.Unknown, rec.Scene);
-        Assert.Contains("64x64", rec.Detail); // 提示"已收录哪些分辨率"，用户才知道要补什么
+        Assert.Equal(SceneMatchStatus.Matched, rec.Status);
+        Assert.Equal(GameScene.Browsing, rec.Scene);
+        Assert.Equal("browsing", rec.RefId);
     }
 
     [Fact]

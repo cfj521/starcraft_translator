@@ -66,11 +66,17 @@ public sealed class SceneRecognizer
             return new SceneRecognition(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
                 GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), _store.LoadError ?? "无参考");
 
-        // 先筛出覆盖当前分辨率的候选；一个都没有就别浪费时间算指纹。
-        var candidates = new List<(SceneReference Ref, SceneRefResolution Res)>();
+        // 方案 B：所有参考只存 1080p 一档。把 1080p 基准区域按统一高度因子 H/1080 缩放到当前帧，
+        // 块数固定（= 1080p 那套），实时指纹长度恒等于出厂参考，直接比对。
+        // browsing/room 的金属边框叠加居中水平裁剪（只裁宽度）；ingame 的种族装饰区贴左边缘、无裁剪。
+        string baseKey = $"{_store.BaseWidth}x{_store.BaseWidth * 9 / 16}";
+        var candidates = new List<(SceneReference Ref, SceneRefResolution Res, IReadOnlyList<SceneRefRegion> Scaled)>();
         foreach (var r in _store.References)
-            if (r.TryResolution(frame.Width, frame.Height, out var res))
-                candidates.Add((r, res));
+            if (r.Resolutions.TryGetValue(baseKey, out var baseRes))
+            {
+                bool centerCrop = r.Scene != GameScene.InGame; // 边框场景裁剪，游戏内不裁
+                candidates.Add((r, baseRes, SceneRefCapture.ScaleRegions(baseRes.Regions, frame.Width, frame.Height, centerCrop)));
+            }
         if (candidates.Count == 0)
         {
             var have = string.Join(",", _store.References.SelectMany(r => r.AvailableResolutions).Distinct().OrderBy(x => x));
@@ -78,16 +84,16 @@ public sealed class SceneRecognizer
                 GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), $"{frame.Width}x{frame.Height}（已收录 {have}）");
         }
 
-        // 区域几何完全相同的候选（如 ingame_t/p/z 共用两块装饰板）共用同一份实时指纹，只算一次。
+        // 区域几何完全相同的候选（如 ingame_t/p/z 共用 race-hud）共用同一份实时指纹，只算一次。
         var liveCache = new Dictionary<string, byte[]>();
         var scores = new List<SceneScore>(candidates.Count);
-        foreach (var (reference, res) in candidates)
+        foreach (var (reference, res, scaled) in candidates)
         {
             string geoKey = GeometryKey(res);
             if (!liveCache.TryGetValue(geoKey, out var live))
             {
-                live = new byte[SceneFingerprint.ByteLength(res.Regions)];
-                SceneFingerprint.Compute(frame, res.Regions, live);
+                live = new byte[SceneFingerprint.ByteLength(scaled)];
+                SceneFingerprint.Compute(frame, scaled, live);
                 liveCache[geoKey] = live;
             }
             double hit = SceneFingerprint.HitRatio(live, res.Fingerprint, _store.ChannelTolerance);
