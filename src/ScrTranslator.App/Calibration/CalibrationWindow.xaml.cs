@@ -285,7 +285,7 @@ public partial class CalibrationWindow : Window
 
     // ── 已有框：选中/拖角调整/整框平移 ───────────────────────────────────
 
-    /// <summary>按创建顺序取下一个区域专属色（预设框与用户框共用，循环使用），保证屏上所有区域互不同色。</summary>
+    /// <summary>按创建顺序取下一个区域专属色（循环使用），保证屏上所有区域互不同色。</summary>
     private Brush NextColor() => RegionColors[_colorCounter++ % RegionColors.Length];
 
     private void AddBoxVisual(CalibBox box)
@@ -501,12 +501,16 @@ public partial class CalibrationWindow : Window
     {
         try
         {
-            // 全是预设框：以当前生效的预设为基线，逐个应用编辑后整条直写出厂文件。
+            // 全是预设框：以当前生效的预设为基线。先把四个 part 全置 null（被删的框不保留原值，
+            // 置 null 持久化——与配置页"删除置 null"路径一致），再把现存的框逐个应用回去，整条直写出厂文件。
             var preset = _layout?.Find(_sceneId, _frameW, _frameH);
             if (preset is not null)
+            {
+                preset = preset with { Chat = null, RoomNameList = null, GameName = null, MapName = null };
                 foreach (var box in _boxes)
                     preset = ApplyPresetBox(preset, box, _gameRect, _dpiX, _dpiY);
-            if (preset is not null && _boxes.Count > 0)
+            }
+            if (preset is not null)
                 LayoutPresetStore.Save(preset, _layout!.FilePath);
 
             _log?.Log($"[calibration] 保存 {_boxes.Count} 个预设区域 → layout-presets.json 到场景[{GameSceneIds.FromId(_sceneId).Label()}]（{_frameW}x{_frameH}）");

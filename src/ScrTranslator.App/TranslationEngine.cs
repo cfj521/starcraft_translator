@@ -53,8 +53,8 @@ public sealed class TranslationEngine : IDisposable
     private readonly object _shotLock = new();
     private bool _shotPending;                                  // 恒在 _shotLock 内读写
     private TaskCompletionSource<SKBitmap>? _shotTcs;           // 恒在 _shotLock 内读写
-    /// <summary>当前生效的布局预设（出厂+覆盖合并）。校准窗/配置页要拿这个**实例**而不是 DI 单例——
-    /// 校准保存后 <see cref="ReloadLayoutPresets"/> 只重赋值本字段（新实例，含覆盖层），DI 容器里那个单例
+    /// <summary>当前生效的布局预设（直读直写出厂文件）。校准窗/配置页要拿这个**实例**而不是 DI 单例——
+    /// 校准保存后 <see cref="ReloadLayoutPresets"/> 只重赋值本字段（新实例），DI 容器里那个单例
     /// 不重读盘永远是启动时的旧值；拿 DI 单例的窗体就会把预设框画回出厂原位（"我明明改了，框没动"）。</summary>
     public LayoutPresetStore Layout => _layout;
     private DateTime _lastDetect = DateTime.MinValue;
@@ -77,7 +77,7 @@ public sealed class TranslationEngine : IDisposable
     private readonly Dictionary<int, List<OverlayItem>> _displayedPerRoi = new();
     private string _roiSetSignature = "";
     private bool _roiAvailable; // 当前活动场景是否有预设区域；活动场景/重载预设变化时重算
-    private bool _anySceneCalibrated; // 至少一个场景校准过 ROI——F9 的启动前置条件（与"当前场景"无关）
+    private bool _anySceneCalibrated; // 至少一个场景有预设——F9 的启动前置条件（与"当前场景"无关）
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
     /// <summary>per-ROI 累计翻译行数（跨帧累计的成功翻译行数，键=ROI 名称）。调试面板逐行显示。</summary>
     private readonly ConcurrentDictionary<string, long> _cumTranslated = new();
@@ -408,7 +408,7 @@ public sealed class TranslationEngine : IDisposable
         string refs = store.IsUsable
             ? $"{store.References.Count}条(现场{store.OverrideCount}) 块{store.BlockSize} 容差{store.ChannelTolerance} 阈值{store.MinHitRatio:P0}"
             : $"不可用: {store.LoadError}";
-        // ROI 多行：当前帧选中的 bucket 里实际在用的 ROI（含布局预设合并），逐行显示名称 + 累计翻译行数。
+        // 识别区域多行：当前帧预设里实际在用的 parts，逐行显示名称 + 累计翻译行数。
         var roiNames = _lastEffectiveRoiNames;
         string roiSection = roiNames.Length == 0
             ? $"ROI[{_activeScene.Label()}]: (无)\n"
@@ -630,7 +630,7 @@ public sealed class TranslationEngine : IDisposable
                     _log.Debug($"[{name}][stable] OCR={lines.Count} 稳定={stableLines.Count}");
                 rois.Add((name, stableLines, stableBounds));
             }
-            // 调试面板逐行显示"被选用"的 ROI：本帧实际进 OCR 的有效列表（含布局预设合并）。
+            // 调试面板逐行显示"被选用"的识别区域：本帧实际进 OCR 的有效列表。
             _lastEffectiveRoiNames = rois.Select(r => r.name).ToArray();
 
             // ── ROI 集变化（换场景/分辨率/增删）→ 清空 per-ROI 状态与悬浮层，全量重译 ──

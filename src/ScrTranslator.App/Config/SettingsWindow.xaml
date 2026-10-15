@@ -198,7 +198,7 @@
                             <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准" Click="OnEnterCalibrationClick"/>
                         </Grid>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"
-                                   Text="ⓘ 程序已经预设了16:9、16:10、4:3三种显示比例的区域定位，覆盖了主要需要识别的区域，若你需要请自行在下面列表或在校准窗口中添加。位置坐标采用相对坐标，即在屏幕中的百分比。"/>
+                                   Text="ⓘ 程序已经预设了16:9、16:10、4:3三种显示比例的区域定位，覆盖了主要需要识别的区域。位置坐标采用相对坐标，即在屏幕中的百分比。"/>
                     </StackPanel>
 
                     <Grid Grid.Row="1" Margin="0,0,0,4">
@@ -206,7 +206,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="已定义区域（坐标为像素坐标）：" FontWeight="Bold" VerticalAlignment="Center"/>
+                        <TextBlock Text="已定义区域（坐标为相对值 0~1 百分比）：" FontWeight="Bold" VerticalAlignment="Center"/>
                         <StackPanel Grid.Column="1" Orientation="Horizontal">
                             <Button x:Name="EditRoiButton" Content="编辑选中" IsEnabled="False" Click="OnEditRoiClick"/>
                             <Button x:Name="DeleteRoiButton" Content="删除选中" Margin="8,0,0,0" IsEnabled="False" Click="OnDeleteRoiClick"/>

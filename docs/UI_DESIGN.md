@@ -271,7 +271,7 @@ class TranslationSettings {
 }
 ```
 
-> 实现：`TranslateChat`/`TranslateRoomName`/`TranslatePlayerId` 三个开关**不再被管线消费**（列式翻译已随用户 ROI 层移除，识别区域是预设、整块必翻）；
+> 实现：`TranslateChat`/`TranslateRoomName`/`TranslateMapInfo`/`TranslatePlayerId` 四个开关**不再被管线消费**（列式翻译已随用户 ROI 层移除，识别区域是预设、整块必翻）；
 > 另有一道**内容闸门** `KoreanText.ContainsHangul`：整行不含谚文（地图名、`Top vs Bottom`、表头…）
 > 直接不进翻译管线 —— 提示词要求"纯英文原样保留"，送过去只会拿回同样的英文，白花请求还显示成噪声。
 > API Key / OAuth token 持久化前用 DPAPI 加密（`SecretStore`，与 `settings.json` 分离）。

@@ -209,14 +209,13 @@
 ## 4. 数据模型（核心）
 
 ```csharp
-enum RoiType { Chat, RoomList, MapInfo, Custom }
-enum TranslationState { Pending, Fast, Final, Glossary, NoTranslate }
+// 识别区域（唯一来源，相对 0~1）：Core 根的 RelRect + LayoutPreset.Parts()
+record RelRect(double X, double Y, double W, double H);
 
-record RoiConfig(string Name, RoiType Type, RectangleF RelRect, List<RoiColumn>? Columns);
-record RoiColumn(string Name, float RelX, float RelWidth, bool Translate); // ID列 Translate=false
-
+// OCR 结果（行 + 相对裁剪子图的框 + 置信度）
 record OcrLine(string Text, RectangleF Bounds, float Confidence);
-record TranslationItem(string SourceText, string? TargetText, TranslationState State, RoiType Roi);
+
+// 翻译：ITranslationProvider（provider 池）+ TranslationOrchestrator（术语表 → 缓存 → 活跃 provider，一批一请求）
 ```
 
 ---

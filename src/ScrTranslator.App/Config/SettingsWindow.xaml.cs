@@ -947,13 +947,13 @@ public partial class SettingsWindow : Window
         RestorePageDefaults(page);
     }
 
-    /// <summary>切页时控制"恢复默认"按钮显隐：日志/关于页无默认值可恢复，隐藏。</summary>
+    /// <summary>切页时控制"恢复默认"按钮显隐：日志/关于/区域页无默认值可恢复（区域 tab 直读直写出厂预设，"恢复默认"无意义），隐藏。</summary>
     private void OnTabSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (RestoreDefaultsButton is null) return;
         if (PagesTab.SelectedItem is not TabItem item) return;
         string page = item.Header?.ToString() ?? "";
-        RestoreDefaultsButton.Visibility = page is "日志" or "关于" ? Visibility.Collapsed : Visibility.Visible;
+        RestoreDefaultsButton.Visibility = page is "日志" or "关于" or "区域" ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>按页名恢复该页默认值。表单页（常规/翻译/OCR/外观）只重置控件，需点「确定」才写盘；
