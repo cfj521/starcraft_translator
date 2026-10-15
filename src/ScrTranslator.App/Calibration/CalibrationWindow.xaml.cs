@@ -944,14 +944,13 @@ public partial class CalibrationWindow : Window
 
             RoiStore.Save(new RoiConfig(scenes), _roisJsonPath);
 
-            // 预设框 → 覆盖层：以当前生效的预设（出厂+覆盖合并值）为基线，逐个应用编辑后整条写回。
-            // 出厂 layout-presets.json 永不被碰（SaveOverride 只写覆盖层文件）。
+            // 预设框 → 直写出厂文件：以当前生效的预设为基线，逐个应用编辑后整条写回。
             var preset = _layout?.Find(_sceneId, _frameW, _frameH);
             if (preset is not null)
                 foreach (var box in presetBoxes)
                     preset = ApplyPresetBox(preset, box, _gameRect, _dpiX, _dpiY);
             if (preset is not null && presetBoxes.Count > 0)
-                LayoutPresetStore.SaveOverride(_layout!.OverridesPath, preset);
+                LayoutPresetStore.Save(preset, _layout!.FilePath);
 
             _log?.Log($"[calibration] 保存 {userRois.Count + presetBoxes.Count} 个区域（用户 {userRois.Count}→rois.json，预设 {presetBoxes.Count}→layout-overrides.json）到场景[{GameSceneIds.FromId(_sceneId).Label()}]（{resKey}）@ {_roisJsonPath}");
             _onSaved?.Invoke();

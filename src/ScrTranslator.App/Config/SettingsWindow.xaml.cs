@@ -41,10 +41,9 @@ public partial class SettingsWindow : Window
     private readonly Action? _onStateChanged;
     /// <summary>rois.json 被本页"编辑/删除"改动后的回调（= probe.ReloadRois），让正在跑的探测立即用新区域。</summary>
     private readonly Action? _onRoisChanged;
-    /// <summary>界面布局预设（可重载：保存覆盖层后必须重读，否则表里还是旧值）。</summary>
+    /// <summary>界面布局预设（直写出厂文件，可重载：保存后必须重读，否则表里还是旧值）。</summary>
     private LayoutPresetStore _layout = new();
     private string _layoutFactoryPath = "";
-    private string _layoutOverridesPath = "";
     private readonly HotkeyService _hotkeyService;
     /// <summary>provider 池的行（顺序即优先级）。拖动改顺序、勾选改启用；「应用/确定」时回写成 TranslationSettings.Providers。</summary>
     private readonly System.Collections.ObjectModel.ObservableCollection<ProviderRow> _providerRows = new();
@@ -122,10 +121,7 @@ public partial class SettingsWindow : Window
         _onStateChanged = onStateChanged;
         _onRoisChanged = onRoisChanged;
         _layoutFactoryPath = Path.Combine(AppContext.BaseDirectory, LayoutPresetStore.DefaultFileName);
-        // 覆盖层与 rois.json 同目录（%APPDATA%\ScrTranslator），升级 exe 不会丢
-        _layoutOverridesPath = Path.Combine(Path.GetDirectoryName(roisJsonPath) ?? AppContext.BaseDirectory,
-            LayoutPresetStore.OverridesFileName);
-        _layout = layout ?? LayoutPresetStore.Load(_layoutFactoryPath, _layoutOverridesPath);
+        _layout = layout ?? LayoutPresetStore.Load(_layoutFactoryPath);
         _hotkeyService = hotkeyService;
 
         VersionText.Text = $"版本 {Assembly.GetExecutingAssembly().GetName().Version}";
@@ -443,9 +439,9 @@ public partial class SettingsWindow : Window
 
 
 
-    /// <summary>重新从磁盘读布局预设（出厂层 + 覆盖层）。保存覆盖层后必须调，否则表里还是旧值。</summary>
+    /// <summary>重新从磁盘读布局预设（直写出厂文件）。保存后必须调，否则表里还是旧值。</summary>
     private void ReloadLayoutStore()
-        => _layout = LayoutPresetStore.Load(_layoutFactoryPath, _layoutOverridesPath);
+        => _layout = LayoutPresetStore.Load(_layoutFactoryPath);
 
     /// <summary>双击主表 = 编辑选中区域。点在表头上则忽略（表头双击的自适应列宽是 GridViewColumnHeader 的内置行为，事件会冒泡到这里）。</summary>
     private void OnRoiListDoubleClick(object sender, MouseButtonEventArgs e)
@@ -521,7 +517,7 @@ public partial class SettingsWindow : Window
 
         try
         {
-            LayoutPresetStore.SaveOverride(_layoutOverridesPath, next);
+            LayoutPresetStore.Save(next, _layoutFactoryPath);
             ReloadLayoutStore();
             LoadRoiList();
             _onRoisChanged?.Invoke();
@@ -1036,14 +1032,6 @@ public partial class SettingsWindow : Window
         catch (Exception ex)
         {
             MessageBox.Show(this, $"删除用户区域失败：{ex.Message}", "恢复默认", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        try
-        {
-            if (File.Exists(_layoutOverridesPath)) File.Delete(_layoutOverridesPath);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, $"恢复预设出厂值失败：{ex.Message}", "恢复默认", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         ReloadLayoutStore();
         LoadRoiList();

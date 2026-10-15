@@ -67,27 +67,21 @@ public sealed record LayoutPreset(string Scene, string Resolution, RelRect? Chat
 }
 
 /// <summary>
-/// layout-presets.json 的只读加载器（出厂层）。与 <see cref="SceneRefStore"/> 同一套纪律：
-/// 加载失败不抛异常、原因进 <see cref="LoadError"/>；按宽高比选最接近的预设档，缺该场景就回落到校准 ROI。
+/// layout-presets.json 直接读写器（出厂即唯一权威）。与 <see cref="SceneRefStore"/> 同一套纪律：
+/// 加载失败不抛异常、原因进 <see cref="LoadError"/>；按宽高比选最接近的预设档。
 /// </summary>
 public sealed class LayoutPresetStore
 {
     public const int SupportedVersion = 1;
     public const string DefaultFileName = "layout-presets.json";
-    /// <summary>用户编辑预设时落的覆盖层文件名（与 rois.json 同目录，跟出厂层分家，升级 exe 不丢）。</summary>
-    public const string OverridesFileName = "layout-overrides.json";
 
     public IReadOnlyList<LayoutPreset> Presets { get; private init; } = Array.Empty<LayoutPreset>();
     public string? LoadError { get; private init; }
     public IReadOnlyList<string> Warnings { get; private init; } = Array.Empty<string>();
 
-    /// <summary>来自覆盖层（用户在配置页改的）条目数。</summary>
-    public int OverrideCount { get; private init; }
-
-    /// <summary>加载时用的两个路径。暴露出来是为了让 <see cref="LayoutPresetStore"/> 的单例
-    /// 能被调用方**原地重载**（配置页改了覆盖层后，运行时必须能重新读盘）。</summary>
-    public string FactoryPath { get; private init; } = "";
-    public string OverridesPath { get; private init; } = "";
+    /// <summary>本 store 实例读出的预设文件路径。暴露出来是为了让单例能被调用方**原地重载**
+    /// （配置页改了预设后，运行时必须重新读盘）。</summary>
+    public string FilePath { get; private init; } = "";
 
     public bool IsUsable => LoadError is null && Presets.Count > 0;
 
@@ -124,67 +118,36 @@ public sealed class LayoutPresetStore
     /// <summary>该场景是否有任何预设（用于"没校准也能翻"的可用性判断）。</summary>
     public bool HasScene(string sceneId) => Presets.Any(p => p.Scene == sceneId);
 
-    /// <summary>读出厂层 + 可选覆盖层。覆盖层坏了只告警、不连累出厂层。</summary>
-    public static LayoutPresetStore Load(string factoryPath, string? overridesPath = null)
+    /// <summary>读预设文件（直接读出厂文件，不再有覆盖层）。</summary>
+    public static LayoutPresetStore Load(string factoryPath)
     {
         var warnings = new List<string>();
-        var factory = ReadFile(factoryPath, "出厂布局预设", warnings, out var factoryError);
-        if (factoryError is not null) return new LayoutPresetStore { LoadError = factoryError, Warnings = warnings };
-
-        var merged = factory;
-        int overrideCount = 0;
-        if (overridesPath is not null && File.Exists(overridesPath))
-        {
-            var over = ReadFile(overridesPath, "布局预设覆盖层", warnings, out var overrideError);
-            if (overrideError is not null)
-                warnings.Add(overrideError + "（已忽略覆盖层，仅用出厂预设）");
-            else
-                (merged, overrideCount) = Merge(factory, over);
-        }
-        return new LayoutPresetStore
-        {
-            Presets = merged,
-            OverrideCount = overrideCount,
-            Warnings = warnings,
-            FactoryPath = factoryPath,
-            OverridesPath = overridesPath ?? "",
-        };
+        var presets = ReadFile(factoryPath, "布局预设", warnings, out var error);
+        if (error is not null) return new LayoutPresetStore { LoadError = error, Warnings = warnings, FilePath = factoryPath };
+        return new LayoutPresetStore { Presets = presets, Warnings = warnings, FilePath = factoryPath };
     }
 
-    /// <summary>同 (场景,分辨率) 覆盖层胜出；新场景/新分辨率直接追加。</summary>
-    static (IReadOnlyList<LayoutPreset>, int) Merge(IReadOnlyList<LayoutPreset> factory, IReadOnlyList<LayoutPreset> overrides)
+    /// <summary>把一条预设直写出厂文件（同 (场景,分辨率) 整条替换）。
+    /// 同 RoiStore.Save 的原子写纪律：先写临时文件再 File.Move 替换，避免写到一半被中断导致截断损坏。</summary>
+    public static void Save(LayoutPreset preset, string path)
     {
-        var result = factory.ToList();
-        int applied = 0;
-        foreach (var o in overrides)
-        {
-            applied++;
-            int idx = result.FindIndex(p => p.Scene == o.Scene && p.Resolution == o.Resolution);
-            if (idx < 0) result.Add(o);
-            else result[idx] = o;
-        }
-        return (result, applied);
-    }
-
-    /// <summary>把一条预设写进覆盖层文件（同 (场景,分辨率) 整条替换）。出厂文件永不被程序改写。</summary>
-    public static void SaveOverride(string overridesPath, LayoutPreset preset)
-    {
-        var existing = File.Exists(overridesPath)
-            ? ReadFile(overridesPath, "布局预设覆盖层", new List<string>(), out _)
+        var existing = File.Exists(path)
+            ? ReadFile(path, "布局预设", new List<string>(), out _)
             : Array.Empty<LayoutPreset>();
         var next = Upsert(existing, preset);
-        string? dir = Path.GetDirectoryName(overridesPath);
+        string? dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        File.WriteAllText(overridesPath, ToJson(next), new UTF8Encoding(false));
-    }
-
-    /// <summary>从覆盖层删掉某条 = 该 (场景,分辨率) 恢复成出厂值。</summary>
-    public static void RemoveOverride(string overridesPath, string scene, string resolution)
-    {
-        if (!File.Exists(overridesPath)) return;
-        var existing = ReadFile(overridesPath, "布局预设覆盖层", new List<string>(), out _);
-        var next = existing.Where(p => !(p.Scene == scene && p.Resolution == resolution)).ToList();
-        File.WriteAllText(overridesPath, ToJson(next), new UTF8Encoding(false));
+        string tmp = path + ".tmp" + Guid.NewGuid().ToString("N");
+        File.WriteAllText(tmp, ToJson(next), new UTF8Encoding(false));
+        try
+        {
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { /* best-effort 清理，忽略失败 */ }
+            throw;
+        }
     }
 
     static IReadOnlyList<LayoutPreset> Upsert(IReadOnlyList<LayoutPreset> list, LayoutPreset preset)
@@ -201,7 +164,7 @@ public sealed class LayoutPresetStore
     {
         var sb = new StringBuilder();
         sb.Append("{\n  \"version\": 1,\n");
-        sb.Append("  \"note\": \"用户在配置页改的界面布局预设覆盖层；同 (场景,分辨率) 覆盖出厂 layout-presets.json。删掉本文件即恢复出厂值。\",\n");
+        sb.Append("  \"note\": \"界面布局预设（出厂唯一权威）；同 (场景,分辨率) 整条替换。配置页/校准窗直写本文件。\",\n");
         sb.Append("  \"presets\": {");
         bool firstScene = true;
         foreach (var g in presets.GroupBy(p => p.Scene))
@@ -229,7 +192,7 @@ public sealed class LayoutPresetStore
         return sb.ToString();
     }
 
-    /// <summary>读一份预设文件（出厂层与覆盖层同一 schema）。</summary>
+    /// <summary>读一份预设文件。</summary>
     static IReadOnlyList<LayoutPreset> ReadFile(string path, string what, List<string> warnings, out string? error)
     {
         error = null;

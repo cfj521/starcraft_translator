@@ -89,6 +89,22 @@ public class LayoutPresetTests
         Assert.Equal(0.6, chat.Y, 6);
     }
 
+    [Fact]
+    public void Save_UpsertsIntoFactory_AndRoundTrips()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            var p = new LayoutPreset("room", "16:9", Chat: new RelRect(0.2, 0.7, 0.3, 0.1));
+            LayoutPresetStore.Save(p, path);
+            var store = LayoutPresetStore.Load(path);
+            var found = store.Find("room", 1600, 900);
+            Assert.NotNull(found);
+            Assert.Equal(0.2, found!.Chat!.X, 6);
+        }
+        finally { File.Delete(path); }
+    }
+
     // ---- 房间名称 / 地图名称（room 场景新增的两块预设区域）----
 
     [Fact]
@@ -128,23 +144,6 @@ public class LayoutPresetTests
         Assert.Equal(21 / 1080d, p.GameName.H, 6);
         Assert.Equal(1085 / 1920d, p.MapName!.X, 6);
         Assert.Equal(447 / 1080d, p.MapName.Y, 6);
-    }
-
-    [Fact]
-    public void SaveOverride_GameNameMapName_RoundTrip()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "layout-ov-" + Guid.NewGuid() + ".json");
-        var p = new LayoutPreset("room", "1920x1080",
-            Chat: new RelRect(270 / 1920d, 744 / 1080d, 805 / 1920d, 241 / 1080d),
-            GameName: new RelRect(1085 / 1920d, 395 / 1080d, 360 / 1920d, 21 / 1080d),
-            MapName: new RelRect(1085 / 1920d, 447 / 1080d, 360 / 1920d, 21 / 1080d));
-        LayoutPresetStore.SaveOverride(path, p);
-        var back = LayoutPresetStore.Load(TempWith(Json), path);
-        var found = back.Find("room", 1920, 1080)!;
-        Assert.Equal(1085 / 1920d, found.GameName!.X, 6);
-        Assert.Equal(21 / 1080d, found.GameName.H, 6);
-        Assert.Equal(447 / 1080d, found.MapName!.Y, 6);
-        File.Delete(path);
     }
 
     [Fact]
@@ -203,82 +202,6 @@ public class LayoutPresetTests
             """));
         Assert.Empty(store.Presets);
         Assert.Contains(store.Warnings, w => w.Contains("既无 chat/roomNameList 也无 gameName/mapName"));
-    }
-
-    // ---- 覆盖层（用户在配置页改预设）----
-
-    [Fact]
-    public void Override_WinsPerSceneResolution_AndIsCounted()
-    {
-        var factory = TempWith(Json);
-        var over = TempWith("""
-            { "version": 1, "presets": { "browsing": {
-              "16:9": { "chat": [0.0052, 0.0185, 0.0156, 0.037] } } } }
-            """);
-
-        var store = LayoutPresetStore.Load(factory, over);
-
-        Assert.Equal(1, store.OverrideCount);
-        var p = store.Find("browsing", 1920, 1080)!;
-        Assert.Equal(0.0052, p.Chat!.X, 6);                       // 覆盖层胜出
-        Assert.True(p.RoomNameList is null);                       // 整条替换，不是逐字段合并
-        Assert.Equal(280 / 1920d, store.Find("browsing", 1920, 1200)!.Chat!.X, 6);   // 16:10 没被牵连，仍是出厂值
-    }
-
-    [Fact]
-    public void SaveOverride_RoundTripsThroughLoad()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "layout-ov-" + Guid.NewGuid() + ".json");
-        var p = new LayoutPreset("ingame", "3840x2160", new RelRect(16 / 3840d, 470 / 2160d, 2296 / 3840d, 830 / 2160d), null);
-
-        LayoutPresetStore.SaveOverride(path, p);
-        var back = LayoutPresetStore.Load(TempWith(Json), path);
-
-        var found = back.Find("ingame", 3840, 2160);
-        Assert.NotNull(found);
-        Assert.Equal(2296 / 3840d, found!.Chat!.W, 6);
-        Assert.True(found.RoomNameList is null);
-        Assert.Equal(1, back.OverrideCount);
-        File.Delete(path);
-    }
-
-    [Fact]
-    public void SaveOverride_Upserts_NotAppends()
-    {
-        var path = Path.Combine(Path.GetTempPath(), "layout-ov-" + Guid.NewGuid() + ".json");
-        LayoutPresetStore.SaveOverride(path, new LayoutPreset("room", "1920x1080", new RelRect(1 / 1920d, 2 / 1080d, 3 / 1920d, 4 / 1080d), null));
-        LayoutPresetStore.SaveOverride(path, new LayoutPreset("room", "1920x1080", new RelRect(9 / 1920d, 9 / 1080d, 9 / 1920d, 9 / 1080d), null));
-
-        var store = LayoutPresetStore.Load(TempWith(Json), path);
-        Assert.Equal(1, store.OverrideCount);
-        Assert.Equal(9 / 1920d, store.Find("room", 1920, 1080)!.Chat!.X, 6);
-        File.Delete(path);
-    }
-
-    [Fact]
-    public void RemoveOverride_FallsBackToFactory()
-    {
-        var factory = TempWith(Json);
-        var path = Path.Combine(Path.GetTempPath(), "layout-ov-" + Guid.NewGuid() + ".json");
-        LayoutPresetStore.SaveOverride(path, new LayoutPreset("browsing", "1920x1080", new RelRect(1 / 1920d, 1 / 1080d, 1 / 1920d, 1 / 1080d), null));
-
-        LayoutPresetStore.RemoveOverride(path, "browsing", "1920x1080");
-        var store = LayoutPresetStore.Load(factory, path);
-
-        Assert.Equal(0, store.OverrideCount);
-        Assert.Equal(280 / 1920d, store.Find("browsing", 1920, 1080)!.Chat!.X, 6);   // 回到出厂值
-        File.Delete(path);
-    }
-
-    [Fact]
-    public void BrokenOverride_DoesNotTakeFactoryDown()
-    {
-        var over = TempWith("{ presets: 这不是 json ");
-        var store = LayoutPresetStore.Load(TempWith(Json), over);
-
-        Assert.True(store.IsUsable, "覆盖层坏了不该连累出厂层");
-        Assert.NotNull(store.Find("browsing", 1920, 1080));
-        Assert.Contains(store.Warnings, w => w.Contains("已忽略覆盖层"));
     }
 
     // ---- 出厂预设回归 ----

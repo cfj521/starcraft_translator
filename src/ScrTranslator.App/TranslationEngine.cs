@@ -234,18 +234,17 @@ public sealed class TranslationEngine : IDisposable
         scene == GameScene.InGame && race != GameRace.Unknown ? $"{scene.Label()}·{race.Label()}" : scene.Label();
 
     /// <summary>
-    /// 重新从磁盘加载布局预设（出厂层 + 覆盖层）。
-    /// DI 里 LayoutPresetStore 是单例，配置页改了预设（写覆盖层）后若不重载，**运行中还用旧坐标**，
+    /// 重新从磁盘加载布局预设（直写出厂文件，单文件）。
+    /// DI 里 LayoutPresetStore 是单例，配置页改了预设（直写出厂文件）后若不重载，**运行中还用旧坐标**，
     /// 表现就是"我明明改了，画面上的框没变"。所以区域页保存后必须连着调这个。
     /// </summary>
     public void ReloadLayoutPresets()
     {
-        if (string.IsNullOrEmpty(_layout.FactoryPath)) return;
-        _layout = LayoutPresetStore.Load(_layout.FactoryPath,
-            string.IsNullOrEmpty(_layout.OverridesPath) ? null : _layout.OverridesPath);
+        if (string.IsNullOrEmpty(_layout.FilePath)) return;
+        _layout = LayoutPresetStore.Load(_layout.FilePath);
         RefreshRoiDerivedFlags();
         ResetChangeDetection();
-        _log.Log($"[probe] 布局预设已重新加载：{_layout.Presets.Count} 条（覆盖 {_layout.OverrideCount}）" +
+        _log.Log($"[probe] 布局预设已重新加载：{_layout.Presets.Count} 条" +
                  (_layout.LoadError is null ? "" : $" 错误={_layout.LoadError}"));
     }
 
