@@ -6,6 +6,7 @@ public sealed class ChatGptSubscriptionProvider : ITranslationProvider
     public ChatGptSubscriptionProvider(CodexResponsesClient client, ITokenSource tokens, Func<string> modelGetter)
     { _client = client; _tokens = tokens; _model = modelGetter; }
     public string Name => "chatgpt";
+    public EngineKind Kind => EngineKind.LLM;
     public ProviderStatus GetStatus()
     {
         // 凭据优先报（没登录时谈限流没意义）；凭据齐但正处 429 冷却期 → RateLimited，编排器跳过、不发请求。

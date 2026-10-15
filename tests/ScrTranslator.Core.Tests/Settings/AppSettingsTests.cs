@@ -9,9 +9,10 @@ public class AppSettingsTests
         Assert.Equal("StarCraft", a.General.TargetProcess);
         Assert.True(a.General.StartMinimized);
         Assert.Equal(20, a.Ocr.SceneDetectPollMs);
-        Assert.Equal(300, a.Ocr.TranslatePollMs);
+        Assert.Equal(200, a.Ocr.TranslatePollMs);
         Assert.InRange(a.Appearance.Opacity, 0.0, 1.0);
         Assert.Equal(0.8, a.Appearance.BackplateAlpha(), 3); // 文字底衬默认 80% 黑底
+        Assert.Equal(1.0, a.Appearance.FontWidthScale); // 字宽缩放默认正常
         Assert.Equal(TranslationProviderEntry.Aliyun, a.Translation.Providers[0].Id); // 默认池首位＝阿里云（先免费）
         Assert.Equal(4, a.Translation.Providers.Count); // 含新加的 OpenAI API 模式（已移除腾讯云）
     }
@@ -24,6 +25,15 @@ public class AppSettingsTests
     [InlineData(3.0, 1.0)]
     public void BackplateAlpha_Clamps(double set, double expected)
         => Assert.Equal(expected, new AppearanceSettings { BackplateOpacity = set }.BackplateAlpha(), 6);
+
+    [Theory]
+    [InlineData(0.5, 0.7)]    // 过小 → 下限
+    [InlineData(0.7, 0.7)]
+    [InlineData(1.0, 1.0)]
+    [InlineData(1.3, 1.3)]
+    [InlineData(2.0, 1.3)]    // 过大 → 上限
+    public void WidthScale_ClampsToRange(double set, double expected)
+        => Assert.Equal(expected, new AppearanceSettings { FontWidthScale = set }.WidthScale(), 6);
 
     [Fact] public void HotkeyDefaults_HasExactBindings()
     {

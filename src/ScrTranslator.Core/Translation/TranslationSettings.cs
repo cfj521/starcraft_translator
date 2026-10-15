@@ -22,10 +22,6 @@ public sealed record TranslationSettings
     public int TimeoutSeconds { get; init; } = 10;
     // 曾有 Active(DashScope|ChatGpt) 单选：provider 池化后废弃，由 Providers 的顺序+启用取代。
     // 旧 settings.json 里的 Active 字段反序列化时被忽略，SettingsStore 负责迁移到 Providers。
-    public bool TranslateChat { get; init; } = true;
-    public bool TranslateRoomName { get; init; } = true;
-    public bool TranslateMapInfo { get; init; } = true;
-    public bool TranslatePlayerId { get; init; } = false;
     public static TranslationSettings Default => new();
 
     /// <summary>默认池顺序：阿里云(免费) → OpenAI LLM(订阅) → 阿里云LLM(DashScope) → OpenAI LLM(API)。全部启用。</summary>

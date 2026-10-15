@@ -17,7 +17,7 @@ public static class PollInterval
 
     /// <summary>
     /// 捕获侧的帧转换节流上限。必须取两者中**更快**的那个：帧转换是识别与翻译共用的上游闸门，
-    /// 若按翻译的 300ms 节流，识别就算配了 20ms 也只能每 300ms 拿到一帧，被上游拖平。
+    /// 若按翻译的 200ms 节流，识别就算配了 20ms 也只能每 200ms 拿到一帧，被上游拖平。
     /// </summary>
     public static int CaptureFloor(OcrSettings ocr) => Math.Min(SceneDetect(ocr), Translate(ocr));
 }

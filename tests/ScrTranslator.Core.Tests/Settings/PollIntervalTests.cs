@@ -2,16 +2,16 @@ using ScrTranslator.Core.Settings;
 namespace ScrTranslator.Core.Tests.Settings;
 
 /// <summary>
-/// 两个正交轮询节拍：场景检测(默认 20ms) 与 翻译(默认 300ms)，各自钳制到 [10,1000]；
+/// 两个正交轮询节拍：场景检测(默认 20ms) 与 翻译(默认 200ms)，各自钳制到 [10,1000]；
 /// 外加一条关键不变量——捕获侧节流必须取两者较快值，否则识别会被翻译的慢节拍拖平。
 /// </summary>
 public class PollIntervalTests
 {
-    [Fact] public void Defaults_Are20And300()
+    [Fact] public void Defaults_Are20And200()
     {
         var ocr = new OcrSettings();
         Assert.Equal(20, PollInterval.SceneDetect(ocr));
-        Assert.Equal(300, PollInterval.Translate(ocr));
+        Assert.Equal(200, PollInterval.Translate(ocr));
     }
 
     [Fact] public void SceneDetect_And_Translate_AreIndependent()

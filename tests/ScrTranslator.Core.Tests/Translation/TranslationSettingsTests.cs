@@ -28,14 +28,4 @@ public class TranslationSettingsTests
         Assert.DoesNotContain("FastEngine", names);
         Assert.DoesNotContain("FastModel", names);
     }
-
-    [Fact]
-    public void Default_ContentScope_PlayerIdOff_OthersOn()
-    {
-        var s = TranslationSettings.Default;
-        Assert.True(s.TranslateChat);
-        Assert.True(s.TranslateRoomName);
-        Assert.True(s.TranslateMapInfo);
-        Assert.False(s.TranslatePlayerId); // 玩家 ID 默认不翻
-    }
 }

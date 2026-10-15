@@ -16,8 +16,8 @@ public sealed record OcrSettings
     /// 20ms 一次开销可忽略，换来"切界面立刻跟上"——慢了就出现"人已在房间内、还在按老 ROI 翻"的窗口期。</summary>
     public int SceneDetectPollMs { get; init; } = 20;
 
-    /// <summary>翻译轮询（毫秒）。默认 300：一轮 = 各 ROI 裁剪 + OCR + 翻译上屏。</summary>
-    public int TranslatePollMs { get; init; } = 300;
+    /// <summary>翻译轮询（毫秒）。默认 200：一轮 = 各 ROI 裁剪 + OCR + 翻译上屏。</summary>
+    public int TranslatePollMs { get; init; } = 200;
 
     // 曾有 ChatPollMs/OtherPollMs 两个值（按"场景里有没有聊天 ROI"二选一）：其他界面根本不翻译，
     // 给它单独配一个"翻译轮询"是无意义的假旋钮 → 收敛成上面这两个正交的轮询节拍。
@@ -31,6 +31,11 @@ public sealed record AppearanceSettings
     /// 中文回退系统默认字体，与游戏内观感一致）。经 pack URI 引用，见 OverlayWindow.ResolveFontFamily。</summary>
     public string FontFamily { get; init; } = "Kostar";
     public int FontSize { get; init; } = 18;
+    /// <summary>译文字宽缩放（0.7~1.3，默认 1.0＝正常）。OverlayWindow 对译文的 TextBlock 套水平 LayoutTransform
+    /// （ScaleY=1 高度不变），只影响译文行（双行模式的原文不拉伸），底衬 Border 会自适应译文宽度。</summary>
+    public double FontWidthScale { get; init; } = 1.0;
+    /// <summary>实际字宽缩放（0.7~1.3 钳制）。渲染层用它，避免各处各自 clamp。</summary>
+    public double WidthScale() => Math.Clamp(FontWidthScale, 0.7, 1.3);
     /// <summary>译文文字颜色（WPF 可解析的英文色名或 hex）。默认 #13FF1D = 从游戏对局内聊天截图
     /// （docs\scenes pictures\ingame-w-1.png）采样的聊天正文绿色核心值（最亮像素 19,255,29）。
     /// 存英文色名/hex 而非中文——ColorConverter 不认中文色名。解析见 OverlayWindow.ResolveFontColor。</summary>

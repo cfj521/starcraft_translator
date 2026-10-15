@@ -414,6 +414,7 @@ public sealed class TranslationEngine : IDisposable
             ? $"ROI[{_activeScene.Label()}]: (无)\n"
             : $"ROI[{_activeScene.Label()}]:\n" +
               string.Join("\n", roiNames.Select(n => $"  {n}  累计翻译={_cumTranslated.GetValueOrDefault(n)}行")) + "\n";
+        var recent = _orchestrator.RecentProviders;
         return
             $"场景: {SceneDisplay(_activeScene, _activeRace)}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
@@ -422,7 +423,8 @@ public sealed class TranslationEngine : IDisposable
             $"状态: {state}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
             (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
-            $"缓存: {_orchestrator.CacheCount}  术语表: {_glossaryCount}\n" +
+            $"引擎(最近3次): {(recent.Count == 0 ? "(无)" : string.Join("  ", recent))}\n" +
+            $"命中缓存: {_orchestrator.CacheCount}  命中术语表: {_glossaryCount}\n" +
             $"参考: {refs}";
     }
 
@@ -544,7 +546,7 @@ public sealed class TranslationEngine : IDisposable
             try { shotTcs.SetResult(frame.Copy()); }
             catch (Exception ex) { _log.Error($"[screenshot] 帧拷贝失败: {ex.Message}"); } // TCS 留挂起，续延不跑，无副作用
         }
-        // ── 两个独立节拍：场景检测(Ocr.SceneDetectPollMs，默认 20ms) 与 翻译(Ocr.TranslatePollMs，默认 300ms)。
+        // ── 两个独立节拍：场景检测(Ocr.SceneDetectPollMs，默认 20ms) 与 翻译(Ocr.TranslatePollMs，默认 200ms)。
         // 每帧实时读设置，改设置即时生效无需重启。识别很便宜要跑得快，翻译贵(OCR+LLM)按自己节拍跑。
         var ocr = _settings.Current.Ocr;
         int detectMs = PollInterval.SceneDetect(ocr), translateMs = PollInterval.Translate(ocr);

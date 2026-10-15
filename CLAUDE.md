@@ -21,7 +21,7 @@
 ## 关键约束（务必遵守）
 1. SC:R 须以**窗口化/无边框**运行，独占全屏会盖住悬浮窗——代码与文档都要体现这一前提。
 2. 悬浮窗必须**点击穿透**（`WS_EX_TRANSPARENT|WS_EX_LAYERED`），不能抢游戏焦点。
-3. **玩家 ID 默认不翻译**。`Translation.TranslateChat`/`TranslateRoomName`/`TranslateMapInfo`/`TranslatePlayerId` 四个开关仍在配置页，但房间名列表的**列式翻译**（按列拆房间名/地图/ID）已随用户 ROI 层移除，这四个开关**不再被管线消费**（保存了也不起作用）；房间名列表现在是单一识别区域，整块翻译。
+3. **房间名列表是单一识别区域、整块翻译**：列式翻译（按列拆房间名/地图/ID，各有独立开关）已随用户 ROI 层移除，四个内容范围开关 `TranslateChat`/`TranslateRoomName`/`TranslateMapInfo`/`TranslatePlayerId` 随之删除，不再有逐列开关——整块送翻译。
 4. 翻译提供方是 **provider 池**（阿里云免费机器翻译 + OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM），配置页可拖拽排序、每行启用/禁用，从上到下取第一个「启用且可用」的，不可用或额度耗尽自动跳下一个（默认先免费后 LLM）；命中术语表/缓存直出，省费用。**翻译为单级：一批未命中只发一次请求**（曾实现过"两级=快引擎临时态→主力定稿原地替换"，因任务很窄、低价模型单发已够好而移除；勿再引入）。
 5. API Key / OAuth token 本地 **DPAPI 加密**存储（`SecretStore`），除翻译/OAuth 请求外不上传数据。
 6. **纯读屏**——不注入游戏进程、不改游戏文件、不读游戏内存（降低封号风险）。

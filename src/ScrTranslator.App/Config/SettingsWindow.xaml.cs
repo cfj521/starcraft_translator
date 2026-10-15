@@ -130,7 +130,6 @@ public partial class SettingsWindow : Window
         Activated += (_, _) =>
         {
             LoadRoiList(); // 从校准窗口返回时刷新区域页
-            ReloadOutOfBandTranslationControls(); // F7/托盘可能在本窗口打开期间改了这三项，重新前台时同步，避免"应用"用陈旧值覆盖
             RefreshStatusText(); // "重新检测"按钮移除后，靠窗口激活时刷新连接状态（游戏窗口本身由 2s 看门狗自动探测）
         };
         Closed += OnWindowClosed;
@@ -237,10 +236,6 @@ public partial class SettingsWindow : Window
         RefreshStatusText();
 
         LoadProviderPool(s.Translation);
-        TranslateChatCheck.IsChecked = s.Translation.TranslateChat;
-        TranslateRoomNameCheck.IsChecked = s.Translation.TranslateRoomName;
-        TranslateMapInfoCheck.IsChecked = s.Translation.TranslateMapInfo;
-        TranslatePlayerIdCheck.IsChecked = s.Translation.TranslatePlayerId;
 
         SceneDetectPollBox.Text = s.Ocr.SceneDetectPollMs.ToString();
         TranslatePollBox.Text = s.Ocr.TranslatePollMs.ToString();
@@ -250,6 +245,7 @@ public partial class SettingsWindow : Window
         SelectFontColor(s.Appearance.FontColor);
         OpacitySlider.Value = s.Appearance.Opacity;
         BackplateSlider.Value = s.Appearance.BackplateOpacity;
+        WidthScaleSlider.Value = s.Appearance.FontWidthScale;
 
         LoadRoiList();
         LoadHotkeyList(s.Hotkeys);
@@ -544,14 +540,6 @@ public partial class SettingsWindow : Window
         {
             MessageBox.Show(this, $"删除失败：{ex.Message}", "删除区域");
         }
-    }
-
-    /// <summary>只重载可在本窗口打开期间"带外"改变的字段（玩家ID翻译），
-    /// 不重载其它控件——避免打断用户正在本窗口内编辑但尚未应用的其它字段。</summary>
-    private void ReloadOutOfBandTranslationControls()
-    {
-        var t = _holder.Current.Translation;
-        TranslatePlayerIdCheck.IsChecked = t.TranslatePlayerId;
     }
 
     private void LoadHotkeyList(IReadOnlyDictionary<string, HotkeyBinding> hotkeys)
@@ -862,6 +850,14 @@ public partial class SettingsWindow : Window
             BackplateValueText.Text = e.NewValue.ToString("P0");
     }
 
+    /// <summary>与 OnOpacityChanged / OnBackplateChanged 同形：滑块的 Value 在 InitializeComponent 期间就被赋值
+    /// （LoadSettings 里），那时 TextBlock 还没好，所以只能判 null 后再写。</summary>
+    private void OnWidthScaleChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (WidthScaleValueText is not null)
+            WidthScaleValueText.Text = e.NewValue.ToString("P0");
+    }
+
     /// <summary>调色板选中态：当前被选中的色块（蓝框标示）。null＝未选。</summary>
     private Border? _selectedFontSwatch;
     /// <summary>色块默认边框（未选中）。</summary>
@@ -972,10 +968,6 @@ public partial class SettingsWindow : Window
                 break;
             case "翻译":
                 LoadProviderPool(d.Translation); // 含 LLM 行的模型名重置
-                TranslateChatCheck.IsChecked = d.Translation.TranslateChat;
-                TranslateRoomNameCheck.IsChecked = d.Translation.TranslateRoomName;
-                TranslateMapInfoCheck.IsChecked = d.Translation.TranslateMapInfo;
-                TranslatePlayerIdCheck.IsChecked = d.Translation.TranslatePlayerId;
                 break;
             case "识别":
                 SceneDetectPollBox.Text = d.Ocr.SceneDetectPollMs.ToString();
@@ -990,6 +982,7 @@ public partial class SettingsWindow : Window
                 SelectFontColor(d.Appearance.FontColor);
                 OpacitySlider.Value = d.Appearance.Opacity;
                 BackplateSlider.Value = d.Appearance.BackplateOpacity;
+                WidthScaleSlider.Value = d.Appearance.FontWidthScale;
                 break;
         }
     }
@@ -1049,10 +1042,6 @@ public partial class SettingsWindow : Window
             DashScopeModel = dashScopeModel,
             ChatGptModel = chatGptModel,
             OpenAiApiModel = openAiApiModel,
-            TranslateChat = TranslateChatCheck.IsChecked == true,
-            TranslateRoomName = TranslateRoomNameCheck.IsChecked == true,
-            TranslateMapInfo = TranslateMapInfoCheck.IsChecked == true,
-            TranslatePlayerId = TranslatePlayerIdCheck.IsChecked == true,
         };
 
         var ocr = original.Ocr with
@@ -1068,6 +1057,7 @@ public partial class SettingsWindow : Window
             FontColor = SelectedFontColor() ?? original.Appearance.FontColor,
             Opacity = OpacitySlider.Value,
             BackplateOpacity = BackplateSlider.Value,
+            FontWidthScale = WidthScaleSlider.Value,
             // 显示模式已移除，恒为"仅译文"（ShowOriginalAndTranslation 保持 false）
             ShowOriginalAndTranslation = false,
         };

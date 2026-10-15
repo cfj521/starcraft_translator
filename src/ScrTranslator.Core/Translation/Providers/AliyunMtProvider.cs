@@ -15,6 +15,7 @@ public sealed class AliyunMtProvider : ITranslationProvider
     public AliyunMtProvider(HttpClient http, Func<(string, string)> creds) { _http = http; _creds = creds; }
 
     public string Name => "aliyun";
+    public EngineKind Kind => EngineKind.MT;
 
     public ProviderStatus GetStatus()
     {

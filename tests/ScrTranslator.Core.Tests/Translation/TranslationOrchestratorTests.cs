@@ -20,6 +20,7 @@ public class TranslationOrchestratorTests
         public bool Usable = true;          // false 时 GetStatus 报"无凭据"，编排器直接跳过、不发请求
         public bool RateLimited;            // true 时 GetStatus 报 RateLimited（429 冷却期），同样跳过
         public string Name { get; }
+        public EngineKind Kind { get; set; } = EngineKind.LLM;
         public FakeProvider(string name = "fake") { Name = name; }
         public ProviderStatus GetStatus() =>
             RateLimited ? ProviderStatus.RateLimited(Name + " 限流冷却中") :
@@ -41,6 +42,16 @@ public class TranslationOrchestratorTests
         cache ??= new TranslationCache();
         var errors = new List<string>();
         return (new TranslationOrchestrator(glo, cache, () => new ITranslationProvider[] { provider }, m => errors.Add(m)), cache, errors);
+    }
+
+    [Fact] public async Task RecentProviders_FormatsNameWithKind_AndCapsAt3()
+    {
+        var fake = new FakeProvider("aliyun") { Kind = EngineKind.MT };
+        var (o, _, _) = Make(fake);
+        for (int i = 0; i < 4; i++)
+            await o.TranslateAsync(new[] { $"line{i}" }, Ctx, CancellationToken.None);
+        // 4 次翻译只留最近 3 次，格式为"名称(MT/LLM)"
+        Assert.Equal(new[] { "aliyun(MT)", "aliyun(MT)", "aliyun(MT)" }, o.RecentProviders);
     }
 
     /// <summary>多 provider 池：按传入顺序回退。池测试用。</summary>

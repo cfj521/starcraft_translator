@@ -14,6 +14,14 @@ public enum ProviderState
     RateLimited,
 }
 
+/// <summary>翻译引擎的类型。MT＝免费机器翻译（快、便宜、质量一般），LLM＝大语言模型（慢、贵、质量好）。
+/// 供调试面板标注"最近用的引擎是 MT 还是 LLM"。</summary>
+public enum EngineKind
+{
+    MT,
+    LLM,
+}
+
 /// <summary><see cref="ITranslationProvider.GetStatus"/> 的返回值。<see cref="Detail"/> 给日志/界面展示原因。</summary>
 public sealed record ProviderStatus(ProviderState State, string Detail)
 {
@@ -37,6 +45,9 @@ public interface ITranslationProvider
 {
     /// <summary>provider 标识（settings 池里用它定位、日志里用它标注失败来源）。</summary>
     string Name { get; }
+
+    /// <summary>引擎类型：MT（免费机器翻译）或 LLM（大语言模型）。调试面板展示用。</summary>
+    EngineKind Kind { get; }
 
     /// <summary>本地快速可用性检查（**不联网**）：凭据是否齐、额度是否已知耗尽。
     /// 返回非 <see cref="ProviderState.Available"/> 时编排器直接跳过、不发请求。</summary>

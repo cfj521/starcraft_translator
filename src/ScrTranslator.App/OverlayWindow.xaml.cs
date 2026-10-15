@@ -61,6 +61,10 @@ public partial class OverlayWindow : Window
                 Foreground = ResolveFontColor(appearance.FontColor),
                 Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 6, ShadowDepth = 0, Opacity = 1 },
             };
+            // 字宽缩放：水平 LayoutTransform（高度不变）。只套译文 tb（双行模式的原文 source 不拉伸）；
+            // LayoutTransform 会改布局尺寸，故下方底衬 Border 随译文宽度自适应，不会字跑出底衬外。
+            double wScale = appearance.WidthScale();
+            if (wScale != 1.0) tb.LayoutTransform = new ScaleTransform(wScale, 1);
             UIElement visual = tb;
             if (appearance.ShowOriginalAndTranslation && !string.IsNullOrWhiteSpace(it.Source))
             {

@@ -131,15 +131,6 @@
                             </StackPanel>
                         </GroupBox>
 
-                        <GroupBox Header="内容范围">
-                            <StackPanel>
-                                <CheckBox x:Name="TranslateChatCheck" Content="翻译聊天" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="TranslateRoomNameCheck" Content="翻译房间名" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="TranslateMapInfoCheck" Content="翻译地图信息" Margin="0,2,0,2"/>
-                                <CheckBox x:Name="TranslatePlayerIdCheck" Content="翻译玩家 ID" Margin="0,2,0,2"/>
-                            </StackPanel>
-                        </GroupBox>
-
                         <GroupBox Header="质量与省流">
                             <StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
@@ -285,6 +276,11 @@
                                     </ComboBox>
                                     <TextBlock Text="字号" Style="{StaticResource RowLabel}" Width="50" Margin="16,0,8,0"/>
                                     <TextBox x:Name="FontSizeBox" Width="50"/>
+                                </StackPanel>
+                                <StackPanel Style="{StaticResource Row}">
+                                    <TextBlock Text="字宽" Style="{StaticResource RowLabel}"/>
+                                    <Slider x:Name="WidthScaleSlider" Width="200" Minimum="0.7" Maximum="1.3" Value="1" TickFrequency="0.05" ValueChanged="OnWidthScaleChanged"/>
+                                    <TextBlock x:Name="WidthScaleValueText" Text="100%" Margin="8,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="字体颜色" Style="{StaticResource RowLabel}"/>

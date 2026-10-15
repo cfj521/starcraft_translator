@@ -15,7 +15,6 @@ public class SettingsStoreTests
                     new TranslationProviderEntry(TranslationProviderEntry.ChatGpt, true),
                     new TranslationProviderEntry(TranslationProviderEntry.DashScope, false),
                 },
-                TranslatePlayerId = true,
             },
             Ocr = new OcrSettings { TranslatePollMs = 250 },
         };
@@ -28,7 +27,6 @@ public class SettingsStoreTests
         Assert.False(back.Translation.Providers[1].Enabled);   // DashScope 被禁用的状态保留
         Assert.Equal(TranslationProviderEntry.OpenAiApi, back.Translation.Providers[2].Id); // 迁移补上的新 provider
         Assert.True(back.Translation.Providers[2].Enabled);    // 默认启用
-        Assert.True(back.Translation.TranslatePlayerId);
         Assert.Equal(250, back.Ocr.TranslatePollMs);
         Assert.Equal(6, back.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk);
@@ -129,6 +127,6 @@ public class SettingsStoreTests
         Assert.True(back.General.DebugMode);              // 同文件里的其他配置没被牵连丢失
         Assert.Equal(7, back.Translation.TimeoutSeconds); // 仍存在的字段照常读回
         Assert.Equal(20, back.Ocr.SceneDetectPollMs);     // 已删字段 → 用新默认，而非旧值
-        Assert.Equal(300, back.Ocr.TranslatePollMs);
+        Assert.Equal(200, back.Ocr.TranslatePollMs);
     }
 }

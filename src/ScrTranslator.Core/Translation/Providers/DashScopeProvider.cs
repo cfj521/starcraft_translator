@@ -8,6 +8,7 @@ public sealed class DashScopeProvider : ITranslationProvider
     public DashScopeProvider(OpenAiCompatibleChatClient client, Func<string> modelGetter, Func<string> keyGetter)
     { _client = client; _model = modelGetter; _key = keyGetter; }
     public string Name => "dashscope";
+    public EngineKind Kind => EngineKind.LLM;
     public ProviderStatus GetStatus()
     {
         // 凭据优先报（没 key 时谈限流没意义）；key 齐但正处 429 冷却期 → RateLimited，编排器跳过、不发请求。

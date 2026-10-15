@@ -20,6 +20,8 @@ public sealed class TranslationOrchestrator
     private readonly TranslationCache _cache;
     private readonly Func<IReadOnlyList<ITranslationProvider>> _pool;
     private readonly Action<string>? _onError;
+    /// <summary>最近 3 次成功翻译所用的引擎（provider Name），供调试面板展示。FIFO，超 3 丢最旧。</summary>
+    private readonly Queue<string> _recentProviders = new();
 
     /// <param name="pool">取当前 provider 池（有序、已过滤启用项）。用 Func 是为了让"配置页拖拽排序/启用禁用"即时生效，不必重建本对象。</param>
     /// <param name="onError">provider 失败上报。不给这个回调就等于把失败吞进黑洞：
@@ -35,6 +37,16 @@ public sealed class TranslationOrchestrator
 
     /// <summary>当前 provider 池实例（调试面板逐个展示状态用；翻译仍走 <see cref="TranslateAsync"/> 的回退链）。</summary>
     public IReadOnlyList<ITranslationProvider> Providers => _pool();
+
+    /// <summary>最近 3 次成功翻译所用的引擎（`名称(MT/LLM)` 形式），按时间从旧到新。调试面板展示用。</summary>
+    public IReadOnlyList<string> RecentProviders => _recentProviders.ToArray();
+
+    private void RecordProvider(ITranslationProvider p)
+    {
+        var name = $"{p.Name}({p.Kind})";
+        _recentProviders.Enqueue(name);
+        while (_recentProviders.Count > 3) _recentProviders.Dequeue();
+    }
 
     public async Task<TranslateOutcome> TranslateAsync(
         IReadOnlyList<string> koreanLines, TranslationContext ctx, CancellationToken ct)
@@ -65,6 +77,7 @@ public sealed class TranslationOrchestrator
             {
                 zh = await p.TranslateAsync(missText, ctx, ct);
                 error = null;
+                RecordProvider(p); // 记最近 3 次引擎（调试面板）
                 break; // 成功，用这个 provider 的结果
             }
             catch (Exception ex)

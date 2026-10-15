@@ -100,9 +100,6 @@ Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密�
   ⓘ LLM 节流（429 限流冷却）     已实现、静默——被限流自动冷却并让位池内下一个 provider（详见 日志 页）
 ```
 
-> **"翻译玩家 ID"** 落地为配置项 `Translation.TranslatePlayerId`（默认 `false`）。
-> RoomList 型 ROI 的 ID 列是否翻译，取此开关；房间名/地图列始终按各自勾选项翻译。
-
 ### 3.3 OCR
 > 实现对齐：OCR **仅 PaddleOCR**（RapidOcrNet + 韩文 mobile ONNX 模型随包分发），已取代 Windows 内置 OCR 方案，**无需系统语言包**，识别语言固定韩文。
 
@@ -156,7 +153,7 @@ Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密�
 ### 3.6 外观 Appearance
 ```
 悬浮层
-  字体            [ 微软雅黑 ▼ ]   字号 [ 18 ]
+  字体            [ 微软雅黑 ▼ ]   字号 [ 18 ]   字宽 [──────●──] 100%   ← 译文字宽 0.7~1.3（高度不变；双行模式原文不拉）
   文字颜色        [■ 白]   描边/底色 [■ 半透明黑]
   不透明度        [──────●──]  80%      ← 整条（文字+底衬）的统一透明度
   文字底衬        [──────●──]  80%      ← 每条译文一块圆角黑底的 alpha，0=不画；纯白字压不住浅色游戏画面（已实现）
@@ -250,8 +247,8 @@ Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密�
 class AppSettings {
     GeneralSettings General;      // TargetProcess / AutoStart / StartMinimized / AutoTranslateOnLaunch
     TranslationSettings Translation;
-    OcrSettings Ocr;              // SceneDetectPollMs=200 / TranslatePollMs=500（两个正交节拍；旧 ChatPollMs/OtherPollMs 与预处理/灵敏度字段均已移除，见 §3.3 注）
-    AppearanceSettings Appearance;// FontFamily / FontSize / Opacity / BackplateOpacity(文字底衬 0.8) / ShowOriginalAndTranslation
+    OcrSettings Ocr;              // SceneDetectPollMs=20 / TranslatePollMs=200（两个正交节拍；旧 ChatPollMs/OtherPollMs 与预处理/灵敏度字段均已移除，见 §3.3 注）
+    AppearanceSettings Appearance;// FontFamily / FontSize / FontWidthScale(译文字宽 0.7~1.3) / Opacity / BackplateOpacity(文字底衬 0.8) / ShowOriginalAndTranslation
     Dictionary<string, HotkeyBinding> Hotkeys;  // 功能名 → (Modifiers, Vk)，默认 F9/Ctrl+F9/F10/F8/Ctrl+F8
     // 识别区域现为唯一来源：出厂 layout-presets.json（直读直写，DEBUG 模式；RelRect 相对 0~1）
     // 场景识别参考保留覆盖层（scene-refs.json + scene-overrides.json），见 TECH_DESIGN 3.9
@@ -263,15 +260,10 @@ class TranslationSettings {
     string ChatGptModel;          // 默认 gpt-6-luna
     string OpenAiApiModel;        // 默认 gpt-6-luna
     int TimeoutSeconds;           // 整轮(快+质量共用)超时，默认 10
-
-    bool TranslateChat   = true;
-    bool TranslateRoomName = true;
-    bool TranslateMapInfo  = true;
-    bool TranslatePlayerId = false;  // ★ 对应"翻译玩家ID"开关（纯配置项，无热键）
 }
 ```
 
-> 实现：`TranslateChat`/`TranslateRoomName`/`TranslateMapInfo`/`TranslatePlayerId` 四个开关**不再被管线消费**（列式翻译已随用户 ROI 层移除，识别区域是预设、整块必翻）；
+> 实现：`TranslateChat`/`TranslateRoomName`/`TranslateMapInfo`/`TranslatePlayerId` 四个内容范围开关**已删除**（列式翻译随用户 ROI 层移除，识别区域是预设、整块必翻，无逐列开关）；
 > 另有一道**内容闸门** `KoreanText.ContainsHangul`：整行不含谚文（地图名、`Top vs Bottom`、表头…）
 > 直接不进翻译管线 —— 提示词要求"纯英文原样保留"，送过去只会拿回同样的英文，白花请求还显示成噪声。
 > API Key / OAuth token 持久化前用 DPAPI 加密（`SecretStore`，与 `settings.json` 分离）。

@@ -74,7 +74,7 @@
 - **关键点**：
   - 通过进程名/窗口标题查找 SC:R 窗口（`StarCraft`，进程 `StarCraft.exe`）。
   - 帧转 `SoftwareBitmap` / `System.Drawing.Bitmap` 供下游裁剪。
-  - 控制抓帧频率（非每帧，按轮询间隔，如 300–500ms 一次，聊天区可更快）。
+  - 控制抓帧频率（非每帧，按轮询间隔：场景检测 20ms / 翻译 200ms 两个正交节拍，捕获侧取较快者）。
   - 窗口丢失/最小化时暂停并重试。
 - **接口**：`event Action<CaptureFrame> FrameArrived;` `Start(IntPtr hwnd)` / `Stop()`。
 
@@ -140,7 +140,7 @@
   }
   ```
 - **编排逻辑**（每条文本）：
-  1. **预处理/分流**：若该 ROI 列为"ID 列" 且配置 `TranslatePlayerId=false`（默认）→ 不翻译，原样输出；开关打开则照常翻译。聊天/房间名/地图列各有独立开关。
+  1. **内容闸门**：整行不含谚文（地图名、`Top vs Bottom`、表头、ID 等）→ 不翻译，原样输出（提示词要求"纯英文原样保留"）；含谚文才进后续管线。识别区域是预设、整块必翻，无逐列开关。
   2. **术语表**：整句或分词命中 GLOSSARY → 直接映射（无网络）。
   3. **缓存**：`MemoryCache<原文, 译文>` 命中 → 直出。
   4. **翻译 provider 池**（`ITranslationProvider`：阿里云机器翻译 ＋ OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM）按序回退批量调用 → 上屏中文。**单级**（术语/缓存未命中即走 provider 池回退链，取第一个「启用且可用」）。
@@ -269,7 +269,6 @@ starcraft_translator/
 | 韩文小字识别 | ROI 裁剪 + 预处理（放大/二值化）；PaddleOCR 升级 |
 | 黑话翻译质量 | 术语表 + LLM 上下文 prompt |
 | 刷屏性能/费用 | 变化检测 + 文本去重 + 缓存 + 术语表直出 + 一批一请求 |
-| ID 是否翻译 | 配置项 `TranslatePlayerId`(默认 false)；RoomList 的 ID 列据此决定（纯配置，无热键） |
 | 分辨率适配 | 相对坐标 / 按分辨率存多套 ROI |
 | 判断当前是哪个界面 | **图像指纹**：每场景两块静态区，块均值 RGB + 容差命中比例（见 3.9），不用 OCR |
 | 游戏内识别不稳 | 只用种族装饰板做锚点，参考按种族分套；缺该分辨率参考时报错而非硬猜 |
