@@ -30,11 +30,9 @@ public sealed class TranslationEngine : IDisposable
     private LayoutPresetStore _layout;   // 界面布局预设：聊天框与房间列表网格（可重载，配置页改了要重读盘）
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
-    private RoiConfig _cfg;
     private readonly TranslationOrchestrator _orchestrator;
     private readonly SettingsHolder _settings;
     private readonly string _glossaryHint;
-    private readonly string _roisJsonPath;
     // 启动时人在哪个界面是**未知**的，所以初值取 Other（不翻译）而不是猜"寻找房间"：
     // 猜错会拿别的场景的 ROI 去 OCR 当前画面，翻出一堆垃圾。识别每 SceneDetectPollMs 跑一次，
     // 拿到第一帧后最多 2 个节拍就会自动落到真实场景。
@@ -78,7 +76,7 @@ public sealed class TranslationEngine : IDisposable
     private const double MinLineConfidence = 0.75;
     private readonly Dictionary<int, List<OverlayItem>> _displayedPerRoi = new();
     private string _roiSetSignature = "";
-    private bool _roiAvailable; // 当前活动场景是否存在且 bucket 非空；活动场景/ReloadRois 变化时重算
+    private bool _roiAvailable; // 当前活动场景是否有预设区域；活动场景/重载预设变化时重算
     private bool _anySceneCalibrated; // 至少一个场景校准过 ROI——F9 的启动前置条件（与"当前场景"无关）
     private bool _roiMissingLogged; // 确保"ROI 缺失"只记一次日志，避免刷屏
     /// <summary>per-ROI 累计翻译行数（跨帧累计的成功翻译行数，键=ROI 名称）。调试面板逐行显示。</summary>
@@ -112,12 +110,11 @@ public sealed class TranslationEngine : IDisposable
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
     public TranslationEngine(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, LayoutPresetStore layout, FileLogger log, OverlayWindow overlay,
-        string roisJsonPath, string sceneRefsPath, string sceneOverridesPath,
+        string sceneRefsPath, string sceneOverridesPath,
         TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug)
     {
         _capture = capture; _ocr = ocr; _scene = scene; _layout = layout; _log = log; _overlay = overlay; _debug = debug;
-        _roisJsonPath = roisJsonPath; _sceneRefsPath = sceneRefsPath; _sceneOverridesPath = sceneOverridesPath;
-        _cfg = RoiStore.Load(roisJsonPath);
+        _sceneRefsPath = sceneRefsPath; _sceneOverridesPath = sceneOverridesPath;
         RefreshRoiDerivedFlags();
         _orchestrator = orchestrator; _settings = settings;
         _glossaryCount = glossary.Entries.Count;
@@ -131,34 +128,22 @@ public sealed class TranslationEngine : IDisposable
         _debugTimer.Start();
     }
 
-    /// <summary>从 _cfg 算派生标志：当前场景有没有 ROI（决定翻不翻）+ 有没有任何一个场景校准过
+    /// <summary>从布局预设算派生标志：当前场景有没有预设区域（决定翻不翻）+ 有没有任何预设
     /// （决定 F9 能不能启动）。后者必须与"当前场景"解耦——启动瞬间还没识别，当前场景是 Other，
-    /// 若按前者判断就会误报"尚未校准"。
-    /// 房间列表预设网格也算"有内容可翻"：它不需要校准，所以不能因为 rois.json 里没这条就判场景不可用。</summary>
+    /// 若按前者判断就会误报"尚未校准"。预设是唯一来源，不再看 rois.json。</summary>
     private void RefreshRoiDerivedFlags()
     {
-        // 注意判的是"有没有**区域**"而不是"有没有 bucket"：删空一个场景后可能留下空桶，
-        // 按桶判会误报可用，结果每帧静默什么都不翻。
-        _roiAvailable = (_cfg.Scenes.TryGetValue(SceneId, out var rois) && rois.Count > 0)
-            || _layout.HasScene(SceneId);
-        _anySceneCalibrated = _cfg.Scenes.Values.Any(rois => rois.Count > 0)
-            || _layout.Presets.Count > 0;
+        _roiAvailable = _layout.HasScene(SceneId);
+        _anySceneCalibrated = _layout.Presets.Count > 0;
     }
 
     /// <summary>
-    /// 该 (场景, 分辨率) 本轮实际要跑的 ROI = 校准的 ROI ＋ 房间列表预设网格（若该场景有预设且当前分辨率有值）。
-    ///
-    /// 预设**叠加**而不是顶替校准：用户自己校准的 RoomList 框可能是有意框在别处（例如右侧详情面板的
-    /// Game Name / Map Name 两行），直接吞掉会让已有校准莫名失效。不想要重复的那条，
-    /// 在配置→区域页选中它点"删除"即可——行为可解释，不搞隐式优先级。
+    /// 该 (场景, 分辨率) 本轮实际要跑的识别区域 = 布局预设的 parts（若该场景有预设）。
+    /// 预设是唯一来源：没有用户校准框、也没有合并，Find 不到就返回空列表（该场景不翻译）。
     /// </summary>
-    private IReadOnlyList<Roi> EffectiveRois(IReadOnlyList<Roi> rois, int frameWidth, int frameHeight)
+    private IReadOnlyList<(string Name, RelRect Rect)> presetParts(int frameWidth, int frameHeight)
     {
-        var preset = _layout.Find(SceneId, frameWidth, frameHeight);
-        if (preset is null) return rois;
-        var merged = rois.ToList();
-        merged.AddRange(preset.ToRois());
-        return merged;
+        return _layout.Find(SceneId, frameWidth, frameHeight)?.Parts() ?? Array.Empty<(string, RelRect)>();
     }
 
     /// <summary>
@@ -247,17 +232,6 @@ public sealed class TranslationEngine : IDisposable
     /// 顺带给出种族，既方便实机核对"识别对不对"，也为将来"按种族选聊天框"留好接口。</summary>
     static string SceneDisplay(GameScene scene, GameRace race) =>
         scene == GameScene.InGame && race != GameRace.Unknown ? $"{scene.Label()}·{race.Label()}" : scene.Label();
-
-    /// <summary>重新从磁盘加载 rois.json：校准窗口/区域页保存后由 App.xaml.cs 调用，使运行中的探测无需重启即可用上新区域。
-    /// 单飞探测（每帧同步处理，OnFrame 靠 _busy 互斥），故直接整体重赋值 _cfg/_roiAvailable 已足够安全，无需加锁。</summary>
-    public void ReloadRois()
-    {
-        _cfg = RoiStore.Load(_roisJsonPath);
-        RefreshRoiDerivedFlags();
-        _roiMissingLogged = false;
-        ResetChangeDetection();
-        _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable} 已校准场景={_anySceneCalibrated}");
-    }
 
     /// <summary>
     /// 重新从磁盘加载布局预设（出厂层 + 覆盖层）。
@@ -557,7 +531,7 @@ public sealed class TranslationEngine : IDisposable
             _log.Log($"[probe] 首帧到达 {frame.Width}x{frame.Height}（捕获→处理链路已通）");
         }
         _lastFrameWH = $"{frame.Width}x{frame.Height}";
-        // 分辨率不缓存：ROI 相对坐标直接用当前帧宽高换算像素（见下方 EffectiveRois/ToPixels），每帧天然拿到最新分辨率。
+        // 分辨率不缓存：预设相对坐标直接用当前帧宽高换算像素（见下方 presetParts/ToPixels），每帧天然拿到最新分辨率。
         // 全屏窗口下 WGC 帧池最大尺寸=整屏，任何游戏内分辨率都装得下，无需检测变化/重建捕获。
         // 截图(F6)：有挂起的请求就消费它，交出本帧深拷贝（原帧在本方法 finally 里 Dispose，不能直接引用）。
         TaskCompletionSource<SKBitmap>? shotTcs;
@@ -614,17 +588,16 @@ public sealed class TranslationEngine : IDisposable
                 _log.Debug("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
-            var sceneRois = RoiStore.SelectRois(_cfg, SceneId);
-            // ── 每 ROI 独立收集 OCR 结果（下标=该 ROI 在当前有效列表里的位置）──
+            // ── 每 part 独立收集 OCR 结果（下标=该 part 在当前预设列表里的位置）──
             var rois = new List<(string name, List<string> lines, List<RectangleF> bounds)>();
-            foreach (var roi in EffectiveRois(sceneRois, frame.Width, frame.Height))
+            foreach (var (name, rect) in presetParts(frame.Width, frame.Height))
             {
-                Rectangle px = RoiStore.ToPixels(roi.Rect, frame.Width, frame.Height);
+                Rectangle px = rect.ToPixels(frame.Width, frame.Height);
                 if (px.Width <= 0 || px.Height <= 0) continue;
                 using var sub = new SKBitmap(px.Width, px.Height);
                 if (!frame.ExtractSubset(sub, new SKRectI(px.Left, px.Top, px.Right, px.Bottom)))
                 {
-                    _log.Warn($"[{roi.Name}] 裁剪失败 rect={px}");
+                    _log.Warn($"[{name}] 裁剪失败 rect={px}");
                     continue;
                 }
                 var res = await _ocr.RecognizeAsync(sub);
@@ -632,17 +605,17 @@ public sealed class TranslationEngine : IDisposable
                 var bounds = new List<RectangleF>();
                 foreach (var line in res.Lines)
                 {
-                    _log.Debug($"[{roi.Name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
+                    _log.Debug($"[{name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
                     if (line.Confidence < MinLineConfidence)
                     {
-                        _log.Debug($"[{roi.Name}][skip-low-conf] \"{line.Text}\" conf={line.Confidence:F2}");
+                        _log.Debug($"[{name}][skip-low-conf] \"{line.Text}\" conf={line.Confidence:F2}");
                         continue;
                     }
                     // 内容闸门：无韩文的行（地图名、"Top vs Bottom"、表头…）根本不进翻译管线。
                     // 提示词要求"纯英文/数字/符号原样保留"，送过去只会拿回同样的英文 → 白花 API 且悬浮层显示一堆英文。
                     if (!KoreanText.ContainsHangul(line.Text))
                     {
-                        _log.Debug($"[{roi.Name}][skip-无韩文] \"{line.Text}\"");
+                        _log.Debug($"[{name}][skip-无韩文] \"{line.Text}\"");
                         continue;
                     }
                     bounds.Add(new RectangleF(
@@ -651,12 +624,12 @@ public sealed class TranslationEngine : IDisposable
                     lines.Add(line.Text);
                 }
                 if (res.Lines.Count == 0)
-                    _log.Debug($"[{roi.Name}] (空)");
+                    _log.Debug($"[{name}] (空)");
                 // 两帧共识：背景噪音一帧就过去，聊天文字持续在屏——只有连续两帧同文本的行才进下游。
                 var (stableLines, stableBounds) = _stabilizer.Stabilize(rois.Count, lines, bounds);
                 if (stableLines.Count != lines.Count)
-                    _log.Debug($"[{roi.Name}][stable] OCR={lines.Count} 稳定={stableLines.Count}");
-                rois.Add((roi.Name, stableLines, stableBounds));
+                    _log.Debug($"[{name}][stable] OCR={lines.Count} 稳定={stableLines.Count}");
+                rois.Add((name, stableLines, stableBounds));
             }
             // 调试面板逐行显示"被选用"的 ROI：本帧实际进 OCR 的有效列表（含布局预设合并）。
             _lastEffectiveRoiNames = rois.Select(r => r.name).ToArray();

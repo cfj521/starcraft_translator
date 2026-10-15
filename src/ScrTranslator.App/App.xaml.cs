@@ -170,7 +170,6 @@ public partial class App : Application
             sp.GetRequiredService<LayoutPresetStore>(),
             sp.GetRequiredService<FileLogger>(),
             sp.GetRequiredService<OverlayWindow>(),
-            roisPath,
             sceneRefsPath,
             sceneOverridesPath,
             sp.GetRequiredService<TranslationOrchestrator>(),
@@ -299,7 +298,7 @@ public partial class App : Application
             if (calibrationWindow is not null) { calibrationWindow.Activate(); return; }
             calibrationWindow = new Calibration.CalibrationWindow(
                 roisPath, log,
-                () => { probe.ReloadRois(); probe.ReloadLayoutPresets(); }, // 校准窗现在两个文件都写（用户框→rois.json，预设框→layout-overrides.json）
+                () => probe.ReloadLayoutPresets(), // 校准窗直写预设（layout-presets.json），重载即生效
                 _host.Services.GetRequiredService<SceneRecognizer>(),
                 probe.Layout); // 传 probe 重载后的实例，而非 DI 单例——保存后 ReloadLayoutPresets 只更新 probe 字段，DI 单例是启动时的旧值
             calibrationWindow.Closed += (_, _) => calibrationWindow = null;
@@ -327,9 +326,8 @@ public partial class App : Application
                 probe.ResetChangeDetection,
                 _hotkeys!, // 此时尚未 new，但 OpenSettings 只会在其后被调用（字段，非局部变量捕获）
                 () => probe.CurrentSceneId,
-                // 区域页保存后两个都要重载：rois.json（校准条目）与 layout-presets/overrides（预设条目）。
-                // 少调后者会出现"我明明改了预设，画面上的框没变"——DI 里的 store 是单例，不重读盘就是旧值。
-                () => { probe.ReloadRois(); probe.ReloadLayoutPresets(); },
+                // 区域页保存后重载预设（直写出厂 layout-presets.json）；DI 里的 store 是单例，不重读盘就是旧值。
+                () => probe.ReloadLayoutPresets(),
                 probe.Layout);   // 区域页要展示布局预设行；传 probe 重载后的实例而非 DI 单例（保存后 DI 单例是启动旧值）
             settingsWindow.Closed += (_, _) => settingsWindow = null;
             settingsWindow.Show();
