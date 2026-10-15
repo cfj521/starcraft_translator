@@ -9,7 +9,7 @@ namespace ScrTranslator.Tools.LayoutCheck;
 ///
 /// 为什么需要：这些数值是"内置的、不需要用户校准"的，一旦游戏改版让框子偏移，
 /// 症状是"某些行没翻/翻进隔壁列"，很难反推到预设坐标上。画出来一眼就看见。
-/// 用的就是运行时同一套加载与换算代码（LayoutPresetStore + ToRois），所以核验结果不会与实机脱节。
+/// 用的就是运行时同一套加载与换算代码（LayoutPresetStore + Parts），所以核验结果不会与实机脱节。
 ///
 /// 用法：dotnet run -p tools/LayoutCheck -- "&lt;截图路径&gt;" [输出目录]
 /// </summary>
@@ -43,7 +43,7 @@ internal static class Program
         {
             Console.WriteLine($"  该场景没有 {res} 预设。已收录：");
             foreach (var p in store.Presets.Where(p => p.Scene == scene))
-                Console.WriteLine($"    {p.Resolution}  chat={(p.Chat is null ? "-" : $"[{p.Chat.X},{p.Chat.Y},{p.Chat.Width},{p.Chat.Height}]")}  grid={(p.RoomList is null ? "-" : "有")}");
+                Console.WriteLine($"    {p.Resolution}  chat={(p.Chat is null ? "-" : $"[{p.Chat.X},{p.Chat.Y},{p.Chat.W},{p.Chat.H}]")}  roomNameList={(p.RoomNameList is null ? "-" : "有")}");
             return 2;
         }
 
@@ -52,35 +52,17 @@ internal static class Program
         using (var cc = new SKCanvas(canvas))
         {
             cc.DrawBitmap(bm, 0, 0);
-            // 先按运行时口径展开成 ROI，再乘回像素——核验的就是实机那套换算
+            // 先按运行时口径展开成 parts，再乘回像素——核验的就是实机那套换算
             var (fw, fh) = (bm.Width, bm.Height);
-            foreach (var roi in preset.ToRois())
+            foreach (var (name, rect) in preset.Parts())
             {
-                var box = new SKRect((float)(roi.Rect.X * fw), (float)(roi.Rect.Y * fh),
-                                     (float)((roi.Rect.X + roi.Rect.W) * fw), (float)((roi.Rect.Y + roi.Rect.H) * fh));
-                bool isGrid = roi.Type == "RoomList";
-                using var pen = Stroke(isGrid ? SKColors.Lime : SKColors.Magenta, lw);
-                using var fill = Fill(isGrid ? SKColors.Lime : SKColors.Magenta);
+                var box = new SKRect((float)(rect.X * fw), (float)(rect.Y * fh),
+                                     (float)((rect.X + rect.W) * fw), (float)((rect.Y + rect.H) * fh));
+                using var pen = Stroke(SKColors.Magenta, lw);
+                using var fill = Fill(SKColors.Magenta);
                 cc.DrawRect(box, fill);
                 cc.DrawRect(box, pen);
-                Console.WriteLine($"  {roi.Name}: 像素 [{box.Left:F0},{box.Top:F0} {box.Width:F0}×{box.Height:F0}]");
-
-                if (isGrid && preset.RoomList is { } g)
-                {
-                    using var row = Stroke(new SKColor(0, 255, 0, 120), 1);
-                    for (int r = 0; r <= g.Rows; r++)
-                        cc.DrawLine(box.Left, box.Top + r * g.RowHeight, box.Right, box.Top + r * g.RowHeight, row);
-                    using var colP = Stroke(SKColors.Red, lw);
-                    using var mapP = Stroke(SKColors.Cyan, lw);
-                    foreach (var (c, kind) in g.Columns.Select(c => (c, c.Kind.ToString())))
-                    {
-                        var (s, e) = c.ToRelative(g.Width);
-                        var col = new SKRect((float)(box.Left + s * box.Width), box.Top,
-                                             (float)(box.Left + e * box.Width), box.Bottom);
-                        cc.DrawRect(col, kind == "RoomName" ? colP : mapP);
-                        Console.WriteLine($"    列 {kind}: 像素 [{col.Left:F0}..{col.Right:F0}] 宽 {col.Width:F0}");
-                    }
-                }
+                Console.WriteLine($"  {name}: 像素 [{box.Left:F0},{box.Top:F0} {box.Width:F0}×{box.Height:F0}]");
             }
         }
 
@@ -88,7 +70,7 @@ internal static class Program
         using (var img = SKImage.FromBitmap(canvas))
         using (var d = img.Encode(SKEncodedImageFormat.Jpeg, 78))
             File.WriteAllBytes(outPath, d.ToArray());
-        Console.WriteLine($"✓ 叠加图 {outPath}  （绿=房间列表网格 紫=聊天框 红=房间名列 青=地图名列 横线=行界）");
+        Console.WriteLine($"✓ 叠加图 {outPath}  （品红=预设识别区域）");
         return 0;
     }
 
