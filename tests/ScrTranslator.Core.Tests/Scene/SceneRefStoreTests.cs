@@ -11,6 +11,10 @@ internal static class SceneRefJson
 {
     public const string ResKey = "1920x1080";
     public const int Blocks = 4; // 2x2
+    // 测试区域用 1920x1080 下 8x8 的绝对像素，换算成相对 0~1 值（与出厂 scene-refs.json 同一口径）。
+    public const double RelW = 8.0 / 1920, RelH = 8.0 / 1080;
+    /// <summary>测试区域相对 rect 的 JSON 文本（[0,0,w,h]）。</summary>
+    public static string RelRect => $"[0,0,{RelW:R},{RelH:R}]";
 
     /// <summary>整块同一灰度的指纹（4 块 ×RGB）。</summary>
     public static byte[] Flat(byte v) => new byte[] { v, v, v, v, v, v, v, v, v, v, v, v };
@@ -26,14 +30,14 @@ internal static class SceneRefJson
             return $$"""
                      "{{g.Key}}": { "label": "{{g.Key}}", {{race}}"gameScene": "{{first.gameScene}}",
                        "resolutions": { "{{ResKey}}": { "source": "test", "regions": [
-                         { "name": "r", "rect": [0,0,8,8], "blockPx": 4, "blocks": [2,2],
+                         { "name": "r", "rect": {{RelRect}}, "blockPx": 4, "blocks": [2,2],
                            "data": "{{Convert.ToBase64String(first.data)}}" } ] } } }
                 """;
         });
         // 出厂层现在强制要求 integrity，所以测试样本也得走同一套哈希实现。
         var entries = scenes.Select(s => new SceneRefIntegrity.Entry(
             SceneRefIntegrity.Key(s.id, ResKey, "r"),
-            SceneRefIntegrity.Geometry(0, 0, 8, 8, 4, 2, 2), s.data)).ToList();
+            SceneRefIntegrity.Geometry(0, 0, RelW, RelH, 4, 2, 2), s.data)).ToList();
         var integrity = withIntegrity
             ? $$"""
                   "integrity": { "algorithm": "sha256", "bytes": {{SceneRefIntegrity.DataBytes(entries)}},
@@ -188,9 +192,9 @@ public class SceneRefStoreTests
     [Fact]
     public void Load_EditedGeometry_AlsoFailsIntegrity()
     {
-        // 只挪 1 像素坐标、数据一字不改，也必须失效：带着错位指纹上场是最难查的一类误判。
+        // 只挪一点相对坐标、数据一字不改，也必须失效：带着错位指纹上场是最难查的一类误判。
         var json = SceneRefJson.Build(new[] { ("browsing", "browsing", (string?)null, SceneRefJson.Flat(10)) });
-        var store = SceneRefStore.Load(SceneRefJson.TempPathWith(json.Replace("\"rect\": [0,0,8,8]", "\"rect\": [1,0,8,8]")));
+        var store = SceneRefStore.Load(SceneRefJson.TempPathWith(json.Replace(SceneRefJson.RelRect, "[0.5,0,0.5,0.5]")));
         Assert.False(store.IsUsable);
         Assert.Contains("校验不通过", store.LoadError);
     }

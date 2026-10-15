@@ -8,8 +8,8 @@ public class AppSettingsTests
         var a = new AppSettings();
         Assert.Equal("StarCraft", a.General.TargetProcess);
         Assert.True(a.General.StartMinimized);
-        Assert.Equal(200, a.Ocr.SceneDetectPollMs);
-        Assert.Equal(500, a.Ocr.TranslatePollMs);
+        Assert.Equal(20, a.Ocr.SceneDetectPollMs);
+        Assert.Equal(300, a.Ocr.TranslatePollMs);
         Assert.InRange(a.Appearance.Opacity, 0.0, 1.0);
         Assert.Equal(0.8, a.Appearance.BackplateAlpha(), 3); // 文字底衬默认 80% 黑底
         Assert.Equal(TranslationProviderEntry.Aliyun, a.Translation.Providers[0].Id); // 默认池首位＝阿里云（先免费）
@@ -31,11 +31,13 @@ public class AppSettingsTests
         Assert.Equal(HotkeyKeys.VK_F9, m["ToggleTranslate"].Vk);
         Assert.Equal(HotkeyKeys.VK_F9, m["Calibrate"].Vk);
         Assert.Equal(HotkeyKeys.MOD_CONTROL, m["Calibrate"].Modifiers);
-        Assert.Equal(HotkeyKeys.VK_F10, m["OpenConfig"].Vk);
+        Assert.Equal(HotkeyKeys.VK_F7, m["OpenConfig"].Vk);
         Assert.Equal(HotkeyKeys.MOD_NONE, m["OpenConfig"].Modifiers);
         Assert.Equal(HotkeyKeys.VK_F8, m["ToggleDebug"].Vk);
         Assert.Equal(HotkeyKeys.VK_F8, m["CopyDebug"].Vk);
         Assert.Equal(HotkeyKeys.MOD_CONTROL, m["CopyDebug"].Modifiers);
-        Assert.Equal(5, m.Count);
+        Assert.Equal(HotkeyKeys.VK_F6, m["Screenshot"].Vk);
+        Assert.Equal(HotkeyKeys.MOD_NONE, m["Screenshot"].Modifiers);
+        Assert.Equal(6, m.Count);
     }
 }

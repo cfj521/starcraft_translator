@@ -30,8 +30,9 @@ public class SettingsStoreTests
         Assert.True(back.Translation.Providers[2].Enabled);    // 默认启用
         Assert.True(back.Translation.TranslatePlayerId);
         Assert.Equal(250, back.Ocr.TranslatePollMs);
-        Assert.Equal(5, back.Hotkeys.Count);
+        Assert.Equal(6, back.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk);
+        Assert.Equal(HotkeyKeys.VK_F7, back.Hotkeys["OpenConfig"].Vk);
         Assert.Equal(HotkeyKeys.MOD_NONE, back.Hotkeys["OpenConfig"].Modifiers);
     }
 
@@ -56,10 +57,11 @@ public class SettingsStoreTests
         """;
         var path = Path.GetTempFileName(); File.WriteAllText(path, json);
         var back = SettingsStore.Load(path);
-        // 缺失的 ToggleDebug/CopyDebug 用默认补上 → 共 5 项
-        Assert.Equal(5, back.Hotkeys.Count);
+        // 缺失的 ToggleDebug/CopyDebug/Screenshot 用默认补上 → 共 6 项
+        Assert.Equal(6, back.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F8, back.Hotkeys["ToggleDebug"].Vk);
         Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["CopyDebug"].Modifiers);
+        Assert.Equal(HotkeyKeys.VK_F6, back.Hotkeys["Screenshot"].Vk);
         // 用户自定义的绑定不被默认覆盖
         Assert.Equal(123u, back.Hotkeys["ToggleTranslate"].Vk);
         Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["ToggleTranslate"].Modifiers);
@@ -87,12 +89,12 @@ public class SettingsStoreTests
         Assert.Equal(HotkeyKeys.VK_F8, back.Hotkeys["ToggleDebug"].Vk);
         Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["Calibrate"].Vk);
         Assert.Equal(HotkeyKeys.MOD_CONTROL, back.Hotkeys["Calibrate"].Modifiers);
-        Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk);
-        Assert.Equal(5, back.Hotkeys.Count);
+        Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk); // 老配置 F9，迁移不升级 ToggleTranslate
+        Assert.Equal(6, back.Hotkeys.Count);
         // 幂等：再存再读一次，结果不变。
         SettingsStore.Save(back, path);
         var again = SettingsStore.Load(path);
-        Assert.Equal(5, again.Hotkeys.Count);
+        Assert.Equal(6, again.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F8, again.Hotkeys["ToggleDebug"].Vk);
         Assert.Equal(HotkeyKeys.VK_F9, again.Hotkeys["Calibrate"].Vk);
     }
@@ -126,7 +128,7 @@ public class SettingsStoreTests
         Assert.Equal("StarCraft", back.General.TargetProcess);
         Assert.True(back.General.DebugMode);              // 同文件里的其他配置没被牵连丢失
         Assert.Equal(7, back.Translation.TimeoutSeconds); // 仍存在的字段照常读回
-        Assert.Equal(200, back.Ocr.SceneDetectPollMs);    // 已删字段 → 用新默认，而非旧值
-        Assert.Equal(500, back.Ocr.TranslatePollMs);
+        Assert.Equal(20, back.Ocr.SceneDetectPollMs);     // 已删字段 → 用新默认，而非旧值
+        Assert.Equal(300, back.Ocr.TranslatePollMs);
     }
 }

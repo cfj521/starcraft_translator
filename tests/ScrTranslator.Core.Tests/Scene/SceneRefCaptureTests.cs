@@ -9,11 +9,11 @@ namespace ScrTranslator.Core.Tests.Scene;
 public class SceneRefCaptureTests
 {
     [Fact]
-    public void ScaleRegions_ScalesGeometryAndKeepsBlockCount()
+    public void FittingRegions_ScalesGeometryAndKeepsBlockCount()
     {
         // 统一 H/1080 拉伸：1920×1080 → 3840×2160（sy=2），无裁剪
         var baseRegions = new[] { new SceneRefRegion("hud-deco-left", 8, 235, 1148, 415, 4, 287, 104) };
-        var scaled = SceneRefCapture.ScaleRegions(baseRegions, 3840, 2160, centerCrop: false);
+        var scaled = SceneRefCapture.FittingRegions(baseRegions, 3840, 2160, centerCrop: false);
         var s = scaled.Single();
 
         Assert.Equal(16, s.X);          // 8×2
@@ -27,11 +27,11 @@ public class SceneRefCaptureTests
     }
 
     [Fact]
-    public void ScaleRegions_SmallerScaleKeepsBlockCount()
+    public void FittingRegions_SmallerScaleKeepsBlockCount()
     {
         // 统一 H/1080 拉伸：1920×1080 → 960×540（sy=0.5），块数仍固定，块宽 = 8/4 = 2
         var baseRegions = new[] { new SceneRefRegion("r", 0, 0, 16, 16, 4, 4, 4) };
-        var scaled = SceneRefCapture.ScaleRegions(baseRegions, 960, 540, centerCrop: false);
+        var scaled = SceneRefCapture.FittingRegions(baseRegions, 960, 540, centerCrop: false);
         Assert.Equal(2, scaled[0].BlockPx);
         Assert.Equal(8, scaled[0].Width);   // 16×0.5
         Assert.Equal(4, scaled[0].BlocksX); // 块数固定

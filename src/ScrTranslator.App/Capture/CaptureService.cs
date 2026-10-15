@@ -24,7 +24,7 @@ public sealed class CaptureService : IDisposable
     private GraphicsCaptureSession? _session;
     private DateTime _lastFrame = DateTime.MinValue;
     private volatile int _minIntervalMs = 400;
-    /// <summary>帧转换节流(毫秒)。由 Phase1Probe 每帧按 PollInterval.CaptureFloor(识别与翻译两个节拍里较快者)
+    /// <summary>帧转换节流(毫秒)。由 TranslationEngine 每帧按 PollInterval.CaptureFloor(识别与翻译两个节拍里较快者)
     /// 刷新；volatile 保证捕获线程读到最新值。默认 400 保持旧行为。</summary>
     public int MinIntervalMs { get => _minIntervalMs; set => _minIntervalMs = value; }
 

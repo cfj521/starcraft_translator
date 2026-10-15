@@ -4,14 +4,14 @@ using System.Text.Json;
 namespace ScrTranslator.Core.Scene;
 
 /// <summary>
-/// 某场景在某分辨率下的**界面布局预设**：聊天框 + （仅寻找房间）房间名列表区域 + （仅房间内）房间名称/地图名称。
+/// 某场景在某个宽高比档（16:9 / 16:10 / 4:3）下的**界面布局预设**：聊天框 + （仅寻找房间）房间名列表区域 + （仅房间内）房间名称/地图名称。
 ///
-/// 为什么内置而不是校准：这些面板在给定分辨率下位置和尺寸是死的，让用户每次拖框既没准头也没必要。
+/// 为什么内置而不是校准：这些面板在给定宽高比下位置和尺寸是死的，让用户每次拖框既没准头也没必要。
 /// 数值来源：1080p 从 docs/scenes pictures 的截图量得，2K/4K 按 4/3、2 倍等比推算并用叠加图逐档目视核验。
 /// 校准/编辑能力保留，用于改版时覆盖。
 ///
-/// 坐标一律是**相对该分辨率的 0~1 比例**（与 rois.json 同一口径），且**分辨率必须精确匹配**——
-/// UI 不是严格等比缩放，借用邻近分辨率的预设会让框子整体偏移。
+/// 坐标一律是**相对内容区的 0~1 比例**（与 rois.json 同一口径）。UI 等比缩放，同一宽高比档跨分辨率通用，
+/// 运行时按当前帧宽高比选最接近的预设档（见 <see cref="LayoutPresetStore.Find"/>），不按分辨率分档。
 /// </summary>
 public sealed record LayoutPreset(string Scene, string Resolution, RelRect? Chat, RelRect? RoomNameList = null,
     RelRect? GameName = null, RelRect? MapName = null)
@@ -28,13 +28,13 @@ public sealed record LayoutPreset(string Scene, string Resolution, RelRect? Chat
     {
         var list = new List<Roi>();
         if (Chat is { } chat)
-            list.Add(new Roi($"{PresetNamePrefix}Chat", "Chat", chat));
+            list.Add(new Roi($"{PresetNamePrefix}Chat", chat));
         if (RoomNameList is { } rnl)
-            list.Add(new Roi($"{PresetNamePrefix}RoomNameList", "RoomNameList", rnl));
+            list.Add(new Roi($"{PresetNamePrefix}RoomNameList", rnl));
         if (GameName is { } gn)
-            list.Add(new Roi($"{PresetNamePrefix}GameName", "GameName", gn));
+            list.Add(new Roi($"{PresetNamePrefix}GameName", gn));
         if (MapName is { } mn)
-            list.Add(new Roi($"{PresetNamePrefix}MapName", "MapName", mn));
+            list.Add(new Roi($"{PresetNamePrefix}MapName", mn));
         return list;
     }
 
@@ -50,7 +50,7 @@ public sealed record LayoutPreset(string Scene, string Resolution, RelRect? Chat
 
 /// <summary>
 /// layout-presets.json 的只读加载器（出厂层）。与 <see cref="SceneRefStore"/> 同一套纪律：
-/// 加载失败不抛异常、原因进 <see cref="LoadError"/>；分辨率精确匹配，缺该档就回落到校准 ROI。
+/// 加载失败不抛异常、原因进 <see cref="LoadError"/>；按宽高比选最接近的预设档，缺该场景就回落到校准 ROI。
 /// </summary>
 public sealed class LayoutPresetStore
 {
@@ -73,8 +73,35 @@ public sealed class LayoutPresetStore
 
     public bool IsUsable => LoadError is null && Presets.Count > 0;
 
+    /// <summary>按宽高比找最接近的预设档。Resolution 字段支持 "16:9"（比例）或 "1920x1080"（分辨率）两种格式。</summary>
     public LayoutPreset? Find(string sceneId, int width, int height)
-        => Presets.FirstOrDefault(p => p.Scene == sceneId && p.Resolution == $"{width}x{height}");
+    {
+        if (height <= 0) return null;
+        double ratio = (double)width / height;
+        LayoutPreset? best = null;
+        double bestDiff = double.MaxValue;
+        foreach (var p in Presets)
+        {
+            if (p.Scene != sceneId) continue;
+            double presetRatio = ParseRatio(p.Resolution);
+            if (presetRatio <= 0) continue;
+            double diff = Math.Abs(presetRatio - ratio);
+            if (diff < bestDiff) { bestDiff = diff; best = p; }
+        }
+        return best;
+    }
+
+    /// <summary>解析分辨率/比例键为宽高比。"16:9"→16/9, "1920x1080"→1920/1080。无法解析返回 0。</summary>
+    internal static double ParseRatio(string key)
+    {
+        var colon = key.Split(':');
+        if (colon.Length == 2 && int.TryParse(colon[0], out int cw) && int.TryParse(colon[1], out int ch) && ch > 0)
+            return (double)cw / ch;
+        var x = key.Split('x');
+        if (x.Length == 2 && int.TryParse(x[0], out int rw) && int.TryParse(x[1], out int rh) && rh > 0)
+            return (double)rw / rh;
+        return 0;
+    }
 
     /// <summary>该场景是否有任何预设（用于"没校准也能翻"的可用性判断）。</summary>
     public bool HasScene(string sceneId) => Presets.Any(p => p.Scene == sceneId);

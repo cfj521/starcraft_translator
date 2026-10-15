@@ -19,154 +19,140 @@ public static class RoiStore
         return new Rectangle(x, y, w, h);
     }
 
-    public static SceneBucket SelectBucket(RoiConfig cfg, string scene, int width, int height)
+    /// <summary>取某场景的 ROI 列表。相对坐标跨分辨率通用（等比缩放），不按分辨率匹配。</summary>
+    public static IReadOnlyList<Roi> SelectRois(RoiConfig cfg, string scene)
     {
-        if (!cfg.Scenes.TryGetValue(scene, out var buckets) || buckets.Count == 0)
+        if (!cfg.Scenes.TryGetValue(scene, out var rois) || rois.Count == 0)
             throw new InvalidOperationException($"未找到场景 '{scene}' 的 ROI 配置（rois.json 缺失/损坏/为空——请先校准）");
-        string key = $"{width}x{height}";
-        foreach (var b in buckets)
-            if (b.Resolution == key) return b;
-
-        double target = (double)width / height;
-        SceneBucket? best = null;
-        double bestDiff = double.MaxValue;
-        foreach (var b in buckets)
-        {
-            var parts = b.Resolution.Split('x');
-            if (parts.Length == 2 &&
-                int.TryParse(parts[0], out int bw) && int.TryParse(parts[1], out int bh) && bh != 0)
-            {
-                double diff = Math.Abs((double)bw / bh - target);
-                if (diff < bestDiff) { bestDiff = diff; best = b; }
-            }
-        }
-        return best ?? buckets[0];
+        return rois;
     }
 
     /// <summary>读取 rois.json；文件缺失/损坏(截断/非法 JSON)一律**不抛异常**，返回空-但-合法的 RoiConfig
-    /// (Scenes 为空字典)，避免校准/探测因一份坏文件而崩溃启动。</summary>
+    /// (Scenes 为空字典)，避免校准/探测因一份坏文件而崩溃启动。
+    /// 兼容旧结构：老文件里场景键下是 buckets 数组（按分辨率分档），新结构是 rois 数组。
+    /// 旧结构的各档 ROI 是同一份相对坐标（等比缩放，冗余存储），取首档即可。</summary>
     public static RoiConfig Load(string jsonPath)
     {
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
-            var scenes = new Dictionary<string, IReadOnlyList<SceneBucket>>();
+            var scenes = new Dictionary<string, IReadOnlyList<Roi>>();
             foreach (var sceneProp in doc.RootElement.GetProperty("scenes").EnumerateObject())
             {
-                var bucketList = new List<SceneBucket>();
-                foreach (var bucketEl in sceneProp.Value.GetProperty("buckets").EnumerateArray())
+                IReadOnlyList<Roi> rois;
+                if (sceneProp.Value.TryGetProperty("rois", out var newRoisEl) && newRoisEl.ValueKind == JsonValueKind.Array)
                 {
-                    string res = bucketEl.GetProperty("resolution").GetString()!;
-                    var rois = new List<Roi>();
-                    foreach (var roiEl in bucketEl.GetProperty("rois").EnumerateArray())
-                    {
-                        var r = roiEl.GetProperty("rect");
-                        var rect = new RelRect(
-                            r[0].GetDouble(), r[1].GetDouble(), r[2].GetDouble(), r[3].GetDouble());
-                        IReadOnlyList<RoiColumn>? columns = null;
-                        if (roiEl.TryGetProperty("columns", out var colsEl) && colsEl.ValueKind == JsonValueKind.Array)
-                        {
-                            var list = new List<RoiColumn>();
-                            foreach (var c in colsEl.EnumerateArray())
-                                list.Add(new RoiColumn(
-                                    c.GetProperty("start").GetDouble(),
-                                    c.GetProperty("end").GetDouble(),
-                                    ColumnKinds.Parse(c.GetProperty("kind").GetString() ?? "Other")));
-                            columns = list;
-                        }
-                        rois.Add(new Roi(
-                            roiEl.GetProperty("name").GetString()!,
-                            roiEl.GetProperty("type").GetString()!,
-                            rect, columns));
-                    }
-                    bucketList.Add(new SceneBucket(res, rois));
+                    // 新结构：场景键下直接是 rois 数组。
+                    rois = ParseRois(newRoisEl);
                 }
+                else if (sceneProp.Value.TryGetProperty("buckets", out var bucketsEl) && bucketsEl.ValueKind == JsonValueKind.Array)
+                {
+                    // 旧结构兼容：buckets 数组，取首档的 rois（各档是同一份相对坐标，冗余）。
+                    rois = Array.Empty<Roi>();
+                    foreach (var b in bucketsEl.EnumerateArray())
+                    {
+                        if (b.TryGetProperty("rois", out var r) && r.ValueKind == JsonValueKind.Array)
+                        {
+                            rois = ParseRois(r);
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    rois = Array.Empty<Roi>();
+                }
+
                 // 场景键归一：老校准文件里的 custom_games_listing / waiting_room / in_game
                 // 直接映射到 browsing / room / ingame，用户不必因为改名重校准。
                 // 新旧键并存时以规范键那条为准。
                 string sceneKey = Scene.GameSceneIds.Normalize(sceneProp.Name);
-                if (!scenes.ContainsKey(sceneKey) || sceneProp.Name == sceneKey) scenes[sceneKey] = bucketList;
+                if (!scenes.ContainsKey(sceneKey) || sceneProp.Name == sceneKey) scenes[sceneKey] = rois;
             }
             return new RoiConfig(scenes);
         }
         catch
         {
             // 文件不存在 / 权限问题 / JSON 截断或非法 / schema 缺字段 —— 一律兜底为空配置，不崩调用方。
-            return new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>());
+            return new RoiConfig(new Dictionary<string, IReadOnlyList<Roi>>());
         }
     }
 
+    static IReadOnlyList<Roi> ParseRois(JsonElement roisEl)
+    {
+        var rois = new List<Roi>();
+        foreach (var roiEl in roisEl.EnumerateArray())
+        {
+            var r = roiEl.GetProperty("rect");
+            var rect = new RelRect(
+                r[0].GetDouble(), r[1].GetDouble(), r[2].GetDouble(), r[3].GetDouble());
+            IReadOnlyList<RoiColumn>? columns = null;
+            if (roiEl.TryGetProperty("columns", out var colsEl) && colsEl.ValueKind == JsonValueKind.Array)
+            {
+                var list = new List<RoiColumn>();
+                foreach (var c in colsEl.EnumerateArray())
+                    list.Add(new RoiColumn(
+                        c.GetProperty("start").GetDouble(),
+                        c.GetProperty("end").GetDouble(),
+                        ColumnKinds.Parse(c.GetProperty("kind").GetString() ?? "Other")));
+                columns = list;
+            }
+            rois.Add(new Roi(
+                roiEl.GetProperty("name").GetString()!,
+                rect, columns));
+        }
+        return rois;
+    }
+
     /// <summary>
-    /// 替换（或重命名）指定 (场景, 分辨率bucket, 序号) 的那一条 ROI，返回**新配置**（record 不可变，原对象不动）。
-    /// 定位不到（场景/bucket/序号越界）时返回 null —— 调用方据此提示，绝不静默改到别的条目上。
+    /// 替换（或重命名）指定 (场景, 序号) 的那一条 ROI，返回**新配置**（record 不可变，原对象不动）。
+    /// 定位不到（场景/序号越界）时返回 null —— 调用方据此提示，绝不静默改到别的条目上。
     /// 给配置页的"编辑区域"用：允许在不进校准窗的情况下改名字/类型/像素矩形。
     /// </summary>
-    public static RoiConfig? ReplaceRoi(RoiConfig cfg, string scene, string resolution, int index, Roi updated)
+    public static RoiConfig? ReplaceRoi(RoiConfig cfg, string scene, int index, Roi updated)
     {
-        if (!Locate(cfg, scene, resolution, index, out var buckets, out var bucket, out var rois)) return null;
+        if (!cfg.Scenes.TryGetValue(scene, out var rois) || index < 0 || index >= rois.Count) return null;
         var edited = rois.ToList();
         edited[index] = updated;
-        return Rebuild(cfg, scene, buckets, ReplaceAt(buckets, bucket, new SceneBucket(bucket.Resolution, edited)));
+        return Rebuild(cfg, scene, edited);
     }
 
-    /// <summary>删除指定 (场景, 分辨率bucket, 序号) 的那一条 ROI；定位失败同样返回 null。</summary>
-    public static RoiConfig? RemoveRoi(RoiConfig cfg, string scene, string resolution, int index)
+    /// <summary>删除指定 (场景, 序号) 的那一条 ROI；定位失败同样返回 null。</summary>
+    public static RoiConfig? RemoveRoi(RoiConfig cfg, string scene, int index)
     {
-        if (!Locate(cfg, scene, resolution, index, out var buckets, out var bucket, out var rois)) return null;
+        if (!cfg.Scenes.TryGetValue(scene, out var rois) || index < 0 || index >= rois.Count) return null;
         var kept = rois.ToList();
         kept.RemoveAt(index);
-        return Rebuild(cfg, scene, buckets, ReplaceAt(buckets, bucket, new SceneBucket(bucket.Resolution, kept)));
+        return Rebuild(cfg, scene, kept);
     }
 
     /// <summary>
-    /// 把一条 ROI 从某场景挪到另一个场景（区域页"改场景"用）：从源 (场景,分辨率) 桶删除，
-    /// 追加到目标场景的**同分辨率**桶（没有就新建）。定位失败返回 null，绝不静默复制出第二条。
+    /// 把一条 ROI 从某场景挪到另一个场景（区域页"改场景"用）：从源场景删除，追加到目标场景。
+    /// 定位失败返回 null，绝不静默复制出第二条。
     /// 用途：误在别的界面按了 F8，条目落错了场景——改个场景即可，不必删了重画。
     /// </summary>
-    public static RoiConfig? MoveRoi(RoiConfig cfg, string fromScene, string resolution, int index, string toScene)
+    public static RoiConfig? MoveRoi(RoiConfig cfg, string fromScene, int index, string toScene)
     {
         if (fromScene == toScene) return cfg;
-        if (!Locate(cfg, fromScene, resolution, index, out var fromBuckets, out var fromBucket, out var rois)) return null;
-
+        if (!cfg.Scenes.TryGetValue(fromScene, out var rois) || index < 0 || index >= rois.Count) return null;
         var moved = rois[index];
         var shrunk = rois.ToList();
         shrunk.RemoveAt(index);
 
-        var map = new Dictionary<string, IReadOnlyList<SceneBucket>>(cfg.Scenes);
-        map[fromScene] = ReplaceAt(fromBuckets, fromBucket, new SceneBucket(fromBucket.Resolution, shrunk));
+        var map = new Dictionary<string, IReadOnlyList<Roi>>(cfg.Scenes);
+        map[fromScene] = shrunk;
 
-        map.TryGetValue(toScene, out var toBuckets);
-        toBuckets ??= Array.Empty<SceneBucket>();
-        var target = toBuckets.FirstOrDefault(b => b.Resolution == resolution);
-        map[toScene] = target is null
-            ? toBuckets.Append(new SceneBucket(resolution, new[] { moved })).ToList()
-            : ReplaceAt(toBuckets, target, new SceneBucket(resolution, target.Rois.Append(moved).ToList()));
+        map.TryGetValue(toScene, out var toRois);
+        toRois ??= Array.Empty<Roi>();
+        map[toScene] = toRois.Append(moved).ToList();
 
         return new RoiConfig(map);
     }
 
-    static bool Locate(RoiConfig cfg, string scene, string resolution, int index,
-        out IReadOnlyList<SceneBucket> buckets, out SceneBucket bucket, out IReadOnlyList<Roi> rois)
+    static RoiConfig Rebuild(RoiConfig cfg, string scene, IReadOnlyList<Roi> rois)
     {
-        buckets = Array.Empty<SceneBucket>(); bucket = null!; rois = Array.Empty<Roi>();
-        if (index < 0) return false;
-        // TryGetValue 的 out 参数是可空类型（键存在但值可能是 null），直接赋给非空 out 会报 CS8601，显式兜一下。
-        if (!cfg.Scenes.TryGetValue(scene, out var foundBuckets) || foundBuckets is null) return false;
-        buckets = foundBuckets;
-        var found = buckets.FirstOrDefault(b => b.Resolution == resolution);
-        if (found is null) return false;
-        bucket = found;
-        rois = found.Rois;
-        return index < rois.Count;
-    }
-
-    static IReadOnlyList<SceneBucket> ReplaceAt(IReadOnlyList<SceneBucket> buckets, SceneBucket oldB, SceneBucket newB)
-        => buckets.Select(b => ReferenceEquals(b, oldB) ? newB : b).ToList();
-
-    static RoiConfig Rebuild(RoiConfig cfg, string scene, IReadOnlyList<SceneBucket> oldBuckets, IReadOnlyList<SceneBucket> newBuckets)
-    {
-        var map = new Dictionary<string, IReadOnlyList<SceneBucket>>(cfg.Scenes);
-        map[scene] = newBuckets;
+        var map = new Dictionary<string, IReadOnlyList<Roi>>(cfg.Scenes);
+        map[scene] = rois;
         return new RoiConfig(map);
     }
 
@@ -175,18 +161,14 @@ public static class RoiStore
     public static void Save(RoiConfig cfg, string jsonPath)
     {
         var scenes = new Dictionary<string, object>();
-        foreach (var (scene, buckets) in cfg.Scenes)
+        foreach (var (scene, rois) in cfg.Scenes)
         {
             scenes[scene] = new
             {
-                buckets = buckets.Select(b => new
-                {
-                    resolution = b.Resolution,
-                    rois = b.Rois.Select(r => r.Columns is null
-                        ? (object)new { name = r.Name, type = r.Type, rect = new[] { r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H } }
-                        : new { name = r.Name, type = r.Type, rect = new[] { r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H },
-                                columns = r.Columns.Select(c => new { start = c.RelStart, end = c.RelEnd, kind = c.Kind.ToString() }) })
-                })
+                rois = rois.Select(r => r.Columns is null
+                    ? (object)new { name = r.Name, rect = new[] { r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H } }
+                    : new { name = r.Name, rect = new[] { r.Rect.X, r.Rect.Y, r.Rect.W, r.Rect.H },
+                            columns = r.Columns.Select(c => new { start = c.RelStart, end = c.RelEnd, kind = c.Kind.ToString() }) })
             };
         }
         var root = new { scenes };

@@ -8,8 +8,8 @@ namespace ScrTranslator.Core.Settings;
 /// </summary>
 public static class PollInterval
 {
-    public const int MinMs = 100;
-    public const int MaxMs = 5000;
+    public const int MinMs = 10;
+    public const int MaxMs = 1000;
 
     public static int SceneDetect(OcrSettings ocr) => Math.Clamp(ocr.SceneDetectPollMs, MinMs, MaxMs);
 
@@ -17,7 +17,7 @@ public static class PollInterval
 
     /// <summary>
     /// 捕获侧的帧转换节流上限。必须取两者中**更快**的那个：帧转换是识别与翻译共用的上游闸门，
-    /// 若按翻译的 500ms 节流，识别就算配了 200ms 也只能每 500ms 拿到一帧，被上游拖平。
+    /// 若按翻译的 300ms 节流，识别就算配了 20ms 也只能每 300ms 拿到一帧，被上游拖平。
     /// </summary>
     public static int CaptureFloor(OcrSettings ocr) => Math.Min(SceneDetect(ocr), Translate(ocr));
 }

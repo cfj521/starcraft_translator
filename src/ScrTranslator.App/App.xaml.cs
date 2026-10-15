@@ -163,7 +163,7 @@ public partial class App : Application
         });
 
         builder.Services.AddSingleton(sp => new TrayService(sp.GetRequiredService<FileLogger>()));
-        builder.Services.AddSingleton(sp => new Phase1Probe(
+        builder.Services.AddSingleton(sp => new TranslationEngine(
             sp.GetRequiredService<CaptureService>(),
             sp.GetRequiredService<IOcrEngine>(),
             sp.GetRequiredService<SceneRecognizer>(),
@@ -197,7 +197,7 @@ public partial class App : Application
         log.Info($"──── SC:R Translator v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version} 启动 ────");
         log.Info($"[app] 配置={settingsPath} | ROI={roisPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
 
-        var probe = _host.Services.GetRequiredService<Phase1Probe>();
+        var probe = _host.Services.GetRequiredService<TranslationEngine>();
         bool running = false;
         void ToggleProbe()
         {
@@ -244,7 +244,7 @@ public partial class App : Application
         }
         _trayService.ToggleProbe = ToggleProbe;
 
-        // Phase 5 异常恢复：看门狗/识别事件不再弹气泡（游戏前台看不到），统一靠 Phase1Probe 自己的
+        // Phase 5 异常恢复：看门狗/识别事件不再弹气泡（游戏前台看不到），统一靠 TranslationEngine 自己的
         // 日志（_log.Info/Warn/Error，含翻译失败）+ 配置→日志页 查看。这里只做一件事：
         // 托盘"开启/关闭翻译"文本随实际运行态变化——自动续译(首连/重连)→开，窗口丢失→关。
         // （最小化/还原不改运行态——探测仍在捕获翻译，只是暂不显示）
@@ -301,7 +301,7 @@ public partial class App : Application
                 roisPath, log,
                 () => { probe.ReloadRois(); probe.ReloadLayoutPresets(); }, // 校准窗现在两个文件都写（用户框→rois.json，预设框→layout-overrides.json）
                 _host.Services.GetRequiredService<SceneRecognizer>(),
-                _host.Services.GetRequiredService<LayoutPresetStore>());
+                probe.Layout); // 传 probe 重载后的实例，而非 DI 单例——保存后 ReloadLayoutPresets 只更新 probe 字段，DI 单例是启动时的旧值
             calibrationWindow.Closed += (_, _) => calibrationWindow = null;
             calibrationWindow.Show();
             calibrationWindow.Activate();
@@ -330,7 +330,7 @@ public partial class App : Application
                 // 区域页保存后两个都要重载：rois.json（校准条目）与 layout-presets/overrides（预设条目）。
                 // 少调后者会出现"我明明改了预设，画面上的框没变"——DI 里的 store 是单例，不重读盘就是旧值。
                 () => { probe.ReloadRois(); probe.ReloadLayoutPresets(); },
-                _host.Services.GetRequiredService<LayoutPresetStore>());   // 区域页要展示布局预设行
+                probe.Layout);   // 区域页要展示布局预设行；传 probe 重载后的实例而非 DI 单例（保存后 DI 单例是启动旧值）
             settingsWindow.Closed += (_, _) => settingsWindow = null;
             settingsWindow.Show();
             settingsWindow.Activate();
@@ -357,6 +357,30 @@ public partial class App : Application
             catch (Exception ex) { log.Warn($"[app] 复制诊断失败: {ex.Message}"); }
         }
 
+        // 截图保存（F6）：把下一帧捕获帧存成 PNG 到 <项目根>/screenshots/。
+        // 图与翻译看到的逐像素一致（同一 WGC 帧流），可拿来跟游戏自带 F12 截图并排核对捕获方式/分辨率/黑边。
+        void Screenshot()
+        {
+            string dir;
+            try { dir = System.IO.Path.Combine(FindProjectRoot(), "screenshots"); }
+            catch (Exception ex) { log.Warn($"[app] 无法确定项目目录，跳过截图: {ex.Message}"); return; }
+            log.Info($"[app] 请求截图（F6），下一帧存到 {dir}");
+            probe.Screenshot(dir);
+        }
+
+        // 项目根 = exe 往上第一个含 .git 的目录（repo 根）。发布版无 .git 则退回 exe 所在目录。
+        static string FindProjectRoot()
+        {
+            var dir = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory);
+            while (dir is not null)
+            {
+                if (System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, ".git")))
+                    return dir.FullName;
+                dir = dir.Parent;
+            }
+            return System.AppContext.BaseDirectory;
+        }
+
         // 全局热键：从 SettingsHolder.Current.Hotkeys 驱动注册全部五功能（游戏有焦点时也生效）。
         _hotkeys = new HotkeyService(overlay);
         var hotkeyActions = new Dictionary<string, Action>
@@ -366,6 +390,7 @@ public partial class App : Application
             ["OpenConfig"] = OpenSettings,
             ["ToggleDebug"] = ToggleDebug,
             ["CopyDebug"] = CopyDebug,
+            ["Screenshot"] = Screenshot,
         };
         var hotkeyResults = _hotkeys.RegisterAll(settingsHolder.Current.Hotkeys, hotkeyActions);
         foreach (var (func, ok) in hotkeyResults)

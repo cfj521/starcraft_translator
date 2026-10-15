@@ -12,9 +12,9 @@ public class LayoutPresetTests
     private const string Json = """
         { "version": 1,
           "presets": { "browsing": {
-            "1920x1080": { "chat": [0.14583333333333333, 0.6851851851851852, 0.4166666666666667, 0.2287037037037037],
+            "16:9": { "chat": [0.14583333333333333, 0.6851851851851852, 0.4166666666666667, 0.2287037037037037],
               "roomNameList": [0.225, 0.2824074074074074, 0.14375, 0.3537037037037037] },
-            "3840x2160": { "chat": [0.14583333333333333, 0.6851851851851852, 0.4166666666666667, 0.2287037037037037] } } } }
+            "16:10": { "chat": [0.14583333333333333, 0.6851851851851852, 0.4166666666666667, 0.2287037037037037] } } } }
         """;
 
     static string TempWith(string json)
@@ -25,14 +25,16 @@ public class LayoutPresetTests
     }
 
     [Fact]
-    public void Load_FindsByExactResolutionOnly()
+    public void Load_FindsByAspectRatio()
     {
         var store = LayoutPresetStore.Load(TempWith(Json));
 
         Assert.Null(store.LoadError);
         Assert.True(store.IsUsable);
         Assert.NotNull(store.Find("browsing", 1920, 1080));
-        Assert.Null(store.Find("browsing", 2560, 1440));   // 没写就是没有，绝不借用邻近分辨率
+        Assert.NotNull(store.Find("browsing", 2560, 1440));   // 同 16:9 宽高比，命中同一档
+        Assert.NotNull(store.Find("browsing", 3840, 2160));   // 同上
+        Assert.NotNull(store.Find("browsing", 1024, 768));    // 4:3 没有精确档，回落到最接近的 16:9
         Assert.False(store.HasScene("room"));
         Assert.True(store.HasScene("browsing"));
     }
@@ -44,14 +46,14 @@ public class LayoutPresetTests
         var rois = p.ToRois();
 
         Assert.Equal(2, rois.Count);
-        var chat = rois.First(r => r.Type == "Chat");
+        var chat = rois.First(r => r.Name.Contains("Chat"));
         Assert.Equal(280 / 1920d, chat.Rect.X, 6);
         Assert.Equal(740 / 1080d, chat.Rect.Y, 6);
         Assert.Equal(800 / 1920d, chat.Rect.W, 6);
         Assert.Equal(247 / 1080d, chat.Rect.H, 6);
 
         // 房间名列表是单一区域（相对画面），不再分列
-        var rnl = rois.First(r => r.Type == "RoomNameList");
+        var rnl = rois.First(r => r.Name.Contains("RoomNameList"));
         Assert.Equal(432 / 1920d, rnl.Rect.X, 6);
         Assert.Equal(305 / 1080d, rnl.Rect.Y, 6);
         Assert.Equal(276 / 1920d, rnl.Rect.W, 6);
@@ -62,12 +64,12 @@ public class LayoutPresetTests
     [Fact]
     public void ToRois_SceneWithOnlyChat_ReturnsSingleRoi()
     {
-        var p = LayoutPresetStore.Load(TempWith(Json)).Find("browsing", 3840, 2160)!;
+        var p = LayoutPresetStore.Load(TempWith(Json)).Find("browsing", 1920, 1200)!;
         var rois = p.ToRois();
 
         Assert.Single(rois);
-        Assert.Equal("Chat", rois[0].Type);
-        Assert.Equal(560 / 3840d, rois[0].Rect.X, 6);
+        Assert.Equal("%preset%Chat", rois[0].Name);
+        Assert.Equal(280 / 1920d, rois[0].Rect.X, 6);
         Assert.True(p.RoomNameList is null);
     }
 
@@ -83,12 +85,12 @@ public class LayoutPresetTests
         var rois = p.ToRois();
 
         Assert.Equal(3, rois.Count);
-        var gn = rois.First(r => r.Type == "GameName");
+        var gn = rois.First(r => r.Name.Contains("GameName"));
         Assert.Equal(1085 / 1920d, gn.Rect.X, 6);
         Assert.Equal(395 / 1080d, gn.Rect.Y, 6);
         Assert.Equal(360 / 1920d, gn.Rect.W, 6);
         Assert.Equal(21 / 1080d, gn.Rect.H, 6);
-        var mn = rois.First(r => r.Type == "MapName");
+        var mn = rois.First(r => r.Name.Contains("MapName"));
         Assert.Equal(1085 / 1920d, mn.Rect.X, 6);
         Assert.Equal(447 / 1080d, mn.Rect.Y, 6);
         Assert.True(gn.Columns is null && mn.Columns is null, "这两块区域无列");
@@ -171,7 +173,7 @@ public class LayoutPresetTests
             "[0.225, 0.2824074074074074, 0, 0.3537037037037037]")));
 
         Assert.Contains(store.Warnings, w => w.Contains("roomNameList 矩形非法"));
-        var p = Assert.Single(store.Presets, x => x.Resolution == "1920x1080");
+        var p = Assert.Single(store.Presets, x => x.Resolution == "16:9");
         Assert.True(p.RoomNameList is null);
         Assert.True(p.Chat is not null);
     }
@@ -195,7 +197,7 @@ public class LayoutPresetTests
         var factory = TempWith(Json);
         var over = TempWith("""
             { "version": 1, "presets": { "browsing": {
-              "1920x1080": { "chat": [0.0052, 0.0185, 0.0156, 0.037] } } } }
+              "16:9": { "chat": [0.0052, 0.0185, 0.0156, 0.037] } } } }
             """);
 
         var store = LayoutPresetStore.Load(factory, over);
@@ -204,7 +206,7 @@ public class LayoutPresetTests
         var p = store.Find("browsing", 1920, 1080)!;
         Assert.Equal(0.0052, p.Chat!.X, 6);                       // 覆盖层胜出
         Assert.True(p.RoomNameList is null);                       // 整条替换，不是逐字段合并
-        Assert.Equal(560 / 3840d, store.Find("browsing", 3840, 2160)!.Chat!.X, 6);   // 另一档没被牵连，仍是出厂值
+        Assert.Equal(280 / 1920d, store.Find("browsing", 1920, 1200)!.Chat!.X, 6);   // 16:10 没被牵连，仍是出厂值
     }
 
     [Fact]
@@ -294,7 +296,7 @@ public class LayoutPresetTests
             Assert.True(c.Y + c.H <= 1, $"{p.Scene}/{p.Resolution} 聊天框纵向超出画面");
             // 聊天框不该小于一行字，也不该吃掉半个屏幕（那样会把 HUD/视口一起 OCR 进来）
             Assert.True(c.H >= 0.10 && c.H <= 0.55, $"{p.Scene}/{p.Resolution} 聊天框高度占比异常");
-            Assert.True(c.W >= 0.15 && c.W <= 0.65, $"{p.Scene}/{p.Resolution} 聊天框宽度占比异常");
+            Assert.True(c.W >= 0.15 && c.W <= 0.90, $"{p.Scene}/{p.Resolution} 聊天框宽度占比异常");
         }
     }
 

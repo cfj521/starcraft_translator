@@ -54,17 +54,11 @@ public partial class CalibrationWindow : Window
     private Point _panelDragStart;
     private Point _panelOriginStart;
 
-    private System.Drawing.Rectangle _gameRect; // 物理像素：归一化基准（同 Phase1Probe/ScreenMapper 的窗口矩形）
+    private System.Drawing.Rectangle _gameRect; // 窗口物理像素矩形：绘制 + 相对坐标换算基准（同 TranslationEngine/ScreenMapper 的窗口矩形）
+    private int _frameW, _frameH; // WGC 抓帧尺寸 = 游戏真实渲染分辨率：桶键 + 布局匹配 + 分辨率显示基准
     private double _dpiX = 1, _dpiY = 1;
 
     private sealed record Option<T>(T Value, string Label);
-    /// <summary>ROI 类型选项。显示名用"房间名列表"，与**场景名**"寻找房间"区分开（两者不是一回事：
-    /// 场景=当前是哪个界面，ROI=该界面里要框出来翻的一块区域）。</summary>
-    private static readonly Option<RoiType>[] RoiTypeOptions =
-    {
-        new(RoiType.Chat, "聊天"), new(RoiType.RoomNameList, "房间名列表"), new(RoiType.MapInfo, "地图信息"),
-        new(RoiType.GameName, "房间名称"), new(RoiType.MapName, "地图名称"),
-    };
     private static readonly Option<ColumnKind>[] ColumnKindOptions =
     {
         new(ColumnKind.RoomName, "房间名"), new(ColumnKind.MapName, "地图"),
@@ -90,7 +84,6 @@ public partial class CalibrationWindow : Window
     private sealed class CalibBox
     {
         public string Name = "新区域";
-        public RoiType Type = RoiType.Chat;
         public Rect CanvasRect;
         public readonly List<double> Dividers = new(); // 相对 ROI 宽度 0..1，已排序
         public List<ColumnKind> Kinds = new() { ColumnKind.RoomName }; // Dividers.Count+1 个
@@ -167,6 +160,9 @@ public partial class CalibrationWindow : Window
                 (int)Math.Round(SystemParameters.PrimaryScreenHeight * scale));
         }
         _gameRect = rect;
+        // 兜底：WGC 拿不到帧时，用窗口尺寸当分辨率基准（宁可错也比空好）；DetectScene 拿到帧后覆盖。
+        _frameW = rect.Width;
+        _frameH = rect.Height;
     }
 
     /// <summary>
@@ -185,8 +181,11 @@ public partial class CalibrationWindow : Window
             if (frame is null)
             {
                 _log?.Log("[calibration] WGC 捕获不可用，场景未判定，保持其他界面");
-                return;
+                return; // _frameW/_frameH 保持 FindGameRect 的窗口兜底值
             }
+            // WGC 帧尺寸 = 游戏真实渲染分辨率，覆盖窗口兜底值，作桶键 + 布局匹配基准
+            _frameW = frame.Width;
+            _frameH = frame.Height;
             var rec = _scene.Recognize(frame.AsFramePixels()); // 零拷贝视图，只在 Recognize 调用内同步使用
             _log?.Log($"[calibration] 场景检测（WGC）：{rec.Summary}");
             // 只有匹配才覆盖默认值；未匹配（低于阈值/该分辨率无参考）保持"其他界面"
@@ -223,18 +222,18 @@ public partial class CalibrationWindow : Window
     /// 改动随 Enter 写进 layout-overrides.json。目的：用户对着游戏画面直接拖调预设区域，不必去配置页改坐标。</summary>
     private void DrawPresetBoxes()
     {
-        var p = _layout?.Find(_sceneId, _gameRect.Width, _gameRect.Height);
+        var p = _layout?.Find(_sceneId, _frameW, _frameH);
         if (p is null) return;
-        if (p.Chat is { } chat) AddPresetBox(RoiType.Chat, "(预设)聊天区域", chat);
-        if (p.RoomNameList is { } rnl) AddPresetBox(RoiType.RoomNameList, "(预设)房间名列表区域", rnl);
-        if (p.GameName is { } gn) AddPresetBox(RoiType.GameName, "(预设)房间名称区域", gn);
-        if (p.MapName is { } mn) AddPresetBox(RoiType.MapName, "(预设)地图名称区域", mn);
+        if (p.Chat is { } chat) AddPresetBox("(预设)聊天区域", chat);
+        if (p.RoomNameList is { } rnl) AddPresetBox("(预设)房间名列表区域", rnl);
+        if (p.GameName is { } gn) AddPresetBox("(预设)房间名称区域", gn);
+        if (p.MapName is { } mn) AddPresetBox("(预设)地图名称区域", mn);
     }
 
     /// <summary>把一个预设区域建成可交互 CalibBox，加入 _boxes 并画出来。
     /// 名字带 <see cref="LayoutPreset.PresetNamePrefix"/> 标记（%preset% + 显示标签），
     /// 保存时据此分流到 layout-overrides.json，与用户框（写 rois.json）分开。</summary>
-    private void AddPresetBox(RoiType type, string label, RelRect rect)
+    private void AddPresetBox(string label, RelRect rect)
     {
         var dip = PhysicalToDipRect(new System.Drawing.Rectangle(
             _gameRect.Left + (int)Math.Round(rect.X * _gameRect.Width),
@@ -244,7 +243,6 @@ public partial class CalibrationWindow : Window
         var box = new CalibBox
         {
             Name = LayoutPreset.PresetNamePrefix + label,
-            Type = type,
             CanvasRect = dip,
         };
         _boxes.Add(box);
@@ -286,22 +284,19 @@ public partial class CalibrationWindow : Window
         catch (Exception ex)
         {
             _log?.Log($"[calibration] 加载 rois.json 失败: {ex.Message}");
-            cfg = new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>());
+            cfg = new RoiConfig(new Dictionary<string, IReadOnlyList<Roi>>());
         }
 
-        string resKey = $"{_gameRect.Width}x{_gameRect.Height}";
+        string resKey = $"{_frameW}x{_frameH}";
         string sceneLabel = GameSceneIds.FromId(_sceneId).Label();
-        // 顶部常驻显示"正在校准哪个场景/分辨率"——它决定 Enter 保存后这些框落到哪个桶，
+        // 顶部常驻显示"正在校准哪个场景"——它决定 Enter 保存后这些框落到哪个场景，
         // 不显示的话用户根本不知道自己其实是在给"游戏内"画框。
+        // 相对坐标跨分辨率通用，不再按分辨率分档。
         HintText.Text = $"场景【{sceneLabel}】 · 分辨率 {resKey} · 拖动鼠标框选 (Esc 退出 / Enter 保存)";
-        SceneBucket? bucket = null;
-        if (cfg.Scenes.TryGetValue(_sceneId, out var buckets))
-            bucket = buckets.FirstOrDefault(b => b.Resolution == resKey);
-
-        if (bucket is null)
+        if (!cfg.Scenes.TryGetValue(_sceneId, out var rois))
             return;
 
-        foreach (var roi in bucket.Rois)
+        foreach (var roi in rois)
         {
             var px = new System.Drawing.Rectangle(
                 _gameRect.Left + (int)Math.Round(roi.Rect.X * _gameRect.Width),
@@ -311,7 +306,6 @@ public partial class CalibrationWindow : Window
             var box = new CalibBox
             {
                 Name = roi.Name,
-                Type = RoiTypes.Parse(roi.Type),
                 CanvasRect = PhysicalToDipRect(px),
             };
             if (roi.Columns is { Count: > 0 })
@@ -325,7 +319,7 @@ public partial class CalibrationWindow : Window
         }
     }
 
-    // ── 坐标换算（DIP canvas <-> 物理屏幕像素，基准=游戏窗口矩形，与 ScreenMapper/Phase1Probe 一致）──
+    // ── 坐标换算（DIP canvas <-> 物理屏幕像素，基准=游戏窗口矩形，与 ScreenMapper/TranslationEngine 一致）──
 
     private Rect PhysicalToDipRect(System.Drawing.Rectangle r)
         => new(r.Left / _dpiX, r.Top / _dpiY, r.Width / _dpiX, r.Height / _dpiY);
@@ -435,22 +429,12 @@ public partial class CalibrationWindow : Window
     private void ShowNewBoxPanel(Rect rect)
     {
         var nameBox = new TextBox { Width = 160, Text = "新区域" };
-        var typeCombo = new ComboBox
-        {
-            Width = 100,
-            ItemsSource = RoiTypeOptions,
-            DisplayMemberPath = "Label",
-            SelectedValuePath = "Value",
-            SelectedIndex = 0,
-        };
         var okBtn = new Button { Content = "确定", Width = 50, Margin = new Thickness(8, 0, 4, 0), IsDefault = true };
         var cancelBtn = new Button { Content = "取消", Width = 50, IsCancel = true };
 
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 4, 6, 2) };
         row.Children.Add(new TextBlock { Text = "名称:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0), Foreground = Brushes.White });
         row.Children.Add(nameBox);
-        row.Children.Add(new TextBlock { Text = "类型:", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 4, 0), Foreground = Brushes.White });
-        row.Children.Add(typeCombo);
         row.Children.Add(okBtn);
         row.Children.Add(cancelBtn);
 
@@ -524,8 +508,7 @@ public partial class CalibrationWindow : Window
         okBtn.Click += (_, _) =>
         {
             string name = string.IsNullOrWhiteSpace(nameBox.Text) ? "新区域" : nameBox.Text.Trim();
-            var type = typeCombo.SelectedValue is RoiType t ? t : RoiType.Chat;
-            var box = new CalibBox { Name = name, Type = type, CanvasRect = _pendingRect!.Value };
+            var box = new CalibBox { Name = name, CanvasRect = _pendingRect!.Value };
             _boxes.Add(box);
             AddBoxVisual(box);
             ClosePendingPanel();
@@ -555,14 +538,14 @@ public partial class CalibrationWindow : Window
         return false;
     }
 
-    /// <summary>DIP 画布坐标 → 游戏窗口内的物理像素，拼成"坐标/尺寸/场景/分辨率"一行。</summary>
+    /// <summary>DIP 画布坐标 → 游戏窗口内的相对坐标（0~1），拼成"坐标/尺寸/场景/比例"一行。</summary>
     private string DescribeRect(Rect dip)
     {
-        int px = (int)Math.Round(dip.X * _dpiX) - _gameRect.Left;
-        int py = (int)Math.Round(dip.Y * _dpiY) - _gameRect.Top;
-        int pw = (int)Math.Round(dip.Width * _dpiX);
-        int ph = (int)Math.Round(dip.Height * _dpiY);
-        return $"坐标 ({px}, {py})   尺寸 {pw} × {ph}   场景【{GameSceneIds.FromId(_sceneId).Label()}】   分辨率 {_gameRect.Width}×{_gameRect.Height}";
+        double rx = (dip.X * _dpiX - _gameRect.Left) / _gameRect.Width;
+        double ry = (dip.Y * _dpiY - _gameRect.Top) / _gameRect.Height;
+        double rw = (dip.Width * _dpiX) / _gameRect.Width;
+        double rh = (dip.Height * _dpiY) / _gameRect.Height;
+        return $"坐标 ({rx:F4}, {ry:F4})   尺寸 {rw:F4} × {rh:F4}   场景【{GameSceneIds.FromId(_sceneId).Label()}】   分辨率 {_frameW}×{_frameH}";
     }
 
     private void ClosePendingPanel()
@@ -756,24 +739,10 @@ public partial class CalibrationWindow : Window
         if (box.DividerLines.Count > 0) RedrawDividerLines(box);
     }
 
-    /// <summary>预设框剥掉 %preset% 标记再显示（标记只用于路由，不给人看）；用户框照常附类型标签。</summary>
+    /// <summary>预设框剥掉 %preset% 标记再显示（标记只用于路由，不给人看）。</summary>
     private static string LabelFor(CalibBox box)
-    {
-        string name = box.IsPreset ? box.Name[LayoutPreset.PresetNamePrefix.Length..] : box.Name;
-        return box.IsPreset ? name : $"{name} [{TypeLabel(box.Type)}]";
-    }
+        => box.IsPreset ? box.Name[LayoutPreset.PresetNamePrefix.Length..] : box.Name;
 
-
-    /// <summary>已框区域的类型标签（与 <see cref="RoiTypeOptions"/> 的显示名保持一致）。</summary>
-    private static string TypeLabel(RoiType t) => t switch
-    {
-        RoiType.Chat => "聊天",
-        RoiType.RoomNameList => "房间名列表",
-        RoiType.MapInfo => "地图信息",
-        RoiType.GameName => "房间名称",
-        RoiType.MapName => "地图名称",
-        _ => "?",
-    };
 
     // ── RoomList：竖线划列 ───────────────────────────────────────────────
 
@@ -949,8 +918,7 @@ public partial class CalibrationWindow : Window
             physW / gameRect.Width,
             physH / gameRect.Height);
 
-        // 所有类型（含房间名列表）都是单一区域，不再分列 → columns 恒为 null
-        return new Roi(box.Name, box.Type.ToString(), rect);
+        return new Roi(box.Name, rect);
     }
 
     private void SaveAndClose()
@@ -965,25 +933,20 @@ public partial class CalibrationWindow : Window
                 if (box.IsPreset) presetBoxes.Add(box);
                 else userRois.Add(BoxToRoi(box, _gameRect, _dpiX, _dpiY));
 
-            string resKey = $"{_gameRect.Width}x{_gameRect.Height}";
-            var newBucket = new SceneBucket(resKey, userRois);
-
+            // 相对坐标跨分辨率通用，不再按分辨率分档；直接覆盖该场景的 ROI 列表。
+            string resKey = $"{_frameW}x{_frameH}";
             RoiConfig existing;
             try { existing = RoiStore.Load(_roisJsonPath); }
-            catch { existing = new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>()); }
+            catch { existing = new RoiConfig(new Dictionary<string, IReadOnlyList<Roi>>()); }
 
-            var scenes = new Dictionary<string, IReadOnlyList<SceneBucket>>(existing.Scenes);
-            var buckets = scenes.TryGetValue(_sceneId, out var existingBuckets)
-                ? existingBuckets.Where(b => b.Resolution != resKey).ToList()
-                : new List<SceneBucket>();
-            buckets.Add(newBucket);
-            scenes[_sceneId] = buckets;
+            var scenes = new Dictionary<string, IReadOnlyList<Roi>>(existing.Scenes);
+            scenes[_sceneId] = userRois;
 
             RoiStore.Save(new RoiConfig(scenes), _roisJsonPath);
 
             // 预设框 → 覆盖层：以当前生效的预设（出厂+覆盖合并值）为基线，逐个应用编辑后整条写回。
             // 出厂 layout-presets.json 永不被碰（SaveOverride 只写覆盖层文件）。
-            var preset = _layout?.Find(_sceneId, _gameRect.Width, _gameRect.Height);
+            var preset = _layout?.Find(_sceneId, _frameW, _frameH);
             if (preset is not null)
                 foreach (var box in presetBoxes)
                     preset = ApplyPresetBox(preset, box, _gameRect, _dpiX, _dpiY);
@@ -1018,18 +981,15 @@ public partial class CalibrationWindow : Window
             Math.Clamp(pw / (double)gameRect.Width, 0d, 1d),
             Math.Clamp(ph / (double)gameRect.Height, 0d, 1d));
 
-        switch (box.Type)
+        // 靠名字路由到对应预设字段（预设框名字是 AddPresetBox 时定的）
+        string label = box.Name[LayoutPreset.PresetNamePrefix.Length..];
+        return label switch
         {
-            case RoiType.Chat:
-                return preset with { Chat = rel };
-            case RoiType.GameName:
-                return preset with { GameName = rel };
-            case RoiType.MapName:
-                return preset with { MapName = rel };
-            case RoiType.RoomNameList:
-                return preset with { RoomNameList = rel };
-            default:
-                return preset;
-        }
+            "(预设)聊天区域" => preset with { Chat = rel },
+            "(预设)房间名称区域" => preset with { GameName = rel },
+            "(预设)地图名称区域" => preset with { MapName = rel },
+            "(预设)房间名列表区域" => preset with { RoomNameList = rel },
+            _ => preset,
+        };
     }
 }

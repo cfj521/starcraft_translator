@@ -3,11 +3,12 @@ using System.Text.Json;
 namespace ScrTranslator.Core.Scene;
 
 /// <summary>
-/// 单个识别区域的几何：rect 是**该分辨率下**的像素坐标（x,y,w,h），
-/// BlockPx 为块均值边长，BlocksX×BlocksY 为指纹网格。
-/// 三者由 tools/SceneRefGen 一起写出——运行时必须按同一组参数取均值，否则网格错位、指纹全不命中。
+/// 单个识别区域的几何：rect 是该分辨率下的**绝对像素**坐标（x,y,w,h，double）。
+/// BlockPx 为块均值边长（像素，仅显示用），BlocksX×BlocksY 为指纹网格。
+/// 生成器(tools/SceneRefGen)与运行时共用同一套缩放参数——相对值只在 JSON 里（0~1，÷分辨率宽高），
+/// 加载时换算回绝对像素，运行时按同一组参数取均值，否则网格错位、指纹全不命中。
 /// </summary>
-public sealed record SceneRefRegion(string Name, int X, int Y, int Width, int Height, int BlockPx, int BlocksX, int BlocksY)
+public sealed record SceneRefRegion(string Name, double X, double Y, double Width, double Height, int BlockPx, int BlocksX, int BlocksY)
 {
     /// <summary>该区域的指纹字节数（RGB24，行优先）。</summary>
     public int ByteLength => BlocksX * BlocksY * 3;
@@ -15,9 +16,9 @@ public sealed record SceneRefRegion(string Name, int X, int Y, int Width, int He
     /// <summary>把区域矩形夹进帧内，防止参考分辨率与实际帧不符时越界。</summary>
     public (int X, int Y, int Width, int Height) ClampTo(int frameWidth, int frameHeight)
     {
-        int x = Math.Clamp(X, 0, Math.Max(0, frameWidth - 1));
-        int y = Math.Clamp(Y, 0, Math.Max(0, frameHeight - 1));
-        return (x, y, Math.Min(Width, frameWidth - x), Math.Min(Height, frameHeight - y));
+        int x = Math.Clamp((int)Math.Round(X), 0, Math.Max(0, frameWidth - 1));
+        int y = Math.Clamp((int)Math.Round(Y), 0, Math.Max(0, frameHeight - 1));
+        return (x, y, Math.Min((int)Math.Round(Width), frameWidth - x), Math.Min((int)Math.Round(Height), frameHeight - y));
     }
 }
 
@@ -314,14 +315,14 @@ public sealed class SceneRefStore
             {
                 var name = reg.TryGetProperty("name", out var n) ? n.GetString() ?? "?" : "?";
                 var rect = reg.GetProperty("rect");
-                int x = rect[0].GetInt32(), y = rect[1].GetInt32(), w = rect[2].GetInt32(), h = rect[3].GetInt32();
+                double x = rect[0].GetDouble(), y = rect[1].GetDouble(), w = rect[2].GetDouble(), h = rect[3].GetDouble();
                 var blocks = reg.GetProperty("blocks");
                 int bx = blocks[0].GetInt32(), by = blocks[1].GetInt32();
                 int blockPx = GetInt(reg, "blockPx", 0);
                 var data = Convert.FromBase64String(reg.GetProperty("data").GetString() ?? "");
                 if (blockPx <= 0 || bx <= 0 || by <= 0 || w <= 0 || h <= 0)
                 {
-                    warnings.Add($"参考 {id}/{key}/{name} 几何非法 rect={w}x{h} blockPx={blockPx} blocks={bx}x{by}");
+                    warnings.Add($"参考 {id}/{key}/{name} 几何非法 rect={w:R}x{h:R} blockPx={blockPx} blocks={bx}x{by}");
                     continue;
                 }
                 if (data.Length != bx * by * 3)
@@ -331,7 +332,8 @@ public sealed class SceneRefStore
                     warnings.Add($"参考 {id}/{key}/{name} 指纹长度 {data.Length} ≠ {bx * by * 3}，该分辨率已丢弃");
                     return null;
                 }
-                regions.Add(new SceneRefRegion(name, x, y, w, h, blockPx, bx, by));
+                // 几何（进 sha256）用 JSON 里的相对值；记录存绝对像素（相对 × 分辨率宽高）。
+                regions.Add(new SceneRefRegion(name, x * width, y * height, w * width, h * height, blockPx, bx, by));
                 entries.Add(new SceneRefIntegrity.Entry(
                     SceneRefIntegrity.Key(id, key, name),
                     SceneRefIntegrity.Geometry(x, y, w, h, blockPx, bx, by),

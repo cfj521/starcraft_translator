@@ -24,7 +24,7 @@ public static class SceneRefCapture
     /// false 时纯 H/1080 拉伸（ingame 的种族装饰区贴左边缘，无裁剪）。
     /// 指纹长度恒等于出厂 1080p 参考，故 5 条参考通吃所有分辨率。
     /// </summary>
-    public static IReadOnlyList<SceneRefRegion> ScaleRegions(IReadOnlyList<SceneRefRegion> baseRegions, int width, int height, bool centerCrop)
+    public static IReadOnlyList<SceneRefRegion> FittingRegions(IReadOnlyList<SceneRefRegion> baseRegions, int width, int height, bool centerCrop)
     {
         const int baseW = 1920, baseH = 1080;
         double sy = height / (double)baseH;                  // 统一高度因子 H/1080
@@ -59,7 +59,7 @@ public static class SceneRefCapture
     public static (IReadOnlyList<SceneRefRegion> Regions, byte[][] RegionBytes) Capture(
         in FramePixels frame, IReadOnlyList<SceneRefRegion> baseRegions, int width, int height, bool centerCrop)
     {
-        var regions = ScaleRegions(baseRegions, width, height, centerCrop);
+        var regions = FittingRegions(baseRegions, width, height, centerCrop);
         var bytes = new byte[regions.Count][];
         for (int i = 0; i < regions.Count; i++)
         {
@@ -93,10 +93,11 @@ public static class SceneRefCapture
         for (int i = 0; i < regions.Count; i++)
         {
             var reg = regions[i];
+            // 绝对像素 → 相对本分辨率的 0~1 值（与出厂 scene-refs.json 同一口径）。
             regionsArr.Add(new JsonObject
             {
                 ["name"] = reg.Name,
-                ["rect"] = new JsonArray(reg.X, reg.Y, reg.Width, reg.Height),
+                ["rect"] = new JsonArray(reg.X / width, reg.Y / height, reg.Width / width, reg.Height / height),
                 ["blockPx"] = reg.BlockPx,
                 ["blocks"] = new JsonArray(reg.BlocksX, reg.BlocksY),
                 ["data"] = Convert.ToBase64String(regionBytes[i]),

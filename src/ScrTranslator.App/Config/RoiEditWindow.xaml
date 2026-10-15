@@ -18,8 +18,6 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="8"/>
                 <RowDefinition Height="Auto"/>
-                <RowDefinition Height="8"/>
-                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Grid.Column="0" Text="场景" VerticalAlignment="Center"/>
@@ -28,10 +26,7 @@
             <TextBlock Grid.Row="2" Grid.Column="0" Text="名称" VerticalAlignment="Center"/>
             <TextBox Grid.Row="2" Grid.Column="1" x:Name="NameBox"/>
 
-            <TextBlock Grid.Row="4" Grid.Column="0" Text="类型" VerticalAlignment="Center"/>
-            <ComboBox Grid.Row="4" Grid.Column="1" x:Name="TypeCombo" Padding="2,0,2,0"/>
-
-            <Grid Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2">
+            <Grid Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="76"/>
                     <ColumnDefinition Width="*"/>
@@ -43,7 +38,7 @@
                 <TextBox Grid.Column="3" x:Name="YBox"/>
             </Grid>
 
-            <Grid Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="2">
+            <Grid Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="76"/>
                     <ColumnDefinition Width="*"/>

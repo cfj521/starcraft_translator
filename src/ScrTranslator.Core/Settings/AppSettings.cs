@@ -12,12 +12,12 @@ public sealed record GeneralSettings
 }
 public sealed record OcrSettings
 {
-    /// <summary>场景检测轮询（毫秒）。默认 200：识别只读几块静态区做块均值比对（&lt;1ms），
-    /// 200ms 一次开销可忽略，换来"切界面立刻跟上"——慢了就出现"人已在房间内、还在按老 ROI 翻"的窗口期。</summary>
-    public int SceneDetectPollMs { get; init; } = 200;
+    /// <summary>场景检测轮询（毫秒）。默认 20：识别只读几块静态区做块均值比对（&lt;1ms），
+    /// 20ms 一次开销可忽略，换来"切界面立刻跟上"——慢了就出现"人已在房间内、还在按老 ROI 翻"的窗口期。</summary>
+    public int SceneDetectPollMs { get; init; } = 20;
 
-    /// <summary>翻译轮询（毫秒）。默认 500：一轮 = 各 ROI 裁剪 + OCR + 翻译上屏。</summary>
-    public int TranslatePollMs { get; init; } = 500;
+    /// <summary>翻译轮询（毫秒）。默认 300：一轮 = 各 ROI 裁剪 + OCR + 翻译上屏。</summary>
+    public int TranslatePollMs { get; init; } = 300;
 
     // 曾有 ChatPollMs/OtherPollMs 两个值（按"场景里有没有聊天 ROI"二选一）：其他界面根本不翻译，
     // 给它单独配一个"翻译轮询"是无意义的假旋钮 → 收敛成上面这两个正交的轮询节拍。
@@ -56,16 +56,17 @@ public static class HotkeyKeys
 }
 public static class HotkeyDefaults
 {
-    /// <summary>全部热键：F9 开/关翻译、Ctrl+F9 区域校准设置、F10 设置、F8 切 DEBUG 面板、Ctrl+F8 复制诊断。
-    /// 用户可重绑到 F6–F12（可加 Ctrl/Alt/Shift）。悬浮层显隐 / 翻译玩家ID / 暂停 已改为纯配置项，不再占热键。</summary>
+    /// <summary>全部热键：F9 开/关翻译、Ctrl+F9 区域校准设置、F7 设置、F8 切 DEBUG 面板、Ctrl+F8 复制诊断、
+    /// F6 截图保存。用户可重绑到 F6–F9（可加 Ctrl/Alt/Shift）。悬浮层显隐 / 翻译玩家ID / 暂停 已改为纯配置项，不再占热键。</summary>
     public static IReadOnlyDictionary<string, HotkeyBinding> Map { get; } =
         new Dictionary<string, HotkeyBinding>
         {
             ["ToggleTranslate"] = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9),
             ["Calibrate"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F9),
-            ["OpenConfig"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F10),
+            ["OpenConfig"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F7),
             ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8),
             ["CopyDebug"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F8),
+            ["Screenshot"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F6),
         };
 }
 

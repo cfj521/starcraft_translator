@@ -16,9 +16,10 @@ public static class SceneRefIntegrity
     public static string Key(string sceneId, string resolutionKey, string regionName)
         => $"{sceneId}/{resolutionKey}/{regionName}";
 
-    /// <summary>参与哈希的几何描述。改任何坐标/块参数都会改变它。</summary>
-    public static string Geometry(int x, int y, int width, int height, int blockPx, int blocksX, int blocksY)
-        => $"{x},{y},{width},{height},{blockPx},{blocksX}x{blocksY}";
+    /// <summary>参与哈希的几何描述。改任何坐标/块参数都会改变它。
+    /// 区域坐标是相对 1080p 基准的 0~1 值，用 <c>R</c>（往返）格式，保证生成端与加载端哈希一致。</summary>
+    public static string Geometry(double x, double y, double width, double height, int blockPx, int blocksX, int blocksY)
+        => $"{x:R},{y:R},{width:R},{height:R},{blockPx},{blocksX}x{blocksY}";
 
     /// <summary>一个待哈希条目：键 + 几何串 + 指纹字节。</summary>
     public readonly record struct Entry(string Key, string Geometry, byte[] Data);

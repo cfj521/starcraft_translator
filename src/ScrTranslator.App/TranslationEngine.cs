@@ -20,7 +20,7 @@ public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureF
 /// <summary>Phase 5 异常恢复事件：看门狗检测到的状态转移，App 订阅后转托盘气泡。</summary>
 public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled, SceneChanged, SceneRefMissing, TranslateFailed, NeedsCalibration }
 
-public sealed class Phase1Probe : IDisposable
+public sealed class TranslationEngine : IDisposable
 {
     private readonly CaptureService _capture;
     private readonly IOcrEngine _ocr;
@@ -48,6 +48,17 @@ public sealed class Phase1Probe : IDisposable
     public string CurrentSceneId => (_activeScene == GameScene.Other ? _lastKnownScene : _activeScene).ToId();
     /// <summary>场景参考是否可用（scene-refs.json 加载成功且非空）。配置页/托盘用它提示"识别不可用"。</summary>
     public bool SceneRefsAvailable => _scene.Store.IsUsable;
+
+    // ── 截图（F6）：诊断用，抓"翻译同一帧流"的下一帧存 PNG，用于核对捕获方式/分辨率/黑边 ──
+    // 请求方（UI 线程）置 _shotPending 并挂上 _shotTcs；OnFrame（捕获线程）消费它、深拷贝当前帧、
+    // SetResult。拷贝必须在捕获线程做——原帧在本帧 finally 里 Dispose，跨线程直接引用会悬空。
+    private readonly object _shotLock = new();
+    private bool _shotPending;                                  // 恒在 _shotLock 内读写
+    private TaskCompletionSource<SKBitmap>? _shotTcs;           // 恒在 _shotLock 内读写
+    /// <summary>当前生效的布局预设（出厂+覆盖合并）。校准窗/配置页要拿这个**实例**而不是 DI 单例——
+    /// 校准保存后 <see cref="ReloadLayoutPresets"/> 只重赋值本字段（新实例，含覆盖层），DI 容器里那个单例
+    /// 不重读盘永远是启动时的旧值；拿 DI 单例的窗体就会把预设框画回出厂原位（"我明明改了，框没动"）。</summary>
+    public LayoutPresetStore Layout => _layout;
     private DateTime _lastDetect = DateTime.MinValue;
     private GameScene _pendingScene = GameScene.Unknown; private int _pendingCount; // 迟滞：连续 N 次同判才切换
     private int _unknownCount; // 连续"指纹不达标"计数→达到阈值切到"其他界面"
@@ -81,7 +92,6 @@ public sealed class Phase1Probe : IDisposable
     private bool _windowLost;   // 已就"窗口丢失"通知过（重连成功后复位）
     private bool _waitingForWindow; // Start 时未找到窗口→看门狗等待首连（不报"丢失"，连上报"自动开始"）
     private bool _wasIconic;    // 上一轮询周期是否最小化（转移时才通知）
-    private bool _resNotified;  // 当前分辨率与 bucket 不匹配的提示只发一次（换回/重校准后复位）
     // 零帧/停滞诊断（实机排障：捕获会话活着但一帧不来 = 多半独占全屏；帧在来但处理不动 = _busy 卡死）
     private bool _firstFrameLogged;
     private long _lastFrameCount; private int _zeroFrameTicks; private bool _noFrameNotified;
@@ -101,7 +111,7 @@ public sealed class Phase1Probe : IDisposable
     private string TargetProcess() => string.IsNullOrWhiteSpace(_settings.Current.General.TargetProcess)
         ? "StarCraft" : _settings.Current.General.TargetProcess.Trim();
 
-    public Phase1Probe(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, LayoutPresetStore layout, FileLogger log, OverlayWindow overlay,
+    public TranslationEngine(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, LayoutPresetStore layout, FileLogger log, OverlayWindow overlay,
         string roisJsonPath, string sceneRefsPath, string sceneOverridesPath,
         TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug)
     {
@@ -129,9 +139,9 @@ public sealed class Phase1Probe : IDisposable
     {
         // 注意判的是"有没有**区域**"而不是"有没有 bucket"：删空一个场景后可能留下空桶，
         // 按桶判会误报可用，结果每帧静默什么都不翻。
-        _roiAvailable = (_cfg.Scenes.TryGetValue(SceneId, out var buckets) && buckets.Any(b => b.Rois.Count > 0))
+        _roiAvailable = (_cfg.Scenes.TryGetValue(SceneId, out var rois) && rois.Count > 0)
             || _layout.HasScene(SceneId);
-        _anySceneCalibrated = _cfg.Scenes.Values.Any(bs => bs.Count > 0 && bs.Any(b => b.Rois.Count > 0))
+        _anySceneCalibrated = _cfg.Scenes.Values.Any(rois => rois.Count > 0)
             || _layout.Presets.Count > 0;
     }
 
@@ -142,11 +152,11 @@ public sealed class Phase1Probe : IDisposable
     /// Game Name / Map Name 两行），直接吞掉会让已有校准莫名失效。不想要重复的那条，
     /// 在配置→区域页选中它点"删除"即可——行为可解释，不搞隐式优先级。
     /// </summary>
-    private IReadOnlyList<Roi> EffectiveRois(SceneBucket bucket, int frameWidth, int frameHeight)
+    private IReadOnlyList<Roi> EffectiveRois(IReadOnlyList<Roi> rois, int frameWidth, int frameHeight)
     {
         var preset = _layout.Find(SceneId, frameWidth, frameHeight);
-        if (preset is null) return bucket.Rois;
-        var merged = bucket.Rois.ToList();
+        if (preset is null) return rois;
+        var merged = rois.ToList();
         merged.AddRange(preset.ToRois());
         return merged;
     }
@@ -245,7 +255,6 @@ public sealed class Phase1Probe : IDisposable
         _cfg = RoiStore.Load(_roisJsonPath);
         RefreshRoiDerivedFlags();
         _roiMissingLogged = false;
-        _resNotified = false; // 校准保存=新 ROI 集，重校准提示允许再发一次
         ResetChangeDetection();
         _log.Log($"[probe] ROI 已重新加载，_roiAvailable={_roiAvailable} 已校准场景={_anySceneCalibrated}");
     }
@@ -304,7 +313,7 @@ public sealed class Phase1Probe : IDisposable
             _log.Debug($"[probe] FindByProcess({proc}) hwnd={hwnd}");
             // 看门狗：窗口丢失重连/最小化恢复(5-3)，以及"等待游戏窗口"模式——F9 时游戏没开不再算失败，
             // 挂 2s 轮询，窗口一出现自动开始捕获翻译（也承载 General.AutoTranslateOnLaunch 的启动自动开）。
-            _windowLost = false; _wasIconic = false; _resNotified = false;
+            _windowLost = false; _wasIconic = false;
             _firstFrameLogged = false; _lastFrameCount = _capture.FrameCount;
             _zeroFrameTicks = 0; _noFrameNotified = false;
             _lastProcessed = _processed; _stallTicks = 0; _stallNotified = false;
@@ -497,9 +506,47 @@ public sealed class Phase1Probe : IDisposable
         _watchdog?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
         _capture.Stop();
         ResetAllChangeDetection(); // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
-        _windowLost = false; _wasIconic = false; _resNotified = false; _waitingForWindow = false;
+        _windowLost = false; _wasIconic = false; _waitingForWindow = false;
         _log.Log("[probe] 已停止");
         _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+    }
+
+    /// <summary>
+    /// F6 截图：把**下一帧**捕获帧存成 PNG 到 targetDir。与翻译走同一条 WGC 帧流（同源、同像素）——
+    /// 这正是它的用途：截出来的图与翻译看到的逐像素一致，才能用来核对捕获方式/分辨率/黑边。
+    /// 触发后立即返回，编码+落盘在线程池续延里完成；可从任意线程调用（热键落在 UI 线程）。
+    /// </summary>
+    public void Screenshot(string targetDir)
+    {
+        if (_capture.Hwnd == IntPtr.Zero)
+        {
+            _log.Warn("[screenshot] 捕获未启动（翻译没开），没有帧可截");
+            return;
+        }
+        TaskCompletionSource<SKBitmap> tcs;
+        lock (_shotLock)
+        {
+            _shotTcs = tcs = new TaskCompletionSource<SKBitmap>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _shotPending = true;
+        }
+        _ = tcs.Task.ContinueWith(t =>
+        {
+            SKBitmap bmp = t.Result;
+            try
+            {
+                System.IO.Directory.CreateDirectory(targetDir);
+                string path = System.IO.Path.Combine(targetDir, $"scrtrans-{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.png");
+                using var img = SKImage.FromBitmap(bmp);
+                using var data = img.Encode(SKEncodedImageFormat.Png, 100);
+                System.IO.File.WriteAllBytes(path, data.ToArray());
+                _log.Info($"[screenshot] 已存 {bmp.Width}x{bmp.Height} → {path}");
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"[screenshot] 保存失败: {ex.Message}");
+            }
+            finally { bmp.Dispose(); }
+        }, TaskScheduler.Default);
     }
 
     private async void OnFrame(SKBitmap frame)
@@ -510,7 +557,21 @@ public sealed class Phase1Probe : IDisposable
             _log.Log($"[probe] 首帧到达 {frame.Width}x{frame.Height}（捕获→处理链路已通）");
         }
         _lastFrameWH = $"{frame.Width}x{frame.Height}";
-        // ── 两个独立节拍：场景检测(Ocr.SceneDetectPollMs，默认 200ms) 与 翻译(Ocr.TranslatePollMs，默认 500ms)。
+        // 分辨率不缓存：ROI 相对坐标直接用当前帧宽高换算像素（见下方 EffectiveRois/ToPixels），每帧天然拿到最新分辨率。
+        // 全屏窗口下 WGC 帧池最大尺寸=整屏，任何游戏内分辨率都装得下，无需检测变化/重建捕获。
+        // 截图(F6)：有挂起的请求就消费它，交出本帧深拷贝（原帧在本方法 finally 里 Dispose，不能直接引用）。
+        TaskCompletionSource<SKBitmap>? shotTcs;
+        lock (_shotLock)
+        {
+            if (_shotPending) { _shotPending = false; shotTcs = _shotTcs; _shotTcs = null; }
+            else shotTcs = null;
+        }
+        if (shotTcs is not null)
+        {
+            try { shotTcs.SetResult(frame.Copy()); }
+            catch (Exception ex) { _log.Error($"[screenshot] 帧拷贝失败: {ex.Message}"); } // TCS 留挂起，续延不跑，无副作用
+        }
+        // ── 两个独立节拍：场景检测(Ocr.SceneDetectPollMs，默认 20ms) 与 翻译(Ocr.TranslatePollMs，默认 300ms)。
         // 每帧实时读设置，改设置即时生效无需重启。识别很便宜要跑得快，翻译贵(OCR+LLM)按自己节拍跑。
         var ocr = _settings.Current.Ocr;
         int detectMs = PollInterval.SceneDetect(ocr), translateMs = PollInterval.Translate(ocr);
@@ -553,23 +614,10 @@ public sealed class Phase1Probe : IDisposable
                 _log.Debug("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
-            var bucket = RoiStore.SelectBucket(_cfg, SceneId, frame.Width, frame.Height);
-            // 分辨率切换检测：命中的 bucket 与当前捕获尺寸不一致=靠等比映射兜底，位置可能偏差，提示重校准（每个不匹配期只发一次）。
-            bool resMismatch = bucket.Resolution != $"{frame.Width}x{frame.Height}";
-            if (resMismatch && !_resNotified)
-            {
-                _resNotified = true;
-                _log.Log($"[probe] 分辨率不匹配：bucket={bucket.Resolution} 当前={frame.Width}x{frame.Height}");
-                Notice?.Invoke(ProbeNotice.ResolutionChanged,
-                    $"游戏分辨率已变化({frame.Width}x{frame.Height})，正按旧 ROI 等比映射，建议按 F8 重新校准");
-            }
-            else if (!resMismatch) _resNotified = false;
-            var t = _settings.Current.Translation;
-            var scope = new ContentScopeSettings(t.TranslateChat, t.TranslateRoomName, t.TranslateMapInfo, t.TranslatePlayerId);
-
+            var sceneRois = RoiStore.SelectRois(_cfg, SceneId);
             // ── 每 ROI 独立收集 OCR 结果（下标=该 ROI 在当前有效列表里的位置）──
             var rois = new List<(string name, List<string> lines, List<RectangleF> bounds)>();
-            foreach (var roi in EffectiveRois(bucket, frame.Width, frame.Height))
+            foreach (var roi in EffectiveRois(sceneRois, frame.Width, frame.Height))
             {
                 Rectangle px = RoiStore.ToPixels(roi.Rect, frame.Width, frame.Height);
                 if (px.Width <= 0 || px.Height <= 0) continue;
@@ -579,7 +627,6 @@ public sealed class Phase1Probe : IDisposable
                     _log.Warn($"[{roi.Name}] 裁剪失败 rect={px}");
                     continue;
                 }
-                var roiType = RoiTypes.Parse(roi.Type);
                 var res = await _ocr.RecognizeAsync(sub);
                 var lines = new List<string>();
                 var bounds = new List<RectangleF>();
@@ -591,19 +638,13 @@ public sealed class Phase1Probe : IDisposable
                         _log.Debug($"[{roi.Name}][skip-low-conf] \"{line.Text}\" conf={line.Confidence:F2}");
                         continue;
                     }
-                    double relX = (line.Bounds.X + line.Bounds.Width / 2.0) / Math.Max(1, px.Width);
-                    ColumnKind? col = roi.Columns is null
-                        ? (roiType == RoiType.RoomNameList ? ColumnKind.RoomName : (ColumnKind?)null)
-                        : TranslationScope.HitColumn(roi.Columns, relX);
-                    // 内容闸门先于用户开关：无韩文的行（地图名、"Top vs Bottom"、表头…）根本不进翻译管线。
+                    // 内容闸门：无韩文的行（地图名、"Top vs Bottom"、表头…）根本不进翻译管线。
                     // 提示词要求"纯英文/数字/符号原样保留"，送过去只会拿回同样的英文 → 白花 API 且悬浮层显示一堆英文。
                     if (!KoreanText.ContainsHangul(line.Text))
                     {
                         _log.Debug($"[{roi.Name}][skip-无韩文] \"{line.Text}\"");
                         continue;
                     }
-                    bool translate = TranslationScope.ShouldTranslate(roiType, col, scope);
-                    if (!translate) continue;
                     bounds.Add(new RectangleF(
                         line.Bounds.X + px.Left, line.Bounds.Y + px.Top,
                         line.Bounds.Width, line.Bounds.Height));

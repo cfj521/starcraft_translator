@@ -93,8 +93,11 @@ internal static class Program
             {
                 ["label"] = scene.Label,
                 ["gameScene"] = scene.GameScene,
+                // 相对 1080p 基准的 0~1 值（= 绝对 ÷ 1920 / ÷ 1080）。
                 ["regions"] = new JsonArray(scene.Regions.Select(r => (JsonNode)new JsonObject
-                { ["name"] = r.Name, ["rect"] = new JsonArray(r.X, r.Y, r.W, r.H) }).ToArray()),
+                { ["name"] = r.Name, ["rect"] = new JsonArray(
+                    r.X / (double)BaseWidth, r.Y / (double)(BaseWidth * 9 / 16),
+                    r.W / (double)BaseWidth, r.H / (double)(BaseWidth * 9 / 16)) }).ToArray()),
                 ["resolutions"] = new JsonObject(),
             };
             if (scene.Race != null) sceneNode["race"] = scene.Race;
@@ -118,15 +121,18 @@ internal static class Program
                 {
                     var rect = ScaledRect(region, scale);
                     var fp = BuildFingerprint(bm, rect, scale);
+                    // 相对本分辨率的 0~1 值（= 绝对 ÷ 分辨率宽高，与 1080p ÷ 1920/÷1080 等比相同）。
+                    double relX = region.X / (double)BaseWidth, relY = region.Y / (double)(BaseWidth * 9 / 16),
+                           relW = region.W / (double)BaseWidth, relH = region.H / (double)(BaseWidth * 9 / 16);
                     integrityEntries.Add(new SceneRefIntegrity.Entry(
                         SceneRefIntegrity.Key(scene.Id, resKey, region.Name),
-                        SceneRefIntegrity.Geometry(rect.X, rect.Y, rect.W, rect.H, BlockPx(scale), fp.BlocksX, fp.BlocksY),
+                        SceneRefIntegrity.Geometry(relX, relY, relW, relH, BlockPx(scale), fp.BlocksX, fp.BlocksY),
                         fp.Bytes));
                     byScene[scene.Id] = MergeFp(byScene.TryGetValue(scene.Id, out var old) ? old : null, fp);
                     regs.Add((JsonNode)new JsonObject
                     {
                         ["name"] = region.Name,
-                        ["rect"] = new JsonArray(rect.X, rect.Y, rect.W, rect.H),
+                        ["rect"] = new JsonArray(relX, relY, relW, relH),
                         // blockPx 必须一起写死：运行时要用与生成时完全相同的块宽做均值，
                         // 否则 (rect.W / blocks) 的整除误差会让网格错位、指纹全不命中。
                         ["blockPx"] = BlockPx(scale),

@@ -48,7 +48,7 @@ public sealed record SceneRecognition(
 ///  - 只接受**分辨率精确匹配**：块均值网格随分辨率变，借用邻近分辨率参考会整片错位。
 ///  - 单一阈值 <see cref="SceneRefStore.MinHitRatio"/>：实测同场景 100%、跨场景 ≤25%，
 ///    余量 65 个百分点，无需再设"领先次优多少"的边际阈值（真出现两个候选同时 ≥90% 才需要加）。
-///  - 纯函数、无 IO、无 WPF，可直接单测；迟滞/切换策略留在调用方（Phase1Probe）。
+///  - 纯函数、无 IO、无 WPF，可直接单测；迟滞/切换策略留在调用方（TranslationEngine）。
 /// </summary>
 public sealed class SceneRecognizer
 {
@@ -75,7 +75,7 @@ public sealed class SceneRecognizer
             if (r.Resolutions.TryGetValue(baseKey, out var baseRes))
             {
                 bool centerCrop = r.Scene != GameScene.InGame; // 边框场景裁剪，游戏内不裁
-                candidates.Add((r, baseRes, SceneRefCapture.ScaleRegions(baseRes.Regions, frame.Width, frame.Height, centerCrop)));
+                candidates.Add((r, baseRes, SceneRefCapture.FittingRegions(baseRes.Regions, frame.Width, frame.Height, centerCrop)));
             }
         if (candidates.Count == 0)
         {

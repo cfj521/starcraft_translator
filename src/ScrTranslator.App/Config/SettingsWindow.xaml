@@ -198,7 +198,7 @@
                             <Button Grid.Column="1" x:Name="EnterCalibrationButton" Content="进入校准" Click="OnEnterCalibrationClick"/>
                         </Grid>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,4,0,0"
-                                   Text="ⓘ 程序预设了1920x1080、2560x1440、3840x2160 三种分辨率的区域定位，若您的屏幕分辨率不在其中，程序会提供最近您当前分辨率的区域数据，然后请自行校准。"/>
+                                   Text="ⓘ 程序已经预设了16:9、16:10、4:3三种显示比例的区域定位，覆盖了主要需要识别的区域，若你需要请自行在下面列表或在校准窗口中添加。位置坐标采用相对坐标，即在屏幕中的百分比。"/>
                     </StackPanel>
 
                     <Grid Grid.Row="1" Margin="0,0,0,4">
@@ -229,9 +229,7 @@
                                 <GridViewColumn Header="场景" Width="86" DisplayMemberBinding="{Binding Scene}"/>
                                 <GridViewColumn Header="分辨率" Width="90" DisplayMemberBinding="{Binding Resolution}"/>
                                 <GridViewColumn Header="名称" Width="150" DisplayMemberBinding="{Binding Name}"/>
-                                <GridViewColumn Header="类型" Width="86" DisplayMemberBinding="{Binding Type}"/>
-                                <GridViewColumn Header="左上角 X,Y" Width="94" DisplayMemberBinding="{Binding TopLeft}"/>
-                                <GridViewColumn Header="宽 × 高" Width="94" DisplayMemberBinding="{Binding Size}"/>
+                                <GridViewColumn Header="左, 顶, 宽, 高" Width="220" DisplayMemberBinding="{Binding Rect}"/>
                             </GridView>
                         </ListView.View>
                     </ListView>
@@ -264,7 +262,7 @@
                             </ListView.View>
                         </ListView>
                         <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,8,0,0"
-                                   Text="ⓘ 仅允许 Ctrl / Shift / Alt + F6 ~ F12 的热键注册"/>
+                                   Text="ⓘ 仅允许 Ctrl / Shift / Alt + F6 ~ F9 的热键注册"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

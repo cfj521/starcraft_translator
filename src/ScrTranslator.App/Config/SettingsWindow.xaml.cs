@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using ScrTranslator.App.Auth;
+using SkiaSharp;
 using ScrTranslator.App.Capture;
 using ScrTranslator.App.Interop;
 using ScrTranslator.App.Logging;
@@ -51,7 +52,7 @@ public partial class SettingsWindow : Window
     /// <summary>区域表的一行。Preset=true 表示这是出厂/覆盖层预设（改它写 layout-overrides.json）；
     /// PresetPart 标明改的是预设的哪一块（chat / roomList），校准行为空串。</summary>
     private sealed record RoiRow(string SceneId, string Scene, string Resolution, int Index,
-                                 string Name, string Type, string TopLeft, string Size, bool Preset, string PresetPart);
+                                 string Name, string Rect, bool Preset, string PresetPart);
     private sealed record HotkeyRow(string Key, string Function, string Current);
 
     /// <summary>provider 池的一行。Enabled/Status/StatusTooltip/Model 走 INotifyPropertyChanged 让列表实时刷新。
@@ -89,6 +90,7 @@ public partial class SettingsWindow : Window
         ("OpenConfig", "设置"),
         ("ToggleDebug", "切换 DEBUG 面板"),
         ("CopyDebug", "复制诊断信息"),
+        ("Screenshot", "截图保存"),
     };
 
     /// <param name="openCalibration">复用 App.xaml.cs 里管理的单例 CalibrationWindow 打开方法（不在本窗口另建实例）。</param>
@@ -338,62 +340,80 @@ public partial class SettingsWindow : Window
 
     /// <summary>
     /// 区域页数据源 = 校准的 ROI ＋ 布局预设（出厂值被覆盖层替换后的合并结果），同表展示、同表核对。
-    /// 只显示主显示器当前分辨率的行；坐标一律整数像素；两张表都可双击编辑。
+    /// 坐标一律显示相对值（0~1），分辨率无关；两张表都可双击编辑。
     /// </summary>
     private void LoadRoiList()
     {
         try
         {
             var cfg = RoiStore.Load(_roisJsonPath);
-            var (curW, curH) = PrimaryScreenPixels();
+            var (curW, curH) = GameRenderResolution();
             string curRes = $"{curW}x{curH}";
-            // 预设参考分辨率：精确命中则用自身，否则取最接近的预设档（当前分辨率不在预设里时仍有参考行，列表不空）
-            string refRes = ClosestPresetResolution(curW, curH, _layout.Presets.Select(p => p.Resolution));
             var rows = new List<RoiRow>();
 
             // --- 校准的 ROI ---
-            foreach (var (sceneId, buckets) in cfg.Scenes)
+            // 相对坐标跨分辨率通用，不再按分辨率分档；Resolution 列填当前分辨率（仅显示）。
+            foreach (var (sceneId, rois) in cfg.Scenes)
             {
                 string sceneLabel = GameSceneIds.FromId(sceneId).Label();
-                foreach (var bucket in buckets)
+                for (int idx = 0; idx < rois.Count; idx++)
                 {
-                    if (bucket.Resolution != curRes) continue;
-                    var (bw, bh) = ParseResolution(bucket.Resolution);
-                    for (int idx = 0; idx < bucket.Rois.Count; idx++)
-                    {
-                        var roi = bucket.Rois[idx];
-                        var t = RoiTypes.Parse(roi.Type);
-                        int boxX = Px(roi.Rect.X, bw), boxY = Px(roi.Rect.Y, bh);
-                        int boxW = Px(roi.Rect.W, bw), boxH = Px(roi.Rect.H, bh);
-                        rows.Add(new RoiRow(sceneId, sceneLabel, bucket.Resolution, idx, roi.Name, TypeLabel(t),
-                            $"{boxX}, {boxY}", $"{boxW} × {boxH}", false, ""));
-                    }
+                    var roi = rois[idx];
+                    rows.Add(new RoiRow(sceneId, sceneLabel, curRes, idx, roi.Name,
+                        $"{roi.Rect.X:F4}, {roi.Rect.Y:F4}, {roi.Rect.W:F4}, {roi.Rect.H:F4}", false, ""));
                 }
             }
 
             // --- 布局预设（聊天框 / 房间列表网格）---
-            // 预设按"最接近的预设分辨率"匹配（refRes），而非当前分辨率精确匹配：
-            // 当前分辨率不在预设里时仍展示最近档，给用户校准参考，避免整表空白。
-            foreach (var p in _layout.Presets)
+            // 预设按宽高比匹配（Find 内部做最近档），显示相对值。
+            foreach (var sceneId in new[] { "browsing", "room", "ingame" })
             {
-                if (p.Resolution != refRes) continue;
-                string sceneLabel = GameSceneIds.FromId(p.Scene).Label();
-                var (pw, ph) = ParseResolution(p.Resolution);
+                var p = _layout.Find(sceneId, curW, curH);
+                if (p is null) continue;
+                string sceneLabel = GameSceneIds.FromId(sceneId).Label();
                 if (p.Chat is { } chat)
-                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, "(预设)聊天区域", "聊天",
-                        $"{Px(chat.X, pw)}, {Px(chat.Y, ph)}", $"{Px(chat.W, pw)} × {Px(chat.H, ph)}", true, "chat"));
+                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, "(预设)聊天区域",
+                        $"{chat.X:F4}, {chat.Y:F4}, {chat.W:F4}, {chat.H:F4}", true, "chat"));
                 if (p.RoomNameList is { } rnl)
                     rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, "(预设)房间名列表区域",
-                        "房间名列表", $"{Px(rnl.X, pw)}, {Px(rnl.Y, ph)}", $"{Px(rnl.W, pw)} × {Px(rnl.H, ph)}", true, "roomNameList"));
+                        $"{rnl.X:F4}, {rnl.Y:F4}, {rnl.W:F4}, {rnl.H:F4}", true, "roomNameList"));
             }
 
-            RegionHintText.Text = $"当前分辨率 {curRes}";
+            RegionHintText.Text = $"当前分辨率 {curRes}，比例 {AspectRatio(curW, curH)}";
             RoiListView.ItemsSource = rows;
         }
         catch (Exception ex)
         {
             RegionHintText.Text = $"读取区域配置失败: {ex.Message}";
         }
+    }
+
+    private (int W, int H)? _gameRes; // 游戏真实渲染分辨率（WGC 抓帧尺寸）缓存；只缓存成功取到的，取不到不缓存、下次重试
+
+    /// <summary>游戏真实渲染分辨率 = WGC 抓帧尺寸（同校准窗的取帧逻辑）。
+    /// 屏幕物理像素≠渲染分辨率：DPI-unaware 游戏按内部固定分辨率渲染，全屏时屏幕像素是整屏尺寸
+    /// （如 3840×2160），不是渲染分辨率（如 1280×768）。取不到帧时兜底回屏幕物理像素（与旧行为一致）。</summary>
+    private (int W, int H) GameRenderResolution()
+    {
+        if (_gameRes is { } cached) return cached;
+        (int W, int H) fallback = PrimaryScreenPixels(); // 兜底：屏幕物理像素
+        var hwnd = WindowFinder.FindByProcess("StarCraft");
+        if (hwnd == IntPtr.Zero) return fallback;
+        var cap = new CaptureService();
+        var tcs = new TaskCompletionSource<SKBitmap>(TaskCreationOptions.RunContinuationsAsynchronously);
+        cap.FrameArrived += sk => tcs.TrySetResult(sk);
+        if (!cap.Start(hwnd)) { cap.Dispose(); return fallback; }
+        try
+        {
+            if (!tcs.Task.Wait(TimeSpan.FromSeconds(3))) return fallback;
+            var frame = tcs.Task.Result;
+            var res = (frame.Width, frame.Height);
+            frame.Dispose();
+            _gameRes = res; // 只缓存成功取到的；失败不缓存，下次调用重试
+            return res;
+        }
+        catch { return fallback; }
+        finally { cap.Dispose(); }
     }
 
     /// <summary>
@@ -408,42 +428,20 @@ public partial class SettingsWindow : Window
         return w > 0 && h > 0 ? (w, h) : (1920, 1080);
     }
 
-    /// <summary>分辨率键（"3840x2160"）→ 宽高像素；非法一律回 1，防除零。</summary>
-    private static (int W, int H) ParseResolution(string res)
+    /// <summary>宽高比 → 最近的预设档位标签（"16:9" / "16:10" / "4:3"）。</summary>
+    private static string AspectRatio(int w, int h)
     {
-        var parts = (res ?? "").Split('x');
-        if (parts.Length == 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h) && w > 0 && h > 0)
-            return (w, h);
-        return (1, 1);
+        if (h <= 0) return "?";
+        double ratio = (double)w / h;
+        if (Math.Abs(ratio - 16.0 / 9) < 0.08) return "16:9";
+        if (Math.Abs(ratio - 16.0 / 10) < 0.08) return "16:10";
+        if (Math.Abs(ratio - 4.0 / 3) < 0.10) return "4:3";
+        return $"{ratio:F2}:1";
     }
 
-    /// <summary>当前分辨率最接近的预设分辨率（精确命中则返回自身）。
-    /// 当前分辨率不在预设里时返回最近的那一档，让区域表仍有参考行可供校准，而不是整表空白。</summary>
-    private static string ClosestPresetResolution(int curW, int curH, IEnumerable<string> presetResolutions)
-    {
-        string best = "";
-        int bestDist = int.MaxValue;
-        foreach (var res in presetResolutions.Distinct())
-        {
-            var (pw, ph) = ParseResolution(res);
-            int dx = curW - pw, dy = curH - ph;
-            int dist = dx * dx + dy * dy; // 欧氏距离平方，免开方
-            if (dist < bestDist) { bestDist = dist; best = res; }
-        }
-        return best;
-    }
 
-    private static int Px(double rel, int total) => (int)Math.Round(rel * total);
 
-    private static string TypeLabel(RoiType t) => t switch
-    {
-        RoiType.Chat => "聊天",
-        RoiType.RoomNameList => "房间名列表",
-        RoiType.MapInfo => "地图信息",
-        RoiType.GameName => "房间名称",
-        RoiType.MapName => "地图名称",
-        _ => t.ToString(),
-    };
+
 
     /// <summary>重新从磁盘读布局预设（出厂层 + 覆盖层）。保存覆盖层后必须调，否则表里还是旧值。</summary>
     private void ReloadLayoutStore()
@@ -479,16 +477,15 @@ public partial class SettingsWindow : Window
         if (row.Preset) { EditPresetRegion(row); return; }
 
         var cfg = RoiStore.Load(_roisJsonPath);
-        var current = cfg.Scenes[row.SceneId].First(b => b.Resolution == row.Resolution).Rois[row.Index];
-        var (bw, bh) = ParseResolution(row.Resolution);
+        var current = cfg.Scenes[row.SceneId][row.Index];
 
-        var dlg = new RoiEditWindow(row.Resolution, bw, bh, row.SceneId, current) { Owner = this };
+        var dlg = new RoiEditWindow(row.SceneId, current) { Owner = this };
         if (dlg.ShowDialog() != true) return;
 
         // 先原地替换内容，再按需换场景（MoveRoi 搬的是替换后的那条，顺序反了会丢掉编辑）
-        var updated = RoiStore.ReplaceRoi(cfg, row.SceneId, row.Resolution, row.Index, dlg.Result);
+        var updated = RoiStore.ReplaceRoi(cfg, row.SceneId, row.Index, dlg.Result);
         if (updated is not null && dlg.ResultSceneId != row.SceneId)
-            updated = RoiStore.MoveRoi(updated, row.SceneId, row.Resolution, row.Index, dlg.ResultSceneId);
+            updated = RoiStore.MoveRoi(updated, row.SceneId, row.Index, dlg.ResultSceneId);
         if (updated is null) { MessageBox.Show(this, "定位失败：列表可能已过期，请重新打开本页。", "编辑区域"); return; }
         CommitRois(updated, $"区域“{row.Name}”未能写入 rois.json。");
     }
@@ -507,13 +504,11 @@ public partial class SettingsWindow : Window
         var (rx, ry, rw, rh) = isChat
             ? (p.Chat is { } c ? (c.X, c.Y, c.W, c.H) : (0d, 0d, 0d, 0d))
             : (p.RoomNameList is { } r ? (r.X, r.Y, r.W, r.H) : (0d, 0d, 0d, 0d));
-        var (bw, bh) = ParseResolution(row.Resolution);
 
         // 复用普通校准区域的编辑窗：喂一个临时 Roi（相对坐标直接喂进去），
-        // 预设模式禁用场景/名称/类型，用户只能调矩形。
-        var dummy = new Roi(row.Name, isChat ? "Chat" : "RoomNameList",
-            new RelRect(rx, ry, rw, rh));
-        var dlg = new RoiEditWindow(row.Resolution, bw, bh, row.SceneId, dummy, isPreset: true)
+        // 预设模式禁用场景/名称，用户只能调矩形。
+        var dummy = new Roi(row.Name, new RelRect(rx, ry, rw, rh));
+        var dlg = new RoiEditWindow(row.SceneId, dummy, isPreset: true)
         {
             Owner = this,
         };
@@ -559,7 +554,7 @@ public partial class SettingsWindow : Window
                 "删除区域", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
 
         var cfg = RoiStore.Load(_roisJsonPath);
-        var updated = RoiStore.RemoveRoi(cfg, row.SceneId, row.Resolution, row.Index);
+        var updated = RoiStore.RemoveRoi(cfg, row.SceneId, row.Index);
         if (updated is null) { MessageBox.Show(this, "定位失败：列表可能已过期，请重新打开本页。", "删除区域"); return; }
         CommitRois(updated, $"区域“{row.Name}”未能删除。");
     }
@@ -805,7 +800,7 @@ public partial class SettingsWindow : Window
 
         if (!TryMapKey(key, out uint vk))
         {
-            MessageBox.Show(this, $"不支持的按键：{key}（当前支持 F6–F12，可加 Ctrl/Alt/Shift 组合）",
+            MessageBox.Show(this, $"不支持的按键：{key}（当前支持 F6–F9，可加 Ctrl/Alt/Shift 组合）",
                 "热键", MessageBoxButton.OK, MessageBoxImage.Warning);
             StopRecording();
             return;
@@ -857,9 +852,6 @@ public partial class SettingsWindow : Window
             case Key.F7: vk = HotkeyKeys.VK_F7; return true;
             case Key.F8: vk = HotkeyKeys.VK_F8; return true;
             case Key.F9: vk = HotkeyKeys.VK_F9; return true;
-            case Key.F10: vk = HotkeyKeys.VK_F10; return true;
-            case Key.F11: vk = HotkeyKeys.VK_F11; return true;
-            case Key.F12: vk = HotkeyKeys.VK_F12; return true;
             default: vk = 0; return false;
         }
     }
@@ -1039,7 +1031,7 @@ public partial class SettingsWindow : Window
     {
         try
         {
-            RoiStore.Save(new RoiConfig(new Dictionary<string, IReadOnlyList<SceneBucket>>()), _roisJsonPath);
+            RoiStore.Save(new RoiConfig(new Dictionary<string, IReadOnlyList<Roi>>()), _roisJsonPath);
         }
         catch (Exception ex)
         {

@@ -1,13 +1,8 @@
 {
   "scenes": {
     "browsing": {
-      "buckets": [
-        {
-          "resolution": "1920x1080",
-          "rois": [
-            { "name": "房间名区域", "type": "RoomNameList", "rect": [0.18, 0.27, 0.24, 0.42] }
-          ]
-        }
+      "rois": [
+        { "name": "房间名区域", "rect": [0.18, 0.27, 0.24, 0.42] }
       ]
     }
   }

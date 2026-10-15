@@ -41,7 +41,7 @@ public class DocsConsistencyTests
         "layout-presets.json", "layout-overrides.json", "LayoutPresetStore", "ToRois", "EffectiveRois",
         "tools/LayoutCheck", "ReplaceRoi", "RemoveRoi", "MoveRoi", "HitColumn",
         // 翻译与闸门
-        "TranslationOrchestrator", "KoreanText", "ContainsHangul", "ShouldTranslate",
+        "TranslationOrchestrator", "KoreanText", "ContainsHangul",
         "TranslationProviderEntry", "AliyunMtProvider",
         "RateLimitCooldown", "RateLimitException", "RateLimited", "LineStabilizer",
         // 节拍与外观
@@ -54,7 +54,6 @@ public class DocsConsistencyTests
     private static readonly string[] RetiredSymbols =
     {
         "TieredTranslator", "TwoLevel", "FastEngine", "FastModel", "Provisional", "TranslationStage",
-        "TranslationEngine",
         "ChatPollMs", "OtherPollMs", "SceneDetector", "RoiManager", "ChangeDetector",
         "RoomBrowser", "WaitingRoom", "Papago", "ScrTranslator.Overlay", "ScrTranslator.Common", "appsettings.json",
     };
