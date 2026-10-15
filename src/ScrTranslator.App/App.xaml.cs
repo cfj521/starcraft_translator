@@ -225,7 +225,7 @@ public partial class App : Application
                 ProbeStart.Ok => "已开启",
                 ProbeStart.WaitingForWindow => $"未找到游戏窗口（进程 {info.ProcessName}），转入等待：窗口出现后自动开始翻译（游戏需窗口化/无边框）",
                 ProbeStart.CaptureUnsupported => "无法开启：系统不支持窗口捕获（需 Win10 1803+，且非 WSL）",
-                ProbeStart.NoRoi => "尚未校准区域：按 Ctrl+F9 框选游戏聊天/房间区域后再按 F9",
+                ProbeStart.NoRoi => "预设加载失败（layout-presets.json 不可用或为空）：请确认文件存在且完好，详见启动日志",
                 ProbeStart.WindowNotFound => $"{info.ProcessName} 窗口查找异常：请确认游戏已以窗口化/无边框模式启动",
                 ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见日志",
                 _ => "无法开启",

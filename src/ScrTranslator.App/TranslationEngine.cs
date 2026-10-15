@@ -575,7 +575,7 @@ public sealed class TranslationEngine : IDisposable
                     if (_activeScene == GameScene.Other)
                         _log.Debug("[probe] 其他界面（主菜单/加载等），本就不翻译"); // 其他态不催校准
                     else
-                        _log.Info($"[probe] 当前场景[{_activeScene.Label()}]无 ROI 校准——请按 F8 校准该场景");
+                        _log.Info($"[probe] 当前场景[{_activeScene.Label()}]无预设识别区域——DEBUG 模式下可用校准窗拖调（直写 layout-presets.json）");
                     _roiMissingLogged = true;
                 }
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
