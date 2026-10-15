@@ -21,6 +21,24 @@ public sealed record LayoutPreset(string Scene, string Resolution, RelRect? Chat
     public const string PresetNamePrefix = "%preset%";
 
     /// <summary>
+    /// 预设的识别区域（名字 + 相对矩形），无标记前缀——名字就是字段名本身。
+    /// 翻译管线与 UI 直接消费这个列表，不再包成 ROI。
+    /// </summary>
+    public IReadOnlyList<(string Name, RelRect Rect)> Parts()
+    {
+        var list = new List<(string Name, RelRect Rect)>();
+        if (Chat is { } chat)
+            list.Add(("chat", chat));
+        if (RoomNameList is { } rnl)
+            list.Add(("roomNameList", rnl));
+        if (GameName is { } gn)
+            list.Add(("gameName", gn));
+        if (MapName is { } mn)
+            list.Add(("mapName", mn));
+        return list;
+    }
+
+    /// <summary>
     /// 展开成普通 ROI 列表，这样运行时**完全复用**既有通路（逐 ROI 裁剪 → OCR → 按类型决定翻不翻），
     /// 不必为"预设"另写一套流程。名字带 <see cref="PresetNamePrefix"/> 标记以便与用户校准框区分。
     /// </summary>

@@ -73,6 +73,22 @@ public class LayoutPresetTests
         Assert.True(p.RoomNameList is null);
     }
 
+    [Fact]
+    public void Parts_ReturnsNonEmptyPartsAsNameRelRectPairs()
+    {
+        var p = new LayoutPreset("room", "16:9",
+            Chat: new RelRect(0.1, 0.6, 0.4, 0.2),
+            GameName: new RelRect(0.5, 0.3, 0.1, 0.02));
+        var parts = p.Parts();
+        var names = parts.Select(t => t.Name).ToArray();
+        Assert.Contains("chat", names);
+        Assert.Contains("gameName", names);
+        Assert.DoesNotContain("roomNameList", names); // 未设 → 不出现
+        Assert.DoesNotContain("mapName", names);
+        var chat = parts.First(t => t.Name == "chat").Rect;
+        Assert.Equal(0.6, chat.Y, 6);
+    }
+
     // ---- 房间名称 / 地图名称（room 场景新增的两块预设区域）----
 
     [Fact]

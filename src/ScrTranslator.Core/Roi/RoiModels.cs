@@ -1,6 +1,5 @@
 namespace ScrTranslator.Core;
 
-public record RelRect(double X, double Y, double W, double H);
 public record Roi(string Name, RelRect Rect, IReadOnlyList<RoiColumn>? Columns = null);
 
 /// <summary>某场景的 ROI 集合。相对坐标跨分辨率通用（等比缩放），不按分辨率分档。</summary>
