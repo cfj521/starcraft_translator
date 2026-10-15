@@ -10,18 +10,14 @@ namespace ScrTranslator.Core.Scene;
 /// 数值来源：1080p 从 docs/scenes pictures 的截图量得，2K/4K 按 4/3、2 倍等比推算并用叠加图逐档目视核验。
 /// 校准/编辑能力保留，用于改版时覆盖。
 ///
-/// 坐标一律是**相对内容区的 0~1 比例**（与 rois.json 同一口径）。UI 等比缩放，同一宽高比档跨分辨率通用，
+/// 坐标一律是**相对内容区的 0~1 比例**。UI 等比缩放，同一宽高比档跨分辨率通用，
 /// 运行时按当前帧宽高比选最接近的预设档（见 <see cref="LayoutPresetStore.Find"/>），不按分辨率分档。
 /// </summary>
 public sealed record LayoutPreset(string Scene, string Resolution, RelRect? Chat, RelRect? RoomNameList = null,
     RelRect? GameName = null, RelRect? MapName = null)
 {
-    /// <summary>预设 ROI 名字的特殊标记。名字带标记 = 预设：校准窗靠它在保存时分流
-    /// （带标记的写 layout-overrides.json 覆盖层，不带的写 rois.json 用户框），运行时日志/调试面板也据此区分。</summary>
-    public const string PresetNamePrefix = "%preset%";
-
     /// <summary>
-    /// 预设的识别区域（名字 + 相对矩形），无标记前缀——名字就是字段名本身。
+    /// 预设的识别区域（名字 + 相对矩形）——名字就是字段名本身。
     /// 翻译管线与 UI 直接消费这个列表，不再包成 ROI。
     /// </summary>
     public IReadOnlyList<(string Name, RelRect Rect)> Parts()
@@ -35,24 +31,6 @@ public sealed record LayoutPreset(string Scene, string Resolution, RelRect? Chat
             list.Add(("gameName", gn));
         if (MapName is { } mn)
             list.Add(("mapName", mn));
-        return list;
-    }
-
-    /// <summary>
-    /// 展开成普通 ROI 列表，这样运行时**完全复用**既有通路（逐 ROI 裁剪 → OCR → 按类型决定翻不翻），
-    /// 不必为"预设"另写一套流程。名字带 <see cref="PresetNamePrefix"/> 标记以便与用户校准框区分。
-    /// </summary>
-    public IReadOnlyList<Roi> ToRois()
-    {
-        var list = new List<Roi>();
-        if (Chat is { } chat)
-            list.Add(new Roi($"{PresetNamePrefix}Chat", chat));
-        if (RoomNameList is { } rnl)
-            list.Add(new Roi($"{PresetNamePrefix}RoomNameList", rnl));
-        if (GameName is { } gn)
-            list.Add(new Roi($"{PresetNamePrefix}GameName", gn));
-        if (MapName is { } mn)
-            list.Add(new Roi($"{PresetNamePrefix}MapName", mn));
         return list;
     }
 
@@ -128,7 +106,7 @@ public sealed class LayoutPresetStore
     }
 
     /// <summary>把一条预设直写出厂文件（同 (场景,分辨率) 整条替换）。
-    /// 同 RoiStore.Save 的原子写纪律：先写临时文件再 File.Move 替换，避免写到一半被中断导致截断损坏。</summary>
+    /// 原子写纪律：先写临时文件再 File.Move 替换，避免写到一半被中断导致截断损坏。</summary>
     public static void Save(LayoutPreset preset, string path)
     {
         var existing = File.Exists(path)

@@ -5,7 +5,7 @@ namespace ScrTranslator.Core.Tests.Scene;
 
 /// <summary>
 /// 界面布局预设（聊天框 + 房间名列表区域 + 房间名称/地图名称）。
-/// 预设直接存相对坐标（0~1），<see cref="LayoutPreset.ToRois"/> 不再换算、原样喂给运行时。
+/// 预设直接存相对坐标（0~1），<see cref="LayoutPreset.Parts"/> 原样喂给运行时。
 /// </summary>
 public class LayoutPresetTests
 {
@@ -37,40 +37,6 @@ public class LayoutPresetTests
         Assert.NotNull(store.Find("browsing", 1024, 768));    // 4:3 没有精确档，回落到最接近的 16:9
         Assert.False(store.HasScene("room"));
         Assert.True(store.HasScene("browsing"));
-    }
-
-    [Fact]
-    public void ToRois_ReturnsRelativeRectsAsIs()
-    {
-        var p = LayoutPresetStore.Load(TempWith(Json)).Find("browsing", 1920, 1080)!;
-        var rois = p.ToRois();
-
-        Assert.Equal(2, rois.Count);
-        var chat = rois.First(r => r.Name.Contains("Chat"));
-        Assert.Equal(280 / 1920d, chat.Rect.X, 6);
-        Assert.Equal(740 / 1080d, chat.Rect.Y, 6);
-        Assert.Equal(800 / 1920d, chat.Rect.W, 6);
-        Assert.Equal(247 / 1080d, chat.Rect.H, 6);
-
-        // 房间名列表是单一区域（相对画面），不再分列
-        var rnl = rois.First(r => r.Name.Contains("RoomNameList"));
-        Assert.Equal(432 / 1920d, rnl.Rect.X, 6);
-        Assert.Equal(305 / 1080d, rnl.Rect.Y, 6);
-        Assert.Equal(276 / 1920d, rnl.Rect.W, 6);
-        Assert.Equal(382 / 1080d, rnl.Rect.H, 6);
-        Assert.True(rnl.Columns is null, "房间名列表无列");
-    }
-
-    [Fact]
-    public void ToRois_SceneWithOnlyChat_ReturnsSingleRoi()
-    {
-        var p = LayoutPresetStore.Load(TempWith(Json)).Find("browsing", 1920, 1200)!;
-        var rois = p.ToRois();
-
-        Assert.Single(rois);
-        Assert.Equal("%preset%Chat", rois[0].Name);
-        Assert.Equal(280 / 1920d, rois[0].Rect.X, 6);
-        Assert.True(p.RoomNameList is null);
     }
 
     [Fact]
@@ -106,27 +72,6 @@ public class LayoutPresetTests
     }
 
     // ---- 房间名称 / 地图名称（room 场景新增的两块预设区域）----
-
-    [Fact]
-    public void ToRois_GameNameAndMapName_ReturnRelativeRects()
-    {
-        var p = new LayoutPreset("room", "1920x1080",
-            Chat: new RelRect(270 / 1920d, 744 / 1080d, 805 / 1920d, 241 / 1080d),
-            GameName: new RelRect(1085 / 1920d, 395 / 1080d, 360 / 1920d, 21 / 1080d),
-            MapName: new RelRect(1085 / 1920d, 447 / 1080d, 360 / 1920d, 21 / 1080d));
-        var rois = p.ToRois();
-
-        Assert.Equal(3, rois.Count);
-        var gn = rois.First(r => r.Name.Contains("GameName"));
-        Assert.Equal(1085 / 1920d, gn.Rect.X, 6);
-        Assert.Equal(395 / 1080d, gn.Rect.Y, 6);
-        Assert.Equal(360 / 1920d, gn.Rect.W, 6);
-        Assert.Equal(21 / 1080d, gn.Rect.H, 6);
-        var mn = rois.First(r => r.Name.Contains("MapName"));
-        Assert.Equal(1085 / 1920d, mn.Rect.X, 6);
-        Assert.Equal(447 / 1080d, mn.Rect.Y, 6);
-        Assert.True(gn.Columns is null && mn.Columns is null, "这两块区域无列");
-    }
 
     [Fact]
     public void Load_ParsesGameNameAndMapName()

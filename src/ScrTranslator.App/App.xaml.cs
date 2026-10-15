@@ -79,13 +79,6 @@ public partial class App : Application
             "ScrTranslator", "settings.json");
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
 
-        // ROI 校准数据也放 %APPDATA%（此前在 exe 旁，每次重建/发布被 PreserveNewest 覆盖丢失）。
-        // 一次性迁移：APPDATA 无、但旧位置有 → 复制过来，保住既有校准。
-        string roisPath = Path.Combine(Path.GetDirectoryName(settingsPath)!, "rois.json");
-        string legacyRois = Path.Combine(baseDir, "rois.json");
-        if (!File.Exists(roisPath) && File.Exists(legacyRois))
-            try { File.Copy(legacyRois, roisPath); } catch { /* 迁移失败则按无校准处理，Ctrl+F9 重建即可 */ }
-
         // 场景识别参考（两层，故意分文件）：
         //  出厂层 exe 旁 scene-refs.json，由 tools/SceneRefGen 生成，带 sha256 校验，程序只读；
         //  覆盖层 %APPDATA%\ScrTranslator\scene-overrides.json，放用户现场采集的参考，升级 exe 不会丢。
@@ -193,7 +186,7 @@ public partial class App : Application
         var startupSettings = _host.Services.GetRequiredService<SettingsHolder>();
         log.DebugEnabled = startupSettings.Current.General.DebugMode; // 启动即同步，避免首帧诊断漏记
         log.Info($"──── SC:R Translator v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version} 启动 ────");
-        log.Info($"[app] 配置={settingsPath} | ROI={roisPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
+        log.Info($"[app] 配置={settingsPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
 
         var probe = _host.Services.GetRequiredService<TranslationEngine>();
         bool running = false;

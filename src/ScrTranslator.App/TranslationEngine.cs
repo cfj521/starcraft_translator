@@ -130,7 +130,7 @@ public sealed class TranslationEngine : IDisposable
 
     /// <summary>从布局预设算派生标志：当前场景有没有预设区域（决定翻不翻）+ 有没有任何预设
     /// （决定 F9 能不能启动）。后者必须与"当前场景"解耦——启动瞬间还没识别，当前场景是 Other，
-    /// 若按前者判断就会误报"尚未校准"。预设是唯一来源，不再看 rois.json。</summary>
+    /// 若按前者判断就会误报"尚未校准"。预设是唯一来源。</summary>
     private void RefreshRoiDerivedFlags()
     {
         _roiAvailable = _layout.HasScene(SceneId);
@@ -219,9 +219,9 @@ public sealed class TranslationEngine : IDisposable
         _log.Info($"[scene] 切换 {SceneDisplay(from, GameRace.Unknown)} → {SceneDisplay(to, race)}");
         if (to != GameScene.Other && !_roiAvailable)
         {
-            // 三个场景各自一套 ROI（rois.json 按场景分键）。切到一个还没校准的场景时必须当场说出来，
-            // 否则用户的感受是"切了界面就什么都不翻/还在用老场景的框"，像是区域在场景间混用。
-            _log.Info($"[probe] 当前场景[{SceneDisplay(to, race)}]无 ROI 校准——请按 F8 校准该场景");
+            // 三个场景各自一套预设识别区域。切到一个没有预设的场景时必须当场说出来，
+            // 否则用户的感受是"切了界面就什么都不翻"，像是区域在场景间混用。
+            _log.Info($"[probe] 当前场景[{SceneDisplay(to, race)}]无预设识别区域");
             Notice?.Invoke(ProbeNotice.NeedsCalibration,
                 $"当前场景：{SceneDisplay(to, race)}——这个场景还没框选区域，请按 F8 校准（三个场景要各校准一次）");
         }
@@ -277,9 +277,9 @@ public sealed class TranslationEngine : IDisposable
             }
             if (!_anySceneCalibrated)
             {
-                // 注意判断的是"有没有任何场景校准过"，不是"当前场景有没有 ROI"：
-                // 启动瞬间还没拿到帧，当前场景恒为 Other（无 ROI），按后者会永远报"尚未校准"。
-                _log.Log("[probe] rois.json 无任何场景 ROI，请先校准");
+                // 注意判断的是"有没有任何场景的预设"，不是"当前场景有没有区域"：
+                // 启动瞬间还没拿到帧，当前场景恒为 Other，按后者会永远报"尚无预设"。
+                _log.Log("[probe] 布局预设为空（预设加载失败），无法翻译");
                 return new ProbeStartInfo(ProbeStart.NoRoi, proc);
             }
             var hwnd = WindowFinder.FindByProcess(proc);

@@ -1,7 +1,7 @@
 namespace ScrTranslator.Core.Scene;
 
 /// <summary>
-/// 游戏画面场景（四态）。翻译按场景选各自 ROI；rois.json 的 scenes 字典键即 <see cref="GameSceneIds"/>。
+/// 游戏画面场景（四态）。翻译按场景选预设识别区域（Parts）；layout-presets.json 的 scenes 字典键即 <see cref="GameSceneIds"/>。
 /// <see cref="Other"/> = 游戏在前台但不属于三目标场景（主菜单/加载/单人战役/街机/设置等），此态不翻译。
 /// 场景识别由 <see cref="SceneRecognizer"/> 用图像指纹完成；<see cref="InGame"/> 的指纹按种族分套
 /// （人族/神族/虫族的底部装饰板不同），故识别命中种族时会一并回填 <see cref="SceneRecognition.Race"/>。
@@ -20,7 +20,7 @@ public static class GameSceneIds
     public const string InGame = "ingame";
     public const string Other = "other";
 
-    /// <summary>旧 rois.json / 旧提示词键 → 新键。</summary>
+    /// <summary>旧提示词键 → 新键（老校准文件的场景键映射同源）。</summary>
     static readonly Dictionary<string, string> LegacyToNewId = new()
     {
         ["custom_games_listing"] = Browsing,
