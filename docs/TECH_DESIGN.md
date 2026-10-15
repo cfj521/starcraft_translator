@@ -37,8 +37,8 @@
                     └────────────────┬─────────────────┘
                                      │ 当前场景（决定用哪套区域、是否翻译）
                     ┌────────────────▼─────────────────┐
-                    │    区域来源 = 校准 ROI ＋ 布局预设  │  rois.json + layout-presets.json
-                    │   裁出: 聊天框 / 房间名列表 / 地图  │  按 场景→分辨率 取，两者叠加
+                    │    区域来源 = 内置布局预设（唯一来源）  │  layout-presets.json
+                    │   裁出: 聊天/房间名列表/房间名/地图名  │  按 场景→宽高比档 取，直读直写
                     └────────────────┬─────────────────┘
                                      │ 每个区域的子图
                     ┌────────────────▼─────────────────┐
@@ -78,48 +78,36 @@
   - 窗口丢失/最小化时暂停并重试。
 - **接口**：`event Action<CaptureFrame> FrameArrived;` `Start(IntPtr hwnd)` / `Stop()`。
 
-### 3.2 区域来源：校准 ROI ＋ 布局预设
+### 3.2 区域来源：内置布局预设（唯一来源）
 
-**两个来源，运行时合并**（`Phase1Probe.EffectiveRois`）：
+**唯一来源，直读直写**：识别区域只取自 `layout-presets.json`（没有用户校准 ROI，也没有 APPDATA 覆盖层）。
 
-1. **用户校准的 ROI** —— `rois.json`：`场景 → 分辨率 bucket → Roi[]`。
-   每个 ROI = { Name, Type(Chat/RoomList/MapInfo), Rect(相对 0~1), Columns? }。
-   存相对比例、按分辨率分桶，界面上一律换算成**整数像素**显示（用户读百分比读不动）。
-2. **出厂布局预设** —— `layout-presets.json`：各场景在各分辨率下的**聊天框** +
-   寻找房间的**房间列表网格**（列表框 / 行高 / 房间名列 / 地图名列）。
+1. **出厂布局预设** —— `layout-presets.json`：每个场景按宽高比档（16:9/16:10/4:3）固定
+   **聊天框** + 寻找房间的**房间名列表区域** + 房间内的**房间名称/地图名称**。
+   坐标是相对内容区的 0~1 比例，运行时按当前帧宽高比选最接近的预设档（`LayoutPresetStore.Find`）。
 
-**为什么要有预设**：这些面板在给定分辨率下位置和行高是死的（列表行距实测 1080p=38px、
-2K=51px、4K=76px，严格等比），让用户每次拖框既没准头也没必要。数值由截图量得：
-列表用**绿色人数槽的 y 周期**定行、**表头亮字团**定列；游戏内聊天用 `ingame-w/h` 两张专用图
-定出单行最大宽度与最大行数。2K/4K 等比推算后用叠加图目视核验。
+**为什么要有预设**：这些面板在给定宽高比档下位置是死的，让用户每次拖框既没准头也没必要。
+数值由截图量得：2K/4K 等比推算后用叠加图目视核验。
 
-**合并规则：叠加，不顶替。** 校准的 RoomList 框可能是用户有意框在别处（例如右侧详情面板的
-Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。不想要重复条目就在配置页删掉，
-行为可解释、不搞优先级魔法。
+**编辑直读直写**：配置页"区域" tab 与校准窗（都**仅 DEBUG 模式可用**）直接读写出厂
+`layout-presets.json`（`LayoutPresetStore.Save` 按 (Scene,Resolution) upsert 原子写回）。没有覆盖层，
+不存在"删掉恢复出厂"——出厂文件就是唯一数据，改即生效。
 
-**区域改写全部走纯函数、定位失败返回 null**：`RoiStore.ReplaceRoi`（改名/类型/像素矩形）、
-`RoiStore.RemoveRoi`（删一条）、`RoiStore.MoveRoi`（挪到另一场景的同分辨率桶，没有就新建）。
-三者都按 `(场景, 分辨率, 序号)` 定位，**定位不到就返回 null 让调用方报错**，
-绝不"差不多就行"地改到别的场景或别的分辨率上——那会让用户的校准莫名其妙坏掉且极难查。
+**区域改写走纯函数**：`LayoutPreset.Parts()` 展开识别区域（名字 + RelRect），`LayoutPresetStore.Save`
+按 (Scene,Resolution) upsert。预设缺失时 `Find` 返回 null，调用方按"该场景无区域"处理，不崩。
 
-**列定义**：只有 RoomList 型 ROI 有列。列 = { Kind(RoomName/MapName/PlayerId/Other), 相对框宽的起止 }。
-运行时按每行 OCR 文本在框内的水平位置命中列（`TranslationScope.HitColumn`），再由「翻译」页
-四个开关决定翻不翻；**未命中任何列一律不翻**（最安全）。房间列表网格的两列之间隔着 Game Type，
-所以列必须带 x 起点，只给宽度会把第二列顶到第一列右边、正好盖住 Game Type。
-
-**两层文件（预设与场景参考同一套纪律）**：
+**两层文件（仅场景参考保留覆盖层，区域已无覆盖层）**：
 
 | 层 | 位置 | 谁写 | 说明 |
 |---|---|---|---|
-| 出厂层 | exe 旁 `layout-presets.json` / `scene-refs.json` | 只有量测/生成工具 | 程序**永不改写**；`scene-refs.json` 另带 sha256（覆盖几何+数据），改一个坐标即整份拒用 |
-| 覆盖层 | `%APPDATA%\ScrTranslator\layout-overrides.json` / `scene-overrides.json` | 用户在配置页编辑 | 同 (场景,分辨率) 覆盖胜出；删掉即恢复出厂值。升级 exe 不丢用户数据 |
+| 出厂层 | exe 旁 `layout-presets.json` / `scene-refs.json` | 量测/生成工具 + 配置页/校准窗(DEBUG) | `scene-refs.json` 带 sha256（覆盖几何+数据）改一个坐标即整份拒用；`layout-presets.json` 可被校准/配置直写 |
+| 覆盖层 | `%APPDATA%\ScrTranslator\scene-overrides.json` | 用户现场采集 | 仅场景参考覆盖（区域不再有覆盖层）；删掉即恢复出厂值 |
 
-**分辨率必须精确匹配**，缺该档就回落到校准 ROI —— 绝不借用邻近分辨率的数值（UI 非严格等比缩放，
-借了会整体偏移）。改完预设配置页会连着调 `probe.ReloadRois()` + `probe.ReloadLayoutPresets()`，
-否则 DI 单例里的 store 还是旧值，症状是"我明明改了，框没变"。
+**宽高比档回落**：无精确档就回落到最接近的档 —— 绝不借用会扭曲几何的数值。改完预设配置页会连着调
+`probe.ReloadLayoutPresets()`，否则 DI 单例里的 store 还是旧值，症状是"我明明改了，框没变"。
 
 **核验工具** `tools/LayoutCheck`：把预设画到真实截图上（复用运行时同一套 `LayoutPresetStore` +
-`ToRois()`），所以"核验通过"等价于"实机就是这个框"。游戏改版后跑一次即可定位哪个框歪了。
+`Parts()`），所以"核验通过"等价于"实机就是这个框"。游戏改版后跑一次即可定位哪个框歪了。
 
 ### 3.3 变化检测与内容闸门（`Phase1Probe.OnFrame` + `LineStabilizer`）
 - **职责**：避免对同一内容重复 OCR/翻译（省 CPU 与 API 费用）。
@@ -197,15 +185,14 @@ Game Name / Map Name 两行），隐式吞掉会让已有校准莫名失效。�
 ### 3.8 横切
 - **Settings**：`%APPDATA%\ScrTranslator\settings.json`（`SettingsStore`，缺文件/损坏→默认值不崩）。
   密钥与 OAuth token 另存 `secrets.dat`，走 DPAPI(`ProtectedData`, CurrentUser)，**不进 settings.json**。
-- **区域与预设**：`rois.json` 与两个覆盖层（`scene-overrides.json` / `layout-overrides.json`）同在
-  `%APPDATA%\ScrTranslator`；出厂层在 exe 旁、只读。见 3.2 的两层表。
+- **区域与预设**：区域现为唯一来源，出厂 `layout-presets.json`（直读直写，DEBUG 模式）；场景参考覆盖层 `scene-overrides.json` 在 `%APPDATA%\ScrTranslator`。见 3.2。
 - **Calibration**：独立的可交互全屏覆盖窗（悬浮层本身始终点击穿透，不变成编辑态）。
   进入前要求游戏在前台，并自己抓帧检测场景，见 UI_DESIGN 第 5 节。
 - **Hotkey**：全局热键 5 个（`RegisterHotKey`，可录制重绑 + 冲突检测 + 恢复默认）。
 - **日志**：`logs/app.log`，分级（DEBUG 开=全量诊断，关=仅业务），UTF-8 带 BOM，超限轮转。
 
 ### 3.9 SceneRecognizer（场景识别 = 图像指纹，不用 OCR）
-- **职责**：判断当前帧属于 `browsing`(寻找房间) / `room`(房间内) / `ingame`(游戏内) 哪一个，或三者之外的 `other`(其他界面：主菜单/加载/单人/街机/设置)。场景决定用哪套 ROI、以及**翻不翻**。
+- **职责**：判断当前帧属于 `browsing`(寻找房间) / `room`(房间内) / `ingame`(游戏内) 哪一个，或三者之外的 `other`(其他界面：主菜单/加载/单人/街机/设置)。场景决定用哪套识别区域、以及**翻不翻**。
 - **为什么不用 OCR 关键词**：客户端 UI 虽是英文，但 cue 会随版本/语言变，且要为一帧跑 2 次 OCR（慢、和翻译抢引擎）。实测整帧感知哈希也不行——游戏内视口占大半画面且一直在变，两张游戏内截图整帧指纹只有 62/144 命中。
 - **方案**：每个场景自带**两块静态区域**的"块均值 RGB 指纹"，逐块带容差比对，命中率最高者胜出。
   - `browsing` / `room`：顶部金属边框左右两角 `(0,0,250,110)`、`(1650,0,270,110)`（1080p 基准）。
@@ -246,16 +233,16 @@ starcraft_translator/
 │  │  ├─ Auth/ Secrets/ Services/   # OAuth、DPAPI 密钥、托盘/热键/自启
 │  │  ├─ Phase1Probe.cs             # 主管线：帧 → 场景 → ROI → OCR → 翻译 → 上屏 + 看门狗
 │  │  ├─ scene-refs.json            # 场景识别像素参考（生成物，只读）
-│  │  └─ layout-presets.json        # 界面布局预设（量测产物，只读）
+│  │  └─ layout-presets.json        # 界面布局预设（量测产物，直读直写，DEBUG 模式）
 │  └─ ScrTranslator.Core/           # 业务逻辑（无 UI、无图像库依赖，可单测）
-│     ├─ Roi/                       # RoiStore(含 Replace/Remove/MoveRoi)、TranslationScope、RelRect
+│     ├─ RelRect.cs                 # 相对矩形 record + ToPixels 扩展（识别区域唯一数据结构）
 │     ├─ Scene/                     # SceneRefStore、SceneFingerprint、SceneRecognizer、SceneRefCapture、LayoutPresets、Scene
 │     ├─ Ocr/                       # IOcrEngine + PaddleOcrEngine(RapidOcrNet)
 │     ├─ Translation/               # ITranslationProvider、四 provider(腾讯/阿里云 MT + OpenAI/DashScope LLM)、Glossary、Cache、
 │     │                             #   TranslationOrchestrator(单级 provider 池回退)、PromptBuilder、BatchProtocol
 │     ├─ Settings/                  # AppSettings、SettingsStore、PollInterval(两节拍)
 │     └─ KoreanText.cs              # 谚文判定：翻译入口的内容闸门
-├─ tests/ScrTranslator.Core.Tests/  # 238 条；含 SceneRefsShippingTests / LayoutPresetTests 回归
+├─ tests/ScrTranslator.Core.Tests/  # 235 条；含 SceneRefsShippingTests / LayoutPresetTests 回归
 ├─ tools/
 │  ├─ SceneRefGen/                  # 截图 → scene-refs.json（含全量判定矩阵，判错退出码非 0）
 │  ├─ LayoutCheck/                  # 把布局预设画到截图上核验
@@ -311,9 +298,8 @@ starcraft_translator/
   **场景指纹**（`SceneFingerprint`/`SceneRecognizer` 用合成帧跑；`SceneRefStore` 覆盖解析/校验和/覆盖层合并；
   `SceneRefCapture` 覆盖现场缩放几何/块均值指纹采集/写覆盖层与合并回退；
   `SceneRefsShippingTests` 回归验证出厂参考真的互相区分得开）、
-  **布局预设**（三种相对口径各自正确、精确匹配不借用、坏数据只丢该字段并告警、
-  覆盖层读写与回退、`LayoutPresetTests` 回归验证出厂三场景×三分辨率齐全且不越画面）、
-  **区域改写**（`RoiStoreEditTests`：Replace/Remove/Move 只动目标条目、定位失败返回 null）、
+  **布局预设**（宽高比档选取与回落、坏数据只丢该字段并告警、Parts 展开与 Save 直写往返、
+  `LayoutPresetTests` 回归验证出厂三场景×三宽高比档齐全且不越画面）、
   **内容闸门**（`KoreanTextTests`：真实 UI 英文串必须判"不含谚文"）、
   **两节拍**（`PollIntervalTests`：捕获闸门取较快值）。
 - **手动验证**：捕获/悬浮/OCR/端到端、校准交互与预设落位需在真实游戏窗口上验证（见 `E2E_CHECKLIST.md`）。

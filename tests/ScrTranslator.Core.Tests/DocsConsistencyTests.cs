@@ -23,7 +23,7 @@ public class DocsConsistencyTests
     };
 
     /// <summary>
-    /// 历史遗留键：它们**是活功能**（GameSceneIds.LegacyToNewId 与 RoiStore.Load 靠它们兼容老校准文件），
+    /// 历史遗留键：它们**是活功能**（GameSceneIds.LegacyToNewId 与 Normalize 靠它们兼容老提示词键），
     /// 所以不参与"源码里不得出现"的检查；但文档提到时仍须带退役/兼容字样，避免被当成本名。
     /// </summary>
     private static readonly string[] LegacyAliases =
@@ -37,9 +37,8 @@ public class DocsConsistencyTests
         // 场景识别
         "SceneRecognizer", "SceneRefStore", "SceneFingerprint", "SceneRefIntegrity", "SceneRefCapture", "FramePixels",
         "scene-refs.json", "scene-overrides.json", "tools/SceneRefGen",
-        // 区域与布局预设
-        "layout-presets.json", "layout-overrides.json", "LayoutPresetStore", "ToRois", "EffectiveRois",
-        "tools/LayoutCheck", "ReplaceRoi", "RemoveRoi", "MoveRoi", "HitColumn",
+        // 区域与布局预设（预设是唯一来源，直接读写 layout-presets.json）
+        "layout-presets.json", "LayoutPresetStore", "tools/LayoutCheck",
         // 翻译与闸门
         "TranslationOrchestrator", "KoreanText", "ContainsHangul",
         "TranslationProviderEntry", "AliyunMtProvider",
@@ -47,7 +46,7 @@ public class DocsConsistencyTests
         // 节拍与外观
         "SceneDetectPollMs", "TranslatePollMs", "CaptureFloor", "BackplateOpacity",
         // 热重载与校准
-        "ReloadRois", "ReloadLayoutPresets", "CopyFromScreen",
+        "ReloadLayoutPresets",
     };
 
     /// <summary>代码里已不存在的名字：文档提到就必须带退役标记。</summary>
