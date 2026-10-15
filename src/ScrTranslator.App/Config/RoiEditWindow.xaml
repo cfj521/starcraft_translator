@@ -21,10 +21,10 @@
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Grid.Column="0" Text="场景" VerticalAlignment="Center"/>
-            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="SceneCombo" Padding="2,0,2,0"/>
+            <TextBlock Grid.Row="0" Grid.Column="1" x:Name="SceneText" VerticalAlignment="Center"/>
 
-            <TextBlock Grid.Row="2" Grid.Column="0" Text="名称" VerticalAlignment="Center"/>
-            <TextBox Grid.Row="2" Grid.Column="1" x:Name="NameBox"/>
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="区域" VerticalAlignment="Center"/>
+            <TextBlock Grid.Row="2" Grid.Column="1" x:Name="PartText" VerticalAlignment="Center"/>
 
             <Grid Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2">
                 <Grid.ColumnDefinitions>

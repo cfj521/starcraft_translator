@@ -317,7 +317,6 @@ public partial class App : Application
             settingsWindow = new Config.SettingsWindow(
                 settingsHolder,
                 settingsPath,
-                roisPath,
                 secretStoreForSettings,
                 oauthForSettings,
                 log,

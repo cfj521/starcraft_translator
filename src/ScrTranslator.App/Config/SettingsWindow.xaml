@@ -181,7 +181,7 @@
             </TabItem>
 
             <!-- ══════════════════ 区域 ══════════════════ -->
-            <TabItem Header="区域">
+            <TabItem Header="区域" x:Name="RegionTab">
                 <Grid Margin="8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -332,7 +332,7 @@
             <TabItem Header="关于">
                 <DockPanel Margin="12">
                     <!-- DEBUG 模式开关（从常规页移来，放右上角） -->
-                    <CheckBox x:Name="DebugModeCheck" DockPanel.Dock="Top" HorizontalAlignment="Right" Content="DEBUG模式" Margin="0,0,0,8"/>
+                    <CheckBox x:Name="DebugModeCheck" DockPanel.Dock="Top" HorizontalAlignment="Right" Content="DEBUG模式" Margin="0,0,0,8" Checked="OnDebugModeToggle" Unchecked="OnDebugModeToggle"/>
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <TextBlock x:Name="VersionText" Text="版本 —" FontWeight="Bold" FontSize="14" Margin="0,0,0,8"/>

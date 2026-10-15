@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using ScrTranslator.App.Auth;
 using SkiaSharp;
 using ScrTranslator.App.Capture;
@@ -33,25 +34,24 @@ public partial class SettingsWindow : Window
 
     private readonly SettingsHolder _holder;
     private readonly string _settingsPath;
-    private readonly string _roisJsonPath;
     private readonly SecretStore _secretStore;
     private readonly OpenAiOAuth _oauth;
     private readonly FileLogger _log;
     private readonly Action _openCalibration;
     private readonly Action? _onStateChanged;
-    /// <summary>rois.json 被本页"编辑/删除"改动后的回调（= probe.ReloadRois），让正在跑的探测立即用新区域。</summary>
+    /// <summary>预设被本页"编辑/删除"改动后的回调（= probe.ReloadLayoutPresets），让正在跑的探测立即用新区域。</summary>
     private readonly Action? _onRoisChanged;
     /// <summary>界面布局预设（直写出厂文件，可重载：保存后必须重读，否则表里还是旧值）。</summary>
     private LayoutPresetStore _layout = new();
     private string _layoutFactoryPath = "";
+    /// <summary>250ms 同步区域 tab 可见性：本窗非模态，F8/托盘在本窗口打开期间切 DEBUG 也要反映。</summary>
+    private DispatcherTimer? _regionTabTimer;
     private readonly HotkeyService _hotkeyService;
     /// <summary>provider 池的行（顺序即优先级）。拖动改顺序、勾选改启用；「应用/确定」时回写成 TranslationSettings.Providers。</summary>
     private readonly System.Collections.ObjectModel.ObservableCollection<ProviderRow> _providerRows = new();
 
-    /// <summary>区域表的一行。Preset=true 表示这是出厂/覆盖层预设（改它写 layout-overrides.json）；
-    /// PresetPart 标明改的是预设的哪一块（chat / roomList），校准行为空串。</summary>
-    private sealed record RoiRow(string SceneId, string Scene, string Resolution, int Index,
-                                 string Name, string Rect, bool Preset, string PresetPart);
+    /// <summary>区域表的一行：预设识别区域的一块（预设是唯一来源）。Name 存块名（chat/roomNameList/gameName/mapName）。</summary>
+    private sealed record RoiRow(string SceneId, string Scene, string Resolution, string Name, string Rect);
     private sealed record HotkeyRow(string Key, string Function, string Current);
 
     /// <summary>provider 池的一行。Enabled/Status/StatusTooltip/Model 走 INotifyPropertyChanged 让列表实时刷新。
@@ -97,7 +97,6 @@ public partial class SettingsWindow : Window
     public SettingsWindow(
         SettingsHolder holder,
         string settingsPath,
-        string roisJsonPath,
         SecretStore secretStore,
         OpenAiOAuth oauth,
         FileLogger log,
@@ -112,7 +111,6 @@ public partial class SettingsWindow : Window
         _sceneIdProvider = sceneIdProvider ?? new Func<string>(() => ScrTranslator.Core.Scene.GameSceneIds.Browsing);
         _holder = holder;
         _settingsPath = settingsPath;
-        _roisJsonPath = roisJsonPath;
         _secretStore = secretStore;
         _oauth = oauth;
         _log = log;
@@ -137,6 +135,10 @@ public partial class SettingsWindow : Window
         };
         Closed += OnWindowClosed;
         Loaded += (_, _) => AlignRestoreButtonWithContent(); // 布局完成后量标签栏宽，对齐"恢复默认"按钮
+        ApplyRegionTabVisibility(_holder.Current.General.DebugMode); // 区域 tab 仅 DEBUG 可见
+        _regionTabTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _regionTabTimer.Tick += (_, _) => ApplyRegionTabVisibility(_holder.Current.General.DebugMode); // F8/托盘切 DEBUG 实时反映
+        _regionTabTimer.Start();
     }
 
     // 若用户在"录制中"（已点修改、尚未按键/Esc）关闭本窗口，PreviewKeyDown 订阅本会一直挂着；
@@ -145,6 +147,7 @@ public partial class SettingsWindow : Window
     {
         _log.Log("[settings] 配置窗口关闭");
         _log.LogWritten -= OnLogWritten; // 窗口关了不再追加快照，避免 handler 悬空
+        _regionTabTimer?.Stop(); // 停区域 tab 可见性同步定时器
         if (_recordingFunc is null) return;
         PreviewKeyDown -= OnRecordKeyDown;
         _recordingFunc = null;
@@ -342,37 +345,20 @@ public partial class SettingsWindow : Window
     {
         try
         {
-            var cfg = RoiStore.Load(_roisJsonPath);
             var (curW, curH) = GameRenderResolution();
             string curRes = $"{curW}x{curH}";
             var rows = new List<RoiRow>();
 
-            // --- 校准的 ROI ---
-            // 相对坐标跨分辨率通用，不再按分辨率分档；Resolution 列填当前分辨率（仅显示）。
-            foreach (var (sceneId, rois) in cfg.Scenes)
-            {
-                string sceneLabel = GameSceneIds.FromId(sceneId).Label();
-                for (int idx = 0; idx < rois.Count; idx++)
-                {
-                    var roi = rois[idx];
-                    rows.Add(new RoiRow(sceneId, sceneLabel, curRes, idx, roi.Name,
-                        $"{roi.Rect.X:F4}, {roi.Rect.Y:F4}, {roi.Rect.W:F4}, {roi.Rect.H:F4}", false, ""));
-                }
-            }
-
-            // --- 布局预设（聊天框 / 房间列表网格）---
+            // 预设识别区域（唯一来源）：每个场景列 chat/roomNameList/gameName/mapName 四块（有多少列多少）。
             // 预设按宽高比匹配（Find 内部做最近档），显示相对值。
             foreach (var sceneId in new[] { "browsing", "room", "ingame" })
             {
                 var p = _layout.Find(sceneId, curW, curH);
                 if (p is null) continue;
                 string sceneLabel = GameSceneIds.FromId(sceneId).Label();
-                if (p.Chat is { } chat)
-                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, "(预设)聊天区域",
-                        $"{chat.X:F4}, {chat.Y:F4}, {chat.W:F4}, {chat.H:F4}", true, "chat"));
-                if (p.RoomNameList is { } rnl)
-                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, -1, "(预设)房间名列表区域",
-                        $"{rnl.X:F4}, {rnl.Y:F4}, {rnl.W:F4}, {rnl.H:F4}", true, "roomNameList"));
+                foreach (var (name, rect) in p.Parts())
+                    rows.Add(new RoiRow(p.Scene, sceneLabel, p.Resolution, name,
+                        $"{rect.X:F4}, {rect.Y:F4}, {rect.W:F4}, {rect.H:F4}"));
             }
 
             RegionHintText.Text = $"当前分辨率 {curRes}，比例 {AspectRatio(curW, curH)}";
@@ -443,6 +429,14 @@ public partial class SettingsWindow : Window
     private void ReloadLayoutStore()
         => _layout = LayoutPresetStore.Load(_layoutFactoryPath);
 
+    /// <summary>区域 tab 只在 DEBUG 模式可见（预设直写出厂文件，普通用户不该碰）。</summary>
+    private void ApplyRegionTabVisibility(bool debugMode)
+        => RegionTab.Visibility = debugMode ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>"关于"页的 DEBUG 勾选切换 → 立即反映区域 tab 可见性（不等确定）。</summary>
+    private void OnDebugModeToggle(object sender, RoutedEventArgs e)
+        => ApplyRegionTabVisibility(DebugModeCheck.IsChecked == true);
+
     /// <summary>双击主表 = 编辑选中区域。点在表头上则忽略（表头双击的自适应列宽是 GridViewColumnHeader 的内置行为，事件会冒泡到这里）。</summary>
     private void OnRoiListDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -466,58 +460,21 @@ public partial class SettingsWindow : Window
         DeleteRoiButton.IsEnabled = hasSel;
     }
 
-    /// <summary>编辑选中区域：预设行走覆盖层，校准行走 rois.json。</summary>
+    /// <summary>编辑选中预设区域：打开编辑窗改矩形，直写出厂预设文件。</summary>
     private void OnEditRoiClick(object sender, RoutedEventArgs e)
     {
         if (RoiListView.SelectedItem is not RoiRow row) { MessageBox.Show(this, "请先在列表里选中一个区域。", "编辑区域"); return; }
-        if (row.Preset) { EditPresetRegion(row); return; }
-
-        var cfg = RoiStore.Load(_roisJsonPath);
-        var current = cfg.Scenes[row.SceneId][row.Index];
-
-        var dlg = new RoiEditWindow(row.SceneId, current) { Owner = this };
-        if (dlg.ShowDialog() != true) return;
-
-        // 先原地替换内容，再按需换场景（MoveRoi 搬的是替换后的那条，顺序反了会丢掉编辑）
-        var updated = RoiStore.ReplaceRoi(cfg, row.SceneId, row.Index, dlg.Result);
-        if (updated is not null && dlg.ResultSceneId != row.SceneId)
-            updated = RoiStore.MoveRoi(updated, row.SceneId, row.Index, dlg.ResultSceneId);
-        if (updated is null) { MessageBox.Show(this, "定位失败：列表可能已过期，请重新打开本页。", "编辑区域"); return; }
-        CommitRois(updated, $"区域“{row.Name}”未能写入 rois.json。");
-    }
-
-    /// <summary>
-    /// 编辑预设区域 → 写覆盖层。
-    /// 出厂文件 layout-presets.json 是量测产物、程序绝不改写；改后的值进
-    /// %APPDATA%\ScrTranslator\layout-overrides.json，删掉该文件即恢复出厂值。
-    /// </summary>
-    private void EditPresetRegion(RoiRow row)
-    {
-        var p = FindPreset(row);
+        var p = FindPreset(row.SceneId, row.Resolution);
         if (p is null) { MessageBox.Show(this, "找不到该预设。", "编辑区域"); return; }
+        var rect = GetPartRect(p, row.Name);
+        if (rect is null) { MessageBox.Show(this, "该预设块已不存在。", "编辑区域"); return; }
 
-        bool isChat = row.PresetPart == "chat";
-        var (rx, ry, rw, rh) = isChat
-            ? (p.Chat is { } c ? (c.X, c.Y, c.W, c.H) : (0d, 0d, 0d, 0d))
-            : (p.RoomNameList is { } r ? (r.X, r.Y, r.W, r.H) : (0d, 0d, 0d, 0d));
-
-        // 复用普通校准区域的编辑窗：喂一个临时 Roi（相对坐标直接喂进去），
-        // 预设模式禁用场景/名称，用户只能调矩形。
-        var dummy = new Roi(row.Name, new RelRect(rx, ry, rw, rh));
-        var dlg = new RoiEditWindow(row.SceneId, dummy, isPreset: true)
-        {
-            Owner = this,
-        };
+        var dlg = new RoiEditWindow(row.SceneId, row.Name, rect) { Owner = this };
         if (dlg.ShowDialog() != true) return;
-
-        // 编辑窗读回的就是相对坐标，直接存回预设（不再换算成像素）。
-        var next = isChat
-            ? p with { Chat = dlg.Result.Rect }
-            : p with { RoomNameList = dlg.Result.Rect };
 
         try
         {
-            LayoutPresetStore.Save(next, _layoutFactoryPath);
+            LayoutPresetStore.Save(SetPartRect(p, row.Name, dlg.Result.Rect), _layoutFactoryPath);
             ReloadLayoutStore();
             LoadRoiList();
             _onRoisChanged?.Invoke();
@@ -528,45 +485,64 @@ public partial class SettingsWindow : Window
         }
     }
 
-    LayoutPreset? FindPreset(RoiRow row)
+    /// <summary>按 (场景, 分辨率档) 在已加载预设里定位一条。</summary>
+    private LayoutPreset? FindPreset(string sceneId, string resolution)
     {
         foreach (var p in _layout.Presets)
-            if (p.Scene == row.SceneId && p.Resolution == row.Resolution) return p;
+            if (p.Scene == sceneId && p.Resolution == resolution) return p;
         return null;
     }
 
-    /// <summary>删除选中区域。预设行不能"删"（它不在 rois.json 里），只能改或删覆盖层恢复出厂。</summary>
+    /// <summary>取预设里某一块的相对矩形（块名：chat/roomNameList/gameName/mapName）。</summary>
+    private static RelRect? GetPartRect(LayoutPreset p, string partName) => partName switch
+    {
+        "chat" => p.Chat,
+        "roomNameList" => p.RoomNameList,
+        "gameName" => p.GameName,
+        "mapName" => p.MapName,
+        _ => null,
+    };
+
+    /// <summary>把某一块的相对矩形设进预设（record 不可变，返回新实例）。</summary>
+    private static LayoutPreset SetPartRect(LayoutPreset p, string partName, RelRect rect) => partName switch
+    {
+        "chat" => p with { Chat = rect },
+        "roomNameList" => p with { RoomNameList = rect },
+        "gameName" => p with { GameName = rect },
+        "mapName" => p with { MapName = rect },
+        _ => p,
+    };
+
+    /// <summary>删掉某一块（置 null）——预设 part 可删，删光某场景全部块 = 该场景不翻译。</summary>
+    private static LayoutPreset RemovePartRect(LayoutPreset p, string partName) => partName switch
+    {
+        "chat" => p with { Chat = null },
+        "roomNameList" => p with { RoomNameList = null },
+        "gameName" => p with { GameName = null },
+        "mapName" => p with { MapName = null },
+        _ => p,
+    };
+
+    /// <summary>删除选中预设区域：把该块置 null 直写出厂文件（预设 part 可删，删光某场景全部块 = 该场景不翻译）。</summary>
     private void OnDeleteRoiClick(object sender, RoutedEventArgs e)
     {
         if (RoiListView.SelectedItem is not RoiRow row) { MessageBox.Show(this, "请先在列表里选中一个区域。", "删除区域"); return; }
-        if (row.Preset)
-        {
-            MessageBox.Show(this, "这一条是出厂预设，不能删除；要停用请把它改到画面外，或删掉 layout-overrides.json 恢复出厂值。",
-                "删除区域", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
+        var p = FindPreset(row.SceneId, row.Resolution);
+        if (p is null) { MessageBox.Show(this, "找不到该预设。", "删除区域"); return; }
         if (MessageBox.Show(this,
-                $"确定删除 {row.Scene} / {row.Resolution} 的区域“{row.Name}”？\n（只删这一分辨率这一条，其它场景与分辨率不受影响）",
+                $"确定删除 {row.Scene} / {row.Resolution} 的区域“{row.Name}”？\n（删除后这一块不再翻译；其它场景与块不受影响）",
                 "删除区域", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK) return;
 
-        var cfg = RoiStore.Load(_roisJsonPath);
-        var updated = RoiStore.RemoveRoi(cfg, row.SceneId, row.Index);
-        if (updated is null) { MessageBox.Show(this, "定位失败：列表可能已过期，请重新打开本页。", "删除区域"); return; }
-        CommitRois(updated, $"区域“{row.Name}”未能删除。");
-    }
-
-    /// <summary>落盘 + 重画列表 + 让正在跑的探测热重载（与校准窗保存后同一条路径）。</summary>
-    private void CommitRois(RoiConfig cfg, string failMessage)
-    {
         try
         {
-            RoiStore.Save(cfg, _roisJsonPath);
+            LayoutPresetStore.Save(RemovePartRect(p, row.Name), _layoutFactoryPath);
+            ReloadLayoutStore();
             LoadRoiList();
             _onRoisChanged?.Invoke();
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, failMessage + "\n" + ex.Message, "保存失败");
+            MessageBox.Show(this, $"删除失败：{ex.Message}", "删除区域");
         }
     }
 
@@ -1005,9 +981,6 @@ public partial class SettingsWindow : Window
                 SceneDetectPollBox.Text = d.Ocr.SceneDetectPollMs.ToString();
                 TranslatePollBox.Text = d.Ocr.TranslatePollMs.ToString();
                 break;
-            case "区域":
-                RestoreRegionDefaults();
-                break;
             case "热键":
                 ResetHotkeysToDefaults();
                 break;
@@ -1019,23 +992,6 @@ public partial class SettingsWindow : Window
                 BackplateSlider.Value = d.Appearance.BackplateOpacity;
                 break;
         }
-    }
-
-    /// <summary>区域页恢复默认：删除全部用户自定义区域（rois.json 清空），并恢复出厂预设
-    /// （删掉覆盖层文件即恢复出厂值）。与单个删除不同，这里是一次性全清，需用户确认后才执行。</summary>
-    private void RestoreRegionDefaults()
-    {
-        try
-        {
-            RoiStore.Save(new RoiConfig(new Dictionary<string, IReadOnlyList<Roi>>()), _roisJsonPath);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, $"删除用户区域失败：{ex.Message}", "恢复默认", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        ReloadLayoutStore();
-        LoadRoiList();
-        _onRoisChanged?.Invoke();
     }
 
     private void OnOkClick(object sender, RoutedEventArgs e)
