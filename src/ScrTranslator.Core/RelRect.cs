@@ -3,7 +3,27 @@ using System.Drawing;
 namespace ScrTranslator.Core;
 
 /// <summary>相对内容区的矩形（0~1 比例）。跨分辨率通用：运行时乘以当前帧宽高即得物理像素。</summary>
-public record RelRect(double X, double Y, double W, double H);
+public record RelRect(double X, double Y, double W, double H)
+{
+    /// <summary>
+    /// 校准窗画布框（DIP）→ 游戏画面相对矩形（0~1）。这是原 BoxToRoi 的纯数学部分，抽到 Core 便于测。
+    /// canvas* 是画布 DIP 坐标，dpiX/dpiY 是 WPF→物理像素缩放，game* 是游戏窗口物理像素矩形
+    /// （绝对屏幕坐标，含标题栏/边框）。换算：先 DIP×DPI 得物理，再减去游戏窗原点、除以游戏窗尺寸。
+    /// </summary>
+    public static RelRect FromCanvasDip(double canvasLeft, double canvasTop, double canvasWidth, double canvasHeight,
+        double dpiX, double dpiY, int gameLeft, int gameTop, int gameWidth, int gameHeight)
+    {
+        double physLeft = canvasLeft * dpiX;
+        double physTop = canvasTop * dpiY;
+        double physW = canvasWidth * dpiX;
+        double physH = canvasHeight * dpiY;
+        return new RelRect(
+            (physLeft - gameLeft) / gameWidth,
+            (physTop - gameTop) / gameHeight,
+            physW / gameWidth,
+            physH / gameHeight);
+    }
+}
 
 public static class RelRectExtensions
 {

@@ -19,7 +19,7 @@
                 MouseMove="OnCanvasMouseMove"
                 MouseLeftButtonUp="OnCanvasMouseUp"/>
         <TextBlock x:Name="HintText"
-                   Text="校准模式 (Esc 退出 / Enter 保存) — 在游戏画面上拖动鼠标框选区域，松开后命名并选择类型"
+                   Text="校准模式 (Esc 退出 / Enter 保存) — 拖动预设框调整位置/大小"
                    Foreground="White" FontSize="16" FontWeight="Bold"
                    HorizontalAlignment="Center" VerticalAlignment="Top"
                    Margin="0,16,0,0"

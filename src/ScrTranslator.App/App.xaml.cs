@@ -272,9 +272,15 @@ public partial class App : Application
         Calibration.CalibrationWindow? calibrationWindow = null;
         void OpenCalibration()
         {
+            var holder = _host!.Services.GetRequiredService<SettingsHolder>();
+            // DEBUG 门控：校准直写出厂预设，仅 DEBUG 模式可用（F8 切换）
+            if (!holder.Current.General.DebugMode)
+            {
+                log.Info("[app] 校准仅 DEBUG 模式可用（按 F8 切换）");
+                return;
+            }
             // 校准的前提是"看得见游戏画面"：校准窗是半透明覆盖层，且要靠抓屏做场景检测。
             // 游戏没开 / 在后台 / 最小化时框出来的东西全是凭空的 → 直接拒绝并说清原因。
-            var holder = _host!.Services.GetRequiredService<SettingsHolder>();
             string proc = string.IsNullOrWhiteSpace(holder.Current.General.TargetProcess)
                 ? "StarCraft" : holder.Current.General.TargetProcess.Trim();
             var hwnd = WindowFinder.FindByProcess(proc);
@@ -296,7 +302,7 @@ public partial class App : Application
 
             if (calibrationWindow is not null) { calibrationWindow.Activate(); return; }
             calibrationWindow = new Calibration.CalibrationWindow(
-                roisPath, log,
+                log,
                 () => probe.ReloadLayoutPresets(), // 校准窗直写预设（layout-presets.json），重载即生效
                 _host.Services.GetRequiredService<SceneRecognizer>(),
                 probe.Layout); // 传 probe 重载后的实例，而非 DI 单例——保存后 ReloadLayoutPresets 只更新 probe 字段，DI 单例是启动时的旧值
