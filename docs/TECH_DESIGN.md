@@ -10,7 +10,7 @@
 | UI / 悬浮层 | WPF | 透明窗口、矢量渲染、CJK 字体好 |
 | 屏幕捕获 | `Windows.Graphics.Capture` (WinRT) | 抓指定窗口、性能好、官方 API；DXGI Desktop Duplication 备选 |
 | OCR | PaddleOCR / RapidOcrNet (ONNX Runtime) + 韩文 mobile 模型 | 韩文识别准、随包分发、**无需系统语言包**（已取代原 `Windows.Media.Ocr` 方案） |
-| 翻译 provider 池 | 免费机器翻译：**阿里云 MT**（RPC 签名 `TranslateGeneral`）＋ LLM：**OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** / **OpenAI API（sk- 密钥）** / **阿里云 DashScope（OpenAI 兼容 Chat）**；池可拖拽排序，回退链先免费后 LLM | 免费额度兜底 + 懂游戏黑话、可加术语表与上下文。**不再用 Claude / Papago / 百度**。详见 `docs/superpowers/specs/2026-07-02-phase2-translation-design.md` |
+| 翻译 provider 池 | 免费机器翻译：**阿里云 MT**（RPC 签名 `TranslateGeneral`）＋ LLM：**自定义模型（用户自配 URL/KEY/模型，OpenAI 兼容 Chat）** / **OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** / **OpenAI API（sk- 密钥）** / **阿里云 DashScope（OpenAI 兼容 Chat）**；池可拖拽排序，回退链先免费后 LLM | 免费额度兜底 + 懂游戏黑话、可加术语表与上下文；自定义模型可指向任意 OpenAI 兼容端点（自建推理/第三方代理）。**不再用 Claude / Papago / 百度**。详见 `docs/superpowers/specs/2026-07-02-phase2-translation-design.md` |
 | 配置/序列化 | System.Text.Json | 内置 |
 | 依赖注入 | Microsoft.Extensions.DependencyInjection | 模块解耦 |
 | 日志 | Microsoft.Extensions.Logging + Serilog(可选) | 排障 |

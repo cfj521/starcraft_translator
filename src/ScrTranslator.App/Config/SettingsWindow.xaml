@@ -140,6 +140,17 @@
                                 <CheckBox x:Name="CacheEnabledCheck" Content="启用翻译缓存" IsChecked="True" IsEnabled="False" Margin="0,4,0,4"/>
                             </StackPanel>
                         </GroupBox>
+
+                        <GroupBox Header="超时">
+                            <StackPanel>
+                                <StackPanel Style="{StaticResource Row}">
+                                    <TextBlock Text="单次翻译超时" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="超时" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="TimeoutSecondsBox" Width="60" Margin="4,0,4,0"/>
+                                    <TextBlock Text="秒后放弃本批、回落原文（整条回退链共享，默认 10）" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </GroupBox>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

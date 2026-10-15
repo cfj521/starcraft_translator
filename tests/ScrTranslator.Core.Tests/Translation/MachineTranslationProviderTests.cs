@@ -56,6 +56,8 @@ public class MachineTranslationProviderTests
         var url = stub.LastRequest!.RequestUri!.ToString();
         Assert.Contains("mt.aliyuncs.com", url);
         Assert.Contains("Action=TranslateGeneral", url);
+        // Version 是 RPC 必带公共参数；缺了网关报 InvalidAction.NotFound(404)——回归守卫
+        Assert.Contains("Version=2018-10-12", url);
         Assert.Contains("Signature=", url);
     }
 

@@ -115,6 +115,68 @@ public class ProvidersTests
     }
 
     [Fact]
+    public async Task CustomModel_TranslatesBatch_AndName()
+    {
+        var stub = new StubHttpMessageHandler("{\"choices\":[{\"message\":{\"content\":\"[1] 甲\\n[2] 乙\"}}]}");
+        var p = new CustomModelProvider(new HttpClient(stub), () => "local-model", () => "https://localhost:8080/v1", () => "sk-local");
+        var r = await p.TranslateAsync(new[]{"가","나"}, Ctx, CancellationToken.None);
+        Assert.Equal(new[]{"甲","乙"}, r);
+        Assert.Equal("custom_model", p.Name);
+        Assert.Equal(EngineKind.LLM, p.Kind);
+    }
+
+    [Fact]
+    public void CustomModel_NoUrlOrKey_IsNoCreds()
+    {
+        // URL 或 KEY 任一为空即未配置（编排器跳过、不发请求）
+        var pNoUrl = new CustomModelProvider(new HttpClient(new StubHttpMessageHandler("{}")), () => "m", () => "", () => "sk");
+        Assert.Equal(ProviderState.NoCredentials, pNoUrl.GetStatus().State);
+        Assert.False(pNoUrl.GetStatus().Usable);
+        Assert.Contains("自定义模型", pNoUrl.GetStatus().Detail);
+
+        var pNoKey = new CustomModelProvider(new HttpClient(new StubHttpMessageHandler("{}")), () => "m", () => "https://x/v1", () => "");
+        Assert.Equal(ProviderState.NoCredentials, pNoKey.GetStatus().State);
+        Assert.False(pNoKey.GetStatus().Usable);
+    }
+
+    [Fact]
+    public void CustomModel_WithUrlAndKey_IsAvailable()
+    {
+        var p = new CustomModelProvider(new HttpClient(new StubHttpMessageHandler("{}")), () => "m", () => "https://x/v1", () => "sk");
+        Assert.Equal(ProviderState.Available, p.GetStatus().State);
+        Assert.True(p.GetStatus().Usable);
+    }
+
+    [Fact]
+    public async Task CustomModel_429_ThrowsRateLimit_AndEntersCooldown()
+    {
+        var stub = new StubHttpMessageHandler("limited", HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(2));
+        var p = new CustomModelProvider(new HttpClient(stub), () => "m", () => "https://x/v1", () => "sk");
+        await Assert.ThrowsAsync<RateLimitException>(() => p.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None));
+        Assert.Equal(ProviderState.RateLimited, p.GetStatus().State);
+        Assert.Contains("限流冷却", p.GetStatus().Detail);
+    }
+
+    [Fact]
+    public async Task CustomModel_WrongCount_FallsBackToOriginal()
+    {
+        var stub = new StubHttpMessageHandler("{\"choices\":[{\"message\":{\"content\":\"[1] 甲\"}}]}");
+        var input = new[]{"가","나"};
+        var p = new CustomModelProvider(new HttpClient(stub), () => "m", () => "https://x/v1", () => "sk");
+        var r = await p.TranslateAsync(input, Ctx, CancellationToken.None);
+        Assert.Same(input, r); // 降级：原样返回传入引用
+    }
+
+    [Fact]
+    public async Task CustomModel_Empty_ReturnsEmpty()
+    {
+        var stub = new StubHttpMessageHandler("{}");
+        var p = new CustomModelProvider(new HttpClient(stub), () => "m", () => "https://x/v1", () => "sk");
+        var r = await p.TranslateAsync(Array.Empty<string>(), Ctx, CancellationToken.None);
+        Assert.Empty(r);
+    }
+
+    [Fact]
     public async Task ChatGpt_429_ThrowsRateLimit_AndEntersCooldown()
     {
         var stub = new StubHttpMessageHandler("limited", HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(2));

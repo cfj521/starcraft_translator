@@ -236,6 +236,7 @@ public partial class SettingsWindow : Window
         RefreshStatusText();
 
         LoadProviderPool(s.Translation);
+        TimeoutSecondsBox.Text = s.Translation.TimeoutSeconds.ToString();
 
         SceneDetectPollBox.Text = s.Ocr.SceneDetectPollMs.ToString();
         TranslatePollBox.Text = s.Ocr.TranslatePollMs.ToString();
@@ -287,6 +288,11 @@ public partial class SettingsWindow : Window
                     row.Model = t.OpenAiApiModel;
                     row.ConfigButtonText = "配置KEY"; // OpenAI API Key（sk-...）
                     break;
+                case TranslationProviderEntry.CustomModel:
+                    // 模型 ID / URL / KEY 都在配置窗里（URL 不进列表行），故 ShowModel=false，点「配置」开窗
+                    row.ShowModel = false;
+                    row.ConfigButtonText = "配置"; // 自定义模型（OpenAI 兼容）：URL + 模型 ID + KEY
+                    break;
                 case TranslationProviderEntry.Aliyun:
                     row.ConfigButtonText = "配置KEY"; // AccessKeyId + AccessKeySecret
                     break;
@@ -303,6 +309,7 @@ public partial class SettingsWindow : Window
     private static (string Name, string Kind) ProviderMeta(string id) => id switch
     {
         TranslationProviderEntry.Aliyun => ("阿里云机器翻译", "免费"),
+        TranslationProviderEntry.CustomModel => ("自定义模型", "LLM"),
         TranslationProviderEntry.ChatGpt => ("OpenAI LLM（订阅）", "LLM"),
         TranslationProviderEntry.DashScope => ("阿里云 LLM", "LLM"),
         TranslationProviderEntry.OpenAiApi => ("OpenAI LLM（API）", "LLM"),
@@ -323,6 +330,10 @@ public partial class SettingsWindow : Window
                 TranslationProviderEntry.ChatGpt => loggedIn ? "已登录" : "未登录",
                 TranslationProviderEntry.DashScope => string.IsNullOrWhiteSpace(sec.DashScopeApiKey) ? "未配置" : "已配置",
                 TranslationProviderEntry.OpenAiApi => string.IsNullOrWhiteSpace(sec.OpenAiApiKey) ? "未配置" : "已配置",
+                // 自定义模型须 URL 与 KEY 齐备才算已配置（URL 在 Holder，KEY 在 SecretStore）
+                TranslationProviderEntry.CustomModel =>
+                    !string.IsNullOrWhiteSpace(_holder.Current.Translation.CustomModelUrl)
+                    && !string.IsNullOrWhiteSpace(sec.CustomModelApiKey) ? "已配置" : "未配置",
                 _ => "—",
             };
             // 只有「订阅登录」按钮（ChatGPT 行）的 tooltip 有内容（登录账号）；其余行的 tooltip 置 null——
@@ -601,6 +612,9 @@ public partial class SettingsWindow : Window
                 break;
             case TranslationProviderEntry.OpenAiApi:
                 LogKeyDialogResult("OpenAI API", new OpenAiApiKeyWindow(_secretStore) { Owner = this }.ShowDialog());
+                break;
+            case TranslationProviderEntry.CustomModel:
+                LogKeyDialogResult("自定义模型", new CustomModelWindow(_holder, _secretStore, _settingsPath) { Owner = this }.ShowDialog());
                 break;
             case TranslationProviderEntry.ChatGpt:
                 _ = LoginChatGptAsync(); // 浏览器登录是异步的，不阻塞关闭对话框后的状态刷新
@@ -968,6 +982,11 @@ public partial class SettingsWindow : Window
                 break;
             case "翻译":
                 LoadProviderPool(d.Translation); // 含 LLM 行的模型名重置
+                // 自定义模型的 URL/模型 ID 无列表行控件（在配置窗/Holder 里），直接写回 Holder 默认值（空＝未配置）；
+                // KEY 不清（与其它 provider 恢复默认一致——只重置模型/顺序，不动密钥）。
+                _holder.Current = _holder.Current with { Translation = _holder.Current.Translation with
+                    { CustomModelUrl = d.Translation.CustomModelUrl, CustomModelId = d.Translation.CustomModelId } };
+                TimeoutSecondsBox.Text = d.Translation.TimeoutSeconds.ToString();
                 break;
             case "识别":
                 SceneDetectPollBox.Text = d.Ocr.SceneDetectPollMs.ToString();
@@ -1042,6 +1061,8 @@ public partial class SettingsWindow : Window
             DashScopeModel = dashScopeModel,
             ChatGptModel = chatGptModel,
             OpenAiApiModel = openAiApiModel,
+            // 自定义模型的 URL/模型 ID 由配置窗即时写回 Holder 并落盘，此处不覆盖（with 保留 original 的值）。
+            TimeoutSeconds = ParseIntOr(TimeoutSecondsBox.Text, original.Translation.TimeoutSeconds),
         };
 
         var ocr = original.Ocr with

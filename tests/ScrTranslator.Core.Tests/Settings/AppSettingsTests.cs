@@ -14,7 +14,8 @@ public class AppSettingsTests
         Assert.Equal(0.8, a.Appearance.BackplateAlpha(), 3); // 文字底衬默认 80% 黑底
         Assert.Equal(1.0, a.Appearance.FontWidthScale); // 字宽缩放默认正常
         Assert.Equal(TranslationProviderEntry.Aliyun, a.Translation.Providers[0].Id); // 默认池首位＝阿里云（先免费）
-        Assert.Equal(4, a.Translation.Providers.Count); // 含新加的 OpenAI API 模式（已移除腾讯云）
+        Assert.Equal(TranslationProviderEntry.CustomModel, a.Translation.Providers[1].Id); // 默认池第二行＝自定义模型
+        Assert.Equal(5, a.Translation.Providers.Count); // 含自定义模型与 OpenAI API 模式（已移除腾讯云）
     }
 
     [Theory]

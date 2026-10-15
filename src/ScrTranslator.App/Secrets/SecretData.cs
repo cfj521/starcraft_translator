@@ -23,6 +23,7 @@ public sealed class SecretData
 {
     public string DashScopeApiKey { get; set; } = "";
     public string OpenAiApiKey { get; set; } = ""; // OpenAI API Key 模式（sk-...），与订阅 OAuth 的 OpenAi tokens 分开存
+    public string CustomModelApiKey { get; set; } = ""; // 自定义模型（OpenAI 兼容）的 KEY，与官方 OpenAI API Key 分开存
     public OpenAiTokens OpenAi { get; set; } = new();
     public AliyunSecrets Aliyun { get; set; } = new();
 }

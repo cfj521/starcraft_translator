@@ -21,12 +21,14 @@ public class SettingsStoreTests
         var path = Path.GetTempFileName();
         SettingsStore.Save(s, path);
         var back = SettingsStore.Load(path);
-        // 老池（ChatGPT/DashScope）缺新加的 OpenAI API 模式，加载时迁移补到末尾（启用态），故 2→3
-        Assert.Equal(3, back.Translation.Providers.Count);
+        // 老池（ChatGPT/DashScope）缺新加的 OpenAI API 与自定义模型，加载时迁移补到末尾（启用态），故 2→4
+        Assert.Equal(4, back.Translation.Providers.Count);
         Assert.Equal(TranslationProviderEntry.ChatGpt, back.Translation.Providers[0].Id);
         Assert.False(back.Translation.Providers[1].Enabled);   // DashScope 被禁用的状态保留
         Assert.Equal(TranslationProviderEntry.OpenAiApi, back.Translation.Providers[2].Id); // 迁移补上的新 provider
         Assert.True(back.Translation.Providers[2].Enabled);    // 默认启用
+        Assert.Equal(TranslationProviderEntry.CustomModel, back.Translation.Providers[3].Id); // 自定义模型也被迁移补上
+        Assert.True(back.Translation.Providers[3].Enabled);
         Assert.Equal(250, back.Ocr.TranslatePollMs);
         Assert.Equal(6, back.Hotkeys.Count);
         Assert.Equal(HotkeyKeys.VK_F9, back.Hotkeys["ToggleTranslate"].Vk);
@@ -40,7 +42,7 @@ public class SettingsStoreTests
     [Fact] public void Load_CorruptJson_ReturnsDefault()
     {
         var path = Path.GetTempFileName(); File.WriteAllText(path, "{ not valid json ");
-        Assert.Equal(4, SettingsStore.Load(path).Translation.Providers.Count); // 损坏 JSON → 默认池（含 OpenAI API 模式，已移除腾讯云）
+        Assert.Equal(5, SettingsStore.Load(path).Translation.Providers.Count); // 损坏 JSON → 默认池（含 OpenAI API 与自定义模型，已移除腾讯云）
     }
 
     [Fact] public void Load_OldConfig_MissingNewHotkey_MergedFromDefaults_KeepsCustom()

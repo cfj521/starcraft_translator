@@ -75,7 +75,7 @@
 ```
 
 ### 3.2 翻译 Translation  ★（含"翻译玩家 ID"）
-> 实现对齐（Phase 2–6）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = **provider 池列表**（4 provider：阿里云免费机器翻译 ＋ OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM），**可拖拽排序、每行启用/禁用**，从上到下取第一个「启用且可用」，不可用或额度耗尽跳下一个（先免费后 LLM）。**单级**。密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
+> 实现对齐（Phase 2–6）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = **provider 池列表**（5 provider：阿里云免费机器翻译 ＋ 自定义模型(OpenAI 兼容) / OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM），**可拖拽排序、每行启用/禁用**，从上到下取第一个「启用且可用」，不可用或额度耗尽跳下一个（先免费后 LLM）。**单级**。密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
 
 ```
 Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密钥/登录）
@@ -255,11 +255,13 @@ class AppSettings {
 }
 
 class TranslationSettings {
-    IReadOnlyList<TranslationProviderEntry> Providers;  // 有序 provider 池（默认 阿里云→OpenAI LLM(订阅)→阿里云 LLM(DashScope)→OpenAI LLM(API)；原 TranslationEngine Active 已移除）
+    IReadOnlyList<TranslationProviderEntry> Providers;  // 有序 provider 池（默认 阿里云→自定义模型→OpenAI LLM(订阅)→阿里云 LLM(DashScope)→OpenAI LLM(API)；原 TranslationEngine Active 已移除）
     string DashScopeModel;        // 默认 qwen3.8-flash
     string ChatGptModel;          // 默认 gpt-6-luna
     string OpenAiApiModel;        // 默认 gpt-6-luna
-    int TimeoutSeconds;           // 整轮(快+质量共用)超时，默认 10
+    string CustomModelUrl;        // 自定义模型 Base URL（OpenAI 兼容），默认空＝未配置
+    string CustomModelId;         // 自定义模型 ID，默认空＝未配置
+    int TimeoutSeconds;           // 单次翻译超时（整条回退链共享），默认 10，配置页可调
 }
 ```
 

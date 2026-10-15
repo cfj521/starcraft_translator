@@ -403,11 +403,6 @@ public sealed class TranslationEngine : IDisposable
     {
         var ocr = _settings.Current.Ocr;
         int detectMs = PollInterval.SceneDetect(ocr), translateMs = PollInterval.Translate(ocr);
-        string state = _waitingForWindow ? "等待窗口" : _windowLost ? "窗口丢失" : "运行中";
-        var store = _scene.Store;
-        string refs = store.IsUsable
-            ? $"{store.References.Count}条(现场{store.OverrideCount}) 块{store.BlockSize} 容差{store.ChannelTolerance} 阈值{store.MinHitRatio:P0}"
-            : $"不可用: {store.LoadError}";
         // 识别区域多行：当前帧预设里实际在用的 parts，逐行显示名称 + 累计翻译行数。
         var roiNames = _lastEffectiveRoiNames;
         string roiSection = roiNames.Length == 0
@@ -420,12 +415,10 @@ public sealed class TranslationEngine : IDisposable
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
             $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms\n" +
             roiSection +
-            $"状态: {state}\n" +
             $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
             (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
             $"引擎(最近3次): {(recent.Count == 0 ? "(无)" : string.Join("  ", recent))}\n" +
-            $"命中缓存: {_orchestrator.CacheCount}  命中术语表: {_glossaryCount}\n" +
-            $"参考: {refs}";
+            $"命中缓存: {_orchestrator.CacheCount}  命中术语表: {_glossaryCount}";
     }
 
     /// <summary>帧流健康检查（每看门狗周期调用）：

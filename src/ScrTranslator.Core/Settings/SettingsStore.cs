@@ -51,6 +51,9 @@ public static class SettingsStore
             // 老配置池里没有新加的 OpenAI API 模式则补上，让既有用户也能看到/启用这一行。
             if (providers.All(p => p.Id != TranslationProviderEntry.OpenAiApi))
                 providers.Add(new TranslationProviderEntry(TranslationProviderEntry.OpenAiApi, true));
+            // 自定义模型（OpenAI 兼容）：老池里没有则补上（启用态），新用户在默认池里位于第二行。
+            if (providers.All(p => p.Id != TranslationProviderEntry.CustomModel))
+                providers.Add(new TranslationProviderEntry(TranslationProviderEntry.CustomModel, true));
             return s with { Hotkeys = merged, Translation = s.Translation with { Providers = providers } };
         }
         catch { return new AppSettings(); } // 损坏/反序列化失败 → 默认

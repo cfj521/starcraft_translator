@@ -6,15 +6,19 @@ public class TranslationSettingsTests
     public void Default_HasSaneValues()
     {
         var s = TranslationSettings.Default;
-        // 默认池顺序：阿里云 → OpenAI LLM(订阅) → 阿里云LLM → OpenAI LLM(API)（先免费机器翻译、后 LLM）
+        // 默认池顺序：阿里云 → 自定义模型 → OpenAI LLM(订阅) → 阿里云LLM → OpenAI LLM(API)（先免费机器翻译、后 LLM）
         Assert.Equal(new[] { TranslationProviderEntry.Aliyun,
-                             TranslationProviderEntry.ChatGpt, TranslationProviderEntry.DashScope,
-                             TranslationProviderEntry.OpenAiApi },
+                              TranslationProviderEntry.CustomModel,
+                              TranslationProviderEntry.ChatGpt, TranslationProviderEntry.DashScope,
+                              TranslationProviderEntry.OpenAiApi },
             s.Providers.Select(p => p.Id).ToArray());
         Assert.All(s.Providers, p => Assert.True(p.Enabled));
         Assert.False(string.IsNullOrWhiteSpace(s.DashScopeModel));
         Assert.False(string.IsNullOrWhiteSpace(s.ChatGptModel));
         Assert.False(string.IsNullOrWhiteSpace(s.OpenAiApiModel));
+        // 自定义模型默认未配置（URL/模型 ID 为空）
+        Assert.True(string.IsNullOrWhiteSpace(s.CustomModelUrl));
+        Assert.True(string.IsNullOrWhiteSpace(s.CustomModelId));
         Assert.InRange(s.TimeoutSeconds, 5, 30);
     }
 

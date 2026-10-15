@@ -34,6 +34,9 @@ public sealed class AliyunMtProvider : ITranslationProvider
         var source = string.Join("\n", lines); // 阿里云 TranslateGeneral 单文本；换行分隔、按行拆回
         var signed = AliyunMtSigner.Sign(new Dictionary<string, string>
         {
+            // Version 是阿里云 RPC 必带的公共参数（API 版本，区别于 Sign 里加的 SignatureVersion=1.0 签名算法版本）。
+            // 缺 Version 网关无法路由到具体 API，报 InvalidAction.NotFound（404 "Specified api is not found"）。
+            ["Version"] = "2018-10-12",
             ["Action"] = "TranslateGeneral",
             ["SourceText"] = source,
             ["SourceLanguage"] = "ko",

@@ -123,6 +123,13 @@ public partial class App : Application
                 () => sp.GetRequiredService<SecretStore>().Load().OpenAiApiKey),
             () => sp.GetRequiredService<SettingsHolder>().Current.Translation.OpenAiApiModel,
             () => sp.GetRequiredService<SecretStore>().Load().OpenAiApiKey)); // 第三个参数供 GetStatus 判 key 是否已配
+        // 自定义模型（OpenAI 兼容）：baseUrl/模型 ID 取自实时配置（用户可随时改），KEY 走 SecretStore。
+        // provider 内部每次调用现建 client（baseUrl 可变，不复用单例）。
+        builder.Services.AddSingleton<ITranslationProvider>(sp => new CustomModelProvider(
+            sp.GetRequiredService<HttpClient>(),
+            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.CustomModelId,
+            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.CustomModelUrl,
+            () => sp.GetRequiredService<SecretStore>().Load().CustomModelApiKey)); // 第三个参数供 GetStatus 判 key 是否已配
         builder.Services.AddSingleton<ITranslationProvider>(sp => new ChatGptSubscriptionProvider(
             sp.GetRequiredService<CodexResponsesClient>(),
             sp.GetRequiredService<ITokenSource>(),
