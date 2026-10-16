@@ -43,15 +43,15 @@ internal static class Program
     static readonly SceneDef[] SceneDefs =
     {
         new("browsing", "寻找房间", "browsing", null, FrameRegions,
-            new() { [1920] = "browsing-1920x1080.png" }),
+            new() { ["16:9"] = "browsing-1920x1080.png" }),
         new("room", "房间内", "room", null, FrameRegions,
-            new() { [1920] = "room-1920x1080.png" }),
+            new() { ["16:9"] = "room-3840x2160.png" }),
         new("ingame_t", "游戏内·人族", "ingame", "t", IngamRaceRegions,
-            new() { [1920] = "ingame-1920x1080t.png" }),
+            new() { ["16:9"] = "ingame-1920x1080t.png" }),
         new("ingame_p", "游戏内·神族", "ingame", "p", IngamRaceRegions,
-            new() { [1920] = "ingame-1920x1080p.png" }),
+            new() { ["16:9"] = "ingame-1920x1080p.png" }),
         new("ingame_z", "游戏内·虫族", "ingame", "z", IngamRaceRegions,
-            new() { [1920] = "ingame-1920x1080z.png" }),
+            new() { ["16:9"] = "ingame-1920x1080z.png" }),
     };
 
     static int Main(string[] args)
@@ -103,18 +103,14 @@ internal static class Program
             if (scene.Race != null) sceneNode["race"] = scene.Race;
             var resNode = (JsonObject)sceneNode["resolutions"]!;
 
-            foreach (var (width, file) in scene.SourcesByWidth.OrderBy(k => k.Key))
+            foreach (var (ratio, file) in scene.SourcesByRatio.OrderBy(k => k.Key))
             {
                 var path = Path.Combine(imgDir, file);
-                if (!File.Exists(path)) { Console.Error.WriteLine($"!! 缺参考图 {scene.Id} {width}p: {file}（跳过该分辨率）"); continue; }
+                if (!File.Exists(path)) { Console.Error.WriteLine($"!! 缺参考图 {scene.Id} {ratio}: {file}（跳过该比例）"); continue; }
                 using var bm = Decode(path);
-                if (bm.Width != width)
-                {
-                    Console.Error.WriteLine($"!! {file} 实际宽 {bm.Width} ≠ 声明 {width}，跳过");
-                    continue;
-                }
+                int width = bm.Width;   // 比例键不携带分辨率，宽高从图读
                 double scale = (double)width / BaseWidth;
-                string resKey = $"{width}x{width * 9 / 16}";
+                string resKey = ratio;
                 var regs = new JsonArray();
                 var byScene = refCache.TryGetValue(width, out var d) ? d : new Dictionary<string, Fingerprint>();
                 foreach (var region in scene.Regions)
@@ -218,7 +214,7 @@ internal static class Program
     record struct Rect(int X, int Y, int W, int H);
     record struct Fingerprint(int BlocksX, int BlocksY, byte[] Bytes);
     record Region(string Name, int X, int Y, int W, int H);
-    record SceneDef(string Id, string Label, string GameScene, string? Race, Region[] Regions, Dictionary<int, string> SourcesByWidth);
+    record SceneDef(string Id, string Label, string GameScene, string? Race, Region[] Regions, Dictionary<string, string> SourcesByRatio);
 
     static Rect ScaledRect(Region r, double scale) => new(
         (int)Math.Round(r.X * scale), (int)Math.Round(r.Y * scale),

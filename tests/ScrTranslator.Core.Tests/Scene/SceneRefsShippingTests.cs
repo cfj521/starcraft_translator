@@ -18,7 +18,7 @@ public class SceneRefsShippingTests
     static SceneRefStore Store => Loaded.Value;
 
     // 方案 B：参考只存 1080p 一档基准（运行时等比缩放到帧分辨率，块数固定），不再按三档分辨率各存一份。
-    static readonly string[] ExpectedResolutions = { "1920x1080" };
+    static readonly string[] ExpectedResolutions = { "16:9" };
 
     [Fact]
     public void ShippingFile_LoadsWithoutErrorsOrWarnings()

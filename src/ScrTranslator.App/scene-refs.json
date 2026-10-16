@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-14T16:26:15Z",
+  "generatedAt": "2026-10-16T19:14:57Z",
   "generator": "tools/SceneRefGen",
-  "note": "场景识别像素参考。regions 为相对 1080p 基准的 0~1 值（= 绝对 ÷ 1920 / ÷ 1080）；resolutions 下每分辨率独立存块均值 RGB 指纹（base64, rgb24 行优先）。",
+  "note": "场景识别像素参考。regions 为 1080p 基准坐标；resolutions 下每分辨率独立存块均值 RGB 指纹（base64, rgb24 行优先）。",
   "fingerprint": {
     "baseResolution": "1920x1080",
     "blockSize": 4,
@@ -26,7 +26,7 @@
         }
       ],
       "resolutions": {
-        "1920x1080": {
+        "16:9": {
           "source": "browsing-1920x1080.png",
           "regions": [
             {
@@ -63,8 +63,8 @@
         }
       ],
       "resolutions": {
-        "1920x1080": {
-          "source": "room-1920x1080.png",
+        "16:9": {
+          "source": "room-3840x2160.png",
           "regions": [
             {
               "name": "frame-left",
@@ -74,12 +74,12 @@
                 0.0953125,
                 0.03888888888888889
               ],
-              "blockPx": 4,
+              "blockPx": 8,
               "blocks": [
                 45,
                 10
               ],
-              "data": "j3hkhmJKfltCgWpXfWJPf2hVf3JkgXhseWxdioFziIF1iYByj4Jzh2dQi2ZPi25YfnNjgXVlh2RJdVhEg11Bh3RijHdihGNMg25agHBfblU+gWpWemhVYkYxLSQmCw4hCg8hBwkYBgoaBwkXBwkYBwkXBgcTBgcVBwkYBgcUBwgXBwkYCQoZW0M1XEk6X0c1UDwuUz8xXEk8VUg8aU47c081jnZblohzjn9pkHthc04sZTocaD8jbVVCXE1AYEApUzYnWTkmX0k7YEc0WDopWEEyWU9GV0Q2W0o8VktBWkg7ZlE+Ih8lCgwaBwoYBggUBwkVCQkYCAkZCQobCgsbBwgWBQcTBwgVCAkZCwweRTQeRjMcSjYeTjcfSDAVVDQWVTYXYUInRkEhQU8pPkokPkskO0YfQkolV0ktWzoeWTUWWTgYUDMXTjcbRy8VTTojRjYgQCwYQi4YRTQeQzIdQTIiRDoqRTgoWkY3blxMJiAiBwkVCAkVCgwcCg0cCQsbCQsbCQwaBwgVCgoZCAoZCAoZCAoaRjYtRjYtRzUqTjAhUzAXXTQYcFU/WkEtICcKGDEHEzMLFTQKFTQJGjUJNTkgUjMgb1dBXjceTjUqTzksTjUnTTYtQzQtRzEmQywhQywfRysfQysgRDInQTEqSjw1YFVIbVtKKiMmCw0dCw4gCgsaCw4eBgcUCAoWCwsaDBAhCAsZBQcTBgcSNCcaNyYZQCgTPyYUSy8YVjchaF1RRDAdNzoXNTsTLUgWM0QXM0wZOEsZNjYbPCkdUDosTzAVRC0VNSETOCcYMSkhKikkICAeIR4aIx4XIx0WJR8XIyIdHhsWHhcUSDgvZE06bVdGJRwbGRISFxITFBASEAsMEg0QEg4QEw0QFA4OFQ0NFw8QTi8SVDUSUzETPyIMRi8gOjEpWlZQOiYQHzUNFDIIGzoOFToOEjkKEzgMHy8MNCARPTIrLCAZKhoRPyEPNyQTMyIXLyMYJSEaIB4bHx4bIiEdIh8bIh4YJRkSJhgRIxYOSDQoZEYsbV9MWFJBWlNBXFJAWE05UEIwU0ErSzgeVT0hUDcaTTgaNCAWSTMhMR4PMh0PPS0bR0I4NzQwMB0PODAQPToRPDgONzoONjUOPDQLOCkQKRgLJSEcIh4YFg8HNh4POiUVNiUVNCQUNiMUKyIaIB8ZIB8cJyYiIR0YJRcSIRQNIxcSJBkVRjIlaUgvjG9RsZt+upt6sYdkpnxalG5NjmdHnoFfnHxaj3JTHhAGSjEiKhcLKBUKQjo3NTMyKSAaMSAPMTQOHTESGjMSGjAPHDERGTUTJSwLLBgLIR0XIBwYHxwWJhUJOiIQOCISNiISNCAQMSEXKR4VJCAbKCYhIR8aJBoUIhYRHRUQHx0YJSQfRDk0TDwvXlFFXEs+VUAyVT4wVDosTzosWkM0WEExUTYlGw4FLhsOHhAFHw4ENyklKSgmJSAZOSMPIBQEHhYDHxsGHhoEHBwCHBkFIxYFNx8MKSIeFxgXHBgWJhQJOCEQOh8PPCIROyITOCAQOB8NNyIWLh4RJx0VIxwVIxcQIBQOJR4YIxsWIBsVHhkVIBsUJBkSIhUOIxcPHRURHBIMHxcRKxwQKBYMGQ8ILRwPFQsEFAkBHhkUHx0cKSIdPSUUJRgLDwoDEAoDEAoDEwwDDggAOSMRJyIcIiEdEBARExAPBwMACQQACQQABwQAAwEAAQAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAQAA"
+              "data": "i3Vig2BJfFlCfmdVel9Oe2ZUfXJmfXVrdGdahXxvg3xyhXxwi35wg2ROhWFLhmtWfHBhfXJigmBHdVhFgFtBg3JgiHZig2NNfWdTfnBfbVVBfWdVd2ZUX0QxLSUnCw4hCg8hBwkYBwoZBwkXBwkYBwkXBgcTBgcUBwkYBgcUBwgWBwkYCQoZVD8yU0I2VkEySTcrSzktWUY3U0M0Zkk1bEkvhWtQintlhnZhh3JXbUkpYDgbZT0haE05V0c6VzomSzEkUjUkVkQ3V0EvUjcnTjgpUUg/Tj4zUUI3TkQ7U0M3Z1JAKCMnCQwaBwkYBggTCAkWCQoZCAkZCQoaCgscBwgWBgcSBwgVCAkZCwwfRDEaRTEYSDIZTTQaTTEUUzMVUjQWY0MnREQjOE4kN04kNkwgM0gdOEwiWE4xXDseWjQUWzgXUDIVTjUYRiwSSTYeRjUePCkUPCkURDMcQTAcQTIhQDYmQTUlVUI0cV5NJR4gBwgUCAkWCg0cCQ0dCQsbCQsbCQwbBwgVCgoYCAoZCAoZCAoaSjkuSzswTDosUjYkVDEWYDkcbVVAXD8qKzATIjcMGzoPHDkOHDgLIjsOOjshVDUhblU/XzkeUTgqVD0uUDcmVD80SjowTTYqRzAhSTIjTDAgSTAjSzksRjcsTT41YVZJalhIIh0jCw0dCg4fCgsaCw4eBggUCAkVCgoZDBAhCAoZBQcUBgcSNCcaNycZPycTPiYUTTIaWzsmZVtORi4bNjcYNTsTL0QVM0QXNEsaOEoaNTYbPisfUDosTzAUQiwUNSEUOCcZMCkiKykkICAeIR4aIx4YIx0VJB8XIyEdHhsXHhcUSDgvZE06Z1FCIRkbGhMUFRETEw8TDwsNEQ0REQ0REg0SEg0PFA0NFQ4QTS0RUjMSUTATPSIMSTMkPjYuVU9IOyQQIDIMFjIJHDcMFzoPFDgKFjgMIS4MNSARPTErLCAaLBsRPyIPNyQUMyMYLyMYJyEZIB4bHx4aIiAdIh8bIh0YJRkSJhgRIxYPSDQoZkkwal1KWVNCXldEX1RBXFA8VEUyVUMtTDkgVj4iUTgbTjgbNCAWTDUiMB0PMx4PPjAgSEU8My0nMR0PNi4QPDkROzgPNjkONTUOOTQLNyoPKhgLJSAcIh4ZGhIINx8QOiUVNSQVNSQUNiMSLSMZIh8ZIB4cJyYhIR0YJRcSIRQNIhYRIxkVRDAjbU42j3NUs5x+u5x7sodlp31cl3BPj2lJoIJgnXxbkHJSIBEHTTIiKhcLKxcMPzw6NDIxLCAWMiAPLzEOGzARGDISGC8QGy8RGTMTJS0LKhgLIBwWIBsXHhsUKhcLPSQRNyESNyMSNSAPMSEXKh4VJB8aKSYhIB8aIxoUIxYRHhYRHx0YJiQgSDw2TTwwWEtCVUY6UDwvTzotUTcqSjYoVT8wUzwtTDIiGw4FLxwPHxEFJREHMiopKCclKCAWOyQQIhcGHxoDHyEHHiAFHCMEHB8GIxcFNh4MKCIdGBgXGhcUKRYKOSEQOB4OOSAQPCMUNiAQNh4NNSIWLR0RJh0WIxsVIhcQIBQOJR4YIx0YHxsVIBsWHxoUJBoTIhYPIhYOHhUQHBMNHxcRKxwRJxYMGQ8ILRsPFQsDFwsCHRoXIR4dKiIbPSUTLR0ODwoCDwoCDwkCEgsDDggAOiMRKSMcISEdEREREQ4NCAQACQQACgQABwQAAwEAAgEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAQAA"
             }
           ]
         }
@@ -100,7 +100,7 @@
         }
       ],
       "resolutions": {
-        "1920x1080": {
+        "16:9": {
           "source": "ingame-1920x1080t.png",
           "regions": [
             {
@@ -138,7 +138,7 @@
         }
       ],
       "resolutions": {
-        "1920x1080": {
+        "16:9": {
           "source": "ingame-1920x1080p.png",
           "regions": [
             {
@@ -176,7 +176,7 @@
         }
       ],
       "resolutions": {
-        "1920x1080": {
+        "16:9": {
           "source": "ingame-1920x1080z.png",
           "regions": [
             {
@@ -204,6 +204,6 @@
     "algorithm": "sha256",
     "note": "覆盖各区域的 键+几何+指纹字节，改任何坐标或数据都会失效（SceneRefStore 加载时校验）",
     "bytes": 3546,
-    "sha256": "ed4294b6ea9624427fe865e3d926fb3e9907c832eab249f0b9c380b6743c7687"
+    "sha256": "70a5d174a7cb3eb7304c7139843f075122e54902f714775d94e2b8e13f595b64"
   }
 }

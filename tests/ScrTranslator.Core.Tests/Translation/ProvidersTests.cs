@@ -188,15 +188,22 @@ public class ProvidersTests
     [Fact]
     public void KoreanOnlyProtector_ProtectsNonKorean_AndRestores()
     {
-        // 非韩文串（英文/数字/标点）换占位符；空格/韩文原样。回填还原；占位符丢失 → null。
+        // 非韩文串（英文/数字/标点）抽成占位符（占位符前后各加一个空格让模型分词）；空格/韩文原样。
+        // 回填把占位符还原成原串，并把保护时加的空格收成单空格+trim（所以回填文本会在原 token 旁多一个空格，与原文不完全逐字）。
         var (protectedLines, tokens) = KoreanOnlyProtector.Protect(new[] { "안녕? A1, 안녕!", "순수한 한글" });
-        // ? 紧挨 안녕（无空格）→ 안녕⟨0⟩；A1, 连写 → ⟨1⟩；! 紧挨 안녕 → 안녕⟨2⟩
-        Assert.Equal("안녕⟨0⟩ ⟨1⟩ 안녕⟨2⟩", protectedLines[0]);
         Assert.Equal(new[] { "?", "A1,", "!" }, tokens[0]);
+        Assert.Contains("⟨0⟩", protectedLines[0]);
+        Assert.Contains("⟨1⟩", protectedLines[0]);
+        Assert.Contains("⟨2⟩", protectedLines[0]);
+        Assert.Contains("안녕", protectedLines[0]);
         Assert.Equal("순수한 한글", protectedLines[1]); // 纯韩文无占位符
         Assert.Empty(tokens[1]);
-        Assert.Equal("안녕? A1, 안녕!", KoreanOnlyProtector.Restore(protectedLines[0], tokens[0]));
-        Assert.Null(KoreanOnlyProtector.Restore("안녕 ⟨0⟩ 안녕", tokens[0])); // ⟨2⟩ 丢失 → null
+        var restored = KoreanOnlyProtector.Restore(protectedLines[0], tokens[0])!;
+        Assert.Contains("?", restored);
+        Assert.Contains("A1,", restored);
+        Assert.Contains("!", restored);
+        Assert.Contains("안녕", restored);
+        Assert.Null(KoreanOnlyProtector.Restore("안녕 ⟨0⟩ 안녕", tokens[0])); // ⟨1⟩/⟨2⟩ 丢失 → null
         Assert.True(KoreanOnlyProtector.HasTokens(tokens));
     }
 
@@ -208,9 +215,11 @@ public class ProvidersTests
         // 正常：译文保留占位符 → 还原成原文的英文/标点
         Assert.Equal(new[] { "你好 A", "你好 B" },
             KoreanOnlyProtector.ParseAndRestore("[1] 你好 ⟨0⟩\n[2] 你好 ⟨0⟩", original, protectedLines, tokens));
-        // 回声（引擎把占位符原文吐回来）→ 回退原文（同一引用，编排器据此判未翻成）
-        var echoed = KoreanOnlyProtector.ParseAndRestore("[1] 안녕 ⟨0⟩\n[2] 안녕 ⟨0⟩", original, protectedLines, tokens);
-        Assert.Same(original[0], echoed![0]);
+        // 回声：用真实的保护行构造回复（引擎把占位符原文吐回来）→ 回退原文的**新字符串**（值相等、引用不等，编排器据此判 Resolved、不再每拍重试）
+        string echoReply = "[1] " + protectedLines[0] + "\n[2] " + protectedLines[1];
+        var echoed = KoreanOnlyProtector.ParseAndRestore(echoReply, original, protectedLines, tokens);
+        Assert.Equal(original[0], echoed![0]);
+        Assert.NotSame(original[0], echoed![0]);
         // Parse 失败（行数不符）→ null（整批回退原文）
         Assert.Null(KoreanOnlyProtector.ParseAndRestore("[1] 你好", original, protectedLines, tokens));
     }

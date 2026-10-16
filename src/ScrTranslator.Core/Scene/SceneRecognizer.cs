@@ -69,12 +69,14 @@ public sealed class SceneRecognizer
         // 方案 B：所有参考只存 1080p 一档。把 1080p 基准区域按统一高度因子 H/1080 缩放到当前帧，
         // 块数固定（= 1080p 那套），实时指纹长度恒等于出厂参考，直接比对。
         // browsing/room 的金属边框叠加居中水平裁剪（只裁宽度）；ingame 的种族装饰区贴左边缘、无裁剪。
-        string baseKey = $"{_store.BaseWidth}x{_store.BaseWidth * 9 / 16}";
+        string baseKey = SceneRefStore.RatioKey(_store.BaseWidth, _store.BaseWidth * 9 / 16);
         var candidates = new List<(SceneReference Ref, SceneRefResolution Res, IReadOnlyList<SceneRefRegion> Scaled)>();
         foreach (var r in _store.References)
             if (r.Resolutions.TryGetValue(baseKey, out var baseRes))
             {
-                bool centerCrop = r.Scene != GameScene.InGame; // 边框场景裁剪，游戏内不裁
+                // 只有有黑边（ar 偏离最近标准比例超 0.08）才裁；无黑边帧 frame-left 本就内缩安全区，不裁
+                bool centerCrop = r.Scene != GameScene.InGame
+                    && ResolutionAnalyzer.Analyze(frame.Width, frame.Height).HasBlackBars;
                 candidates.Add((r, baseRes, SceneRefCapture.FittingRegions(baseRes.Regions, frame.Width, frame.Height, centerCrop)));
             }
         if (candidates.Count == 0)

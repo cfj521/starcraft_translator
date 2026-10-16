@@ -8,6 +8,12 @@
 
   <ItemGroup>
     <PackageReference Include="RapidOcrNet" Version="2.0.0" />
+    <!-- 新增：DirectML 执行提供者 + DML 版原生 onnxruntime（GPU 设备走它，免装 CUDA） -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" />
+    <!-- 排除 RapidOcrNet 传递依赖的 CPU 版原生 onnxruntime（它会把 13.55MB 的 CPU 版 onnxruntime.dll 拷到
+         扁平 win-x64 目录、影子掉 DirectML 包的 17.3MB DML 版）。ExcludeAssets=all 连原生资产一起排除；
+         托管 API 仍由 Microsoft.ML.OnnxRuntime.Managed 提供，DML 原生运行时由 DirectML 包提供。 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.3" ExcludeAssets="all" />
     <!-- 本地 Hy-MT2（腾讯翻译模型）纯 C# 进程内推理，库模式。权重 GGUF 用户自配，不打包在 dll 里。 -->
     <PackageReference Include="Sdcb.HyMT2Sharp" Version="2.0.0" />
   </ItemGroup>

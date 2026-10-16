@@ -16,7 +16,7 @@ using System.Windows.Threading;
 namespace ScrTranslator.App;
 
 public sealed record ProbeStartInfo(ProbeStart Status, string ProcessName);
-public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed, WaitingForWindow }
+public enum ProbeStart { Ok, CaptureUnsupported, WindowNotFound, NoRoi, CaptureFailed, WaitingForWindow, WaitingForModels }
 
 /// <summary>Phase 5 异常恢复事件：看门狗检测到的状态转移，App 订阅后转托盘气泡。</summary>
 public enum ProbeNotice { WindowLost, Reconnected, FirstConnected, Minimized, Restored, ResolutionChanged, NoFrames, Stalled, SceneChanged, SceneRefMissing, TranslateFailed, NeedsCalibration }
@@ -91,6 +91,7 @@ public sealed class TranslationEngine : IDisposable
     private System.Threading.Timer? _watchdog;
     private bool _windowLost;   // 已就"窗口丢失"通知过（重连成功后复位）
     private bool _waitingForWindow; // Start 时未找到窗口→看门狗等待首连（不报"丢失"，连上报"自动开始"）
+    private bool _waitingForModels; // Start 时模型未就绪（OCR 初始化中 / HY-MT2 加载中）→ 推迟开抓帧，看门狗待模型就绪后自动开
     private bool _wasIconic;    // 上一轮询周期是否最小化（转移时才通知）
     /// <summary>翻译是否进行中（F9 开→true，Stop→false）。ProcessFrame 在 await 翻译的续延里读它：
     /// 翻译等待期间若被 F9 Stop()，_running 已置 false，本次结果丢弃不上屏——否则最后一帧的
@@ -152,6 +153,37 @@ public sealed class TranslationEngine : IDisposable
     private IReadOnlyList<(string Name, RelRect Rect)> presetParts(int frameWidth, int frameHeight)
     {
         return _layout.Find(SceneId, frameWidth, frameHeight)?.Parts() ?? Array.Empty<(string, RelRect)>();
+    }
+
+    /// <summary>两段文本是否"同一行"：编辑距离 ≤ 较长者的 10% 视为相同（OCR 抖动 1~2 字不触发重译）。
+    /// 完全相同直接 true；任一为空则只有两者皆空才 true（空→有字是真变化）。</summary>
+    private static bool TextsSimilar(string a, string b)
+    {
+        if (a == b) return true;
+        int maxLen = Math.Max(a.Length, b.Length);
+        if (maxLen == 0) return true;
+        if (a.Length == 0 || b.Length == 0) return false; // 空↔有字 = 真变化
+        return LevenshteinDistance(a, b) <= maxLen / 10;
+    }
+
+    /// <summary>编辑距离（Levenshtein）：把 a 变成 b 最少需要的 插入/删除/替换 次数。行短，O(n*m) 无压力。</summary>
+    private static int LevenshteinDistance(string a, string b)
+    {
+        int n = a.Length, m = b.Length;
+        var prev = new int[m + 1];
+        var curr = new int[m + 1];
+        for (int j = 0; j <= m; j++) prev[j] = j;
+        for (int i = 1; i <= n; i++)
+        {
+            curr[0] = i;
+            for (int j = 1; j <= m; j++)
+            {
+                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                curr[j] = Math.Min(Math.Min(curr[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+            }
+            (prev, curr) = (curr, prev);
+        }
+        return prev[m];
     }
 
     /// <summary>
@@ -270,6 +302,16 @@ public sealed class TranslationEngine : IDisposable
     }
 
     /// <summary>启动探测。返回具体失败原因供 UI 提示（首次引导：F9 后没反应要知道为什么）。</summary>
+    /// <summary>轮询前置：所有在用的模型是否都就绪。OCR 必须就绪（读韩文）；内部组还要 HY-MT2 就绪（翻）。
+    /// 外部组不用 HY-MT2，只等 OCR。未全就绪时 Start 推迟开抓帧、看门狗待就绪后自动开，避免模型加载期间空转烧 CPU。</summary>
+    private bool ModelsReady()
+    {
+        if (!_ocr.IsReady) return false;
+        if (_settings.Current.Translation.SelectedGroup == TranslationGroup.Internal
+            && _hyMt2.LoadState != HyMt2LoadState.Ready) return false;
+        return true;
+    }
+
     public ProbeStartInfo Start()
     {
         string proc = TargetProcess();
@@ -307,6 +349,14 @@ public sealed class TranslationEngine : IDisposable
                 _log.Log($"[probe] 未找到 {proc} 窗口，进入等待模式");
                 return new ProbeStartInfo(ProbeStart.WaitingForWindow, proc);
             }
+            // 模型就绪门：OCR 初始化中 / HY-MT2 加载未完成时，先不抓帧、不空转烧 CPU。
+            // 进等待态，看门狗每 2s 查一次，模型就绪后自动开抓帧（WatchdogTick 里处理）。
+            if (!ModelsReady())
+            {
+                _waitingForModels = true;
+                _log.Log("[probe] 模型未就绪（OCR 初始化中 / HY-MT2 加载中），推迟开轮询，模型就绪后自动开始（看门狗轮询）");
+                return new ProbeStartInfo(ProbeStart.WaitingForModels, proc);
+            }
             if (!_capture.Start(hwnd))
             {
                 _watchdog.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
@@ -328,6 +378,22 @@ public sealed class TranslationEngine : IDisposable
     {
         try
         {
+            // 模型就绪门：Start 因模型未就绪推迟了开抓帧。模型好了、窗口也在，就自动开抓帧。
+            if (_waitingForModels)
+            {
+                if (!ModelsReady()) return; // 还没就绪，下轮再看
+                _waitingForModels = false;
+                var mhwnd = WindowFinder.FindByProcess(TargetProcess());
+                if (mhwnd != IntPtr.Zero && _capture.Start(mhwnd))
+                    _log.Log("[probe] 模型已就绪，开始捕获（自动）");
+                else
+                {
+                    _waitingForModels = true; // 窗口也没了，回等待态，等窗口+模型都齐
+                    _waitingForWindow = true;
+                    _log.Log("[probe] 模型已就绪但未找到游戏窗口，转入等待窗口");
+                }
+                return;
+            }
             var hwnd = _capture.Hwnd;
             bool alive = hwnd != IntPtr.Zero && NativeMethods.IsWindow(hwnd);
             if (!alive)
@@ -423,16 +489,25 @@ public sealed class TranslationEngine : IDisposable
         string engineLine = engine is null
             ? "翻译引擎: (无)\n"
             : $"翻译引擎: {engine.Name}{(engine.Name == TranslationProviderEntry.HyMt2 ? $"（{_hyMt2.DescribeLoadState()}）" : "")}\n";
+        // OCR 引擎加载状态：模型门期间帧循环不跑，这行是唯一能让你看到"OCR 还没就绪"的地方（就绪=可识别，加载中=后台初始化）。
+        string ocrLine = $"OCR: {(_ocr.IsReady ? "就绪" : "加载中")}\n";
+        // 5 种场景的匹配度（末尾）：逐参考显示命中率，方便看哪个场景擦边/掉下去（room 95.8% / ingame_t 0.0% / …）。
+        // _lastRec.Scores 每个参考一条，含 RefId + HitRatio；无参考/识别暂停时为空。
+        string matchSection = _lastRec.Scores.Count == 0
+            ? ""
+            : "匹配度: " + string.Join("  ", _lastRec.Scores.Select(s => $"{s.RefId} {s.HitRatio:P1}")) + "\n";
         return
             $"场景: {SceneDisplay(_activeScene, _activeRace)}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
             $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms\n" +
             roiSection +
+            ocrLine +
             engineLine +
             $"翻译: {_lastEngineHits}行(共{_lastLineCount}行) {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
             (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
             $"引擎(最近3次): {(recent.Count == 0 ? "(无)" : string.Join("  ", recent))}\n" +
-            $"命中缓存: {_lastCacheHits}  命中术语表: {_lastGlossaryHits}";
+            $"命中缓存: {_lastCacheHits}  命中术语表: {_lastGlossaryHits}\n" +
+            matchSection;
     }
 
     /// <summary>帧流健康检查（每看门狗周期调用）：
@@ -658,13 +733,27 @@ public sealed class TranslationEngine : IDisposable
             }
 
             // ── 每 ROI 单独做变化检测：该 ROI 韩文与上一帧相同则整块跳过（不重译、不重显）──
+            // 用编辑距离而非精确比对：OCR 对同一行会因渲染/背景抖动读出略不同的文本（差异 1~2 字），
+            // 精确比对会把这种抖动当成"变化"→ 每拍重译 + 先隐藏再重显 → 周期性闪烁且白烧 CPU。
+            // 差异 ≤10% 视为同一行（跳过）；真实新消息/列表刷新差异大，照常重译。
             var toTranslate = new List<int>(); // 变化的 ROI 下标
             for (int r = 0; r < rois.Count; r++)
             {
                 var joined = string.Join("\n", rois[r].lines);
                 string last = _lastJoinedPerRoi.TryGetValue(r, out var l) ? l : "";
-                if (joined != last) toTranslate.Add(r);
+                if (!TextsSimilar(joined, last)) toTranslate.Add(r);
             }
+            // [diag] 变化检测诊断：每帧打印"被判变化"的 ROI 数与新旧文本。
+            // 若每周期 变化>0 且新旧文本几乎相同 → OCR 抖动每拍被当"真变化"（闪烁+白译根因）；
+            // 若文本稳定却仍被判变 → TextsSimilar/稳定器有 bug。跑一段后把这段日志发我即可定位。
+            if (toTranslate.Count > 0)
+                foreach (int r in toTranslate)
+                {
+                    string oldT = _lastJoinedPerRoi.TryGetValue(r, out string o) ? o : "";
+                    string newT = string.Join(" ", rois[r].lines);
+                    _log.Debug($"[diag][change] [{rois[r].name}] 旧=\"{oldT}\" → 新=\"{newT}\"");
+                }
+            _log.Debug($"[diag][change] 变化={toTranslate.Count}/{rois.Count}");
             if (toTranslate.Count == 0) return; // 所有 ROI 都没变 → 整帧跳过（finally 仍会 Dispose/复位 _busy）
 
             // ── 变化的 ROI 先隐藏旧译文（露出原始内容，避免旧译占位挡住观看），译完再显示新译文 ──

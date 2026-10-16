@@ -48,7 +48,7 @@ public static class SceneRefCapture
     {
         var reference = store.Find(sceneId);
         if (reference is null) return null;
-        string baseKey = $"{store.BaseWidth}x{store.BaseWidth * 9 / 16}";
+        string baseKey = SceneRefStore.RatioKey(store.BaseWidth, store.BaseWidth * 9 / 16);
         return reference.Resolutions.TryGetValue(baseKey, out var baseRes) ? baseRes.Regions : null;
     }
 
@@ -88,7 +88,7 @@ public static class SceneRefCapture
 
         var resolutions = GetOrCreate(sceneNode, "resolutions");
 
-        string resKey = $"{width}x{height}";
+        string resKey = SceneRefStore.RatioKey(width, height);
         var regionsArr = new JsonArray();
         for (int i = 0; i < regions.Count; i++)
         {

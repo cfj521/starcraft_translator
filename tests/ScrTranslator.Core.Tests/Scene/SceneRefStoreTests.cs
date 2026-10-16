@@ -9,7 +9,7 @@ namespace ScrTranslator.Core.Tests.Scene;
 /// </summary>
 internal static class SceneRefJson
 {
-    public const string ResKey = "1920x1080";
+    public const string ResKey = "16:9";
     public const int Blocks = 4; // 2x2
     // 测试区域用 1920x1080 下 8x8 的绝对像素，换算成相对 0~1 值（与出厂 scene-refs.json 同一口径）。
     public const double RelW = 8.0 / 1920, RelH = 8.0 / 1080;

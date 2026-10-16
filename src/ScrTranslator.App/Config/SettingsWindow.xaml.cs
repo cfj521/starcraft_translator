@@ -285,6 +285,8 @@ public partial class SettingsWindow : Window
 
         SceneDetectPollBox.Text = s.Ocr.SceneDetectPollMs.ToString();
         TranslatePollBox.Text = s.Ocr.TranslatePollMs.ToString();
+        OcrCpuRadio.IsChecked = s.Ocr.Device == OcrDevice.Cpu;
+        OcrGpuRadio.IsChecked = s.Ocr.Device == OcrDevice.Gpu;
 
         FontFamilyBox.Text = s.Appearance.FontFamily;
         FontSizeBox.Text = s.Appearance.FontSize.ToString();
@@ -1062,6 +1064,8 @@ public partial class SettingsWindow : Window
                 TimeoutSecondsBox.Text = d.Translation.TimeoutSeconds.ToString();
                 break;
             case "识别":
+                OcrCpuRadio.IsChecked = d.Ocr.Device == OcrDevice.Cpu;
+                OcrGpuRadio.IsChecked = d.Ocr.Device == OcrDevice.Gpu;
                 SceneDetectPollBox.Text = d.Ocr.SceneDetectPollMs.ToString();
                 TranslatePollBox.Text = d.Ocr.TranslatePollMs.ToString();
                 break;
@@ -1089,6 +1093,7 @@ public partial class SettingsWindow : Window
 
     private void ApplyChanges()
     {
+        var oldDevice = _holder.Current.Ocr.Device;   // 捕获旧设备（保存前）
         var settings = BuildSettingsFromControls();
         _holder.Current = settings;
         try
@@ -1123,6 +1128,17 @@ public partial class SettingsWindow : Window
             MessageBox.Show(this, $"开机自启设置应用失败：{autoStartErr}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         _onStateChanged?.Invoke(); // 复位变化检测，让静止画面立即按新设置重译
+
+        // CPU/GPU 设备变了 → 引擎是单例、构造时定死执行器，必须重启才生效。提示并可立即重启。
+        if (settings.Ocr.Device != oldDevice)
+        {
+            var target = settings.Ocr.Device == OcrDevice.Gpu ? "GPU（DirectML）" : "CPU";
+            var r = MessageBox.Show(this,
+                $"识别设备已切换为 {target}，需重启 App 才能生效。是否现在重启？",
+                "配置", MessageBoxButton.YesNo, MessageBoxImage.Information);
+            if (r == MessageBoxResult.Yes)
+                (App.Current as App)?.RestartApp();
+        }
     }
 
     private AppSettings BuildSettingsFromControls()
@@ -1158,6 +1174,7 @@ public partial class SettingsWindow : Window
 
         var ocr = original.Ocr with
         {
+            Device = OcrGpuRadio.IsChecked == true ? OcrDevice.Gpu : OcrDevice.Cpu,
             SceneDetectPollMs = ParseIntOr(SceneDetectPollBox.Text, original.Ocr.SceneDetectPollMs),
             TranslatePollMs = ParseIntOr(TranslatePollBox.Text, original.Ocr.TranslatePollMs),
         };

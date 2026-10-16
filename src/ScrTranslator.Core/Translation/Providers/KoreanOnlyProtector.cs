@@ -9,7 +9,13 @@ public static class KoreanOnlyProtector
     private static readonly Regex TokenRegex =
         new(@"[^\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F\s]+", RegexOptions.Compiled);
 
-    /// <summary>批量保护：每行提取非韩文非空白串换 ⟨0⟩⟨1⟩…占位符。返回保护后的行和每行的原始串数组。</summary>
+    /// <summary>回填占位符后清理：占位符保护时前后各加了一个空格让模型分词，回填后会留下连续空格，收成单个空格并 trim 首尾。</summary>
+    private static readonly Regex MultiSpaceRegex =
+        new(@"\s{2,}", RegexOptions.Compiled);
+
+    /// <summary>批量保护：每行提取非韩文非空白串换 ⟨0⟩⟨1⟩…占位符。占位符**前后各加一个空格**（`⟨0⟩빨...⟨1⟩`→` ⟨0⟩ 빨...⟨1⟩ `），
+    /// 让模型把占位符与相邻韩文段分隔开、尽量翻译韩文（纯韩文无空格段内部仍无法拆，那属分词器职责）。
+    /// 返回保护后的行和每行的原始串数组。</summary>
     public static (IReadOnlyList<string> Protected, string[][] Tokens) Protect(IReadOnlyList<string> lines)
     {
         var protectedLines = new string[lines.Count];
@@ -20,7 +26,7 @@ public static class KoreanOnlyProtector
             protectedLines[i] = TokenRegex.Replace(lines[i], m =>
             {
                 list.Add(m.Value);
-                return "⟨" + (list.Count - 1) + "⟩";
+                return " ⟨" + (list.Count - 1) + "⟩ ";
             });
             tokens[i] = list.ToArray();
         }
@@ -30,7 +36,8 @@ public static class KoreanOnlyProtector
     /// <summary>这批行里是否有占位符（决定 system prompt 要不要加"占位符原样保留"提示）。</summary>
     public static bool HasTokens(string[][] tokens) => tokens.Any(t => t.Length > 0);
 
-    /// <summary>把译文里的 ⟨N⟩ 占位符还原成原始串。任一占位符丢失（引擎改坏）→ 返回 null（调用方回退原文）。</summary>
+    /// <summary>把译文里的 ⟨N⟩ 占位符还原成原始串。任一占位符丢失（引擎改坏）→ 返回 null（调用方回退原文）。
+    /// 占位符保护时前后各加了一个空格，回填后会留下连续空格，最后收成单个空格并 trim 首尾。</summary>
     public static string? Restore(string translated, string[] tokens)
     {
         if (tokens.Length == 0) return translated;
@@ -41,11 +48,12 @@ public static class KoreanOnlyProtector
             if (!restored.Contains(placeholder)) return null;
             restored = restored.Replace(placeholder, tokens[i]);
         }
-        return restored;
+        return MultiSpaceRegex.Replace(restored, " ").Trim();
     }
 
     /// <summary>解析引擎批量回复（<see cref="BatchProtocol.Parse"/>）并逐行还原占位符。Parse 失败（行数不符/序号重复）→ 返回 null（调用方整批回退原文）。
-    /// 每行：回声（==保护行，引擎把占位符原文吐回来）或占位符丢失 → 回退原文（lines[i]，引用相等，编排器判未翻成）；否则还原占位符。</summary>
+    /// 每行：回声（==保护行，引擎把占位符原文吐回来，专有名词故意不翻）→ 原文的**新字符串**（引用不等，编排器据此判 Resolved，不再每拍重试）；
+    /// 占位符丢失（引擎改坏占位符）→ 回退原文（lines[i]，引用相等，编排器判未翻成、下一拍重试）；否则还原占位符。</summary>
     public static IReadOnlyList<string>? ParseAndRestore(string reply, IReadOnlyList<string> lines, IReadOnlyList<string> protectedLines, string[][] tokens)
     {
         var parsed = BatchProtocol.Parse(reply, lines.Count);
@@ -53,7 +61,7 @@ public static class KoreanOnlyProtector
         var results = new string[lines.Count];
         for (int i = 0; i < lines.Count; i++)
         {
-            if (parsed[i] == protectedLines[i]) { results[i] = lines[i]; continue; } // 回声
+            if (parsed[i] == protectedLines[i]) { results[i] = new string(lines[i].ToCharArray()); continue; } // 回声＝专有名词故意保留 → 新字符串（引用不等），编排器判 Resolved
             string? restored = Restore(parsed[i], tokens[i]);
             results[i] = restored ?? lines[i];
         }

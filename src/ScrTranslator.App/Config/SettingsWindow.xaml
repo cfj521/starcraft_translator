@@ -177,7 +177,13 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
                         <GroupBox Header="识别引擎">
-                            <TextBlock Text="PaddleOCR（韩文 mobile 模型，无需系统语言包）" Margin="4"/>
+                            <StackPanel>
+                                <TextBlock Text="PaddleOCR（韩文 mobile 模型，无需系统语言包）" Margin="0,0,0,4"/>
+                                <RadioButton x:Name="OcrCpuRadio" GroupName="OcrDeviceGroup" IsChecked="True"
+                                             Content="CPU（无需显卡，占内存少）" Margin="0,0,0,4"/>
+                                <RadioButton x:Name="OcrGpuRadio" GroupName="OcrDeviceGroup"
+                                             Content="GPU（DirectML，CPU 基本不动，免装 CUDA）" Margin="0,8,0,4"/>
+                            </StackPanel>
                         </GroupBox>
                         <GroupBox Header="轮询周期（100~5000ms）">
                             <StackPanel>
@@ -295,11 +301,22 @@
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="字体" Style="{StaticResource RowLabel}"/>
                                     <ComboBox x:Name="FontFamilyBox" Width="160" IsEditable="True">
-                                        <!-- 每个 item 用对应字体渲染（代码后端设 FontFamily），方便预览效果。
+                                        <!-- 每个 item 用对应字体渲染，方便预览效果。
+                                             关键在 ContentTemplate 而非 ItemTemplate：显式 ComboBoxItem 是"容器"不是数据项，
+                                             ItemTemplate 对它们不生效、会各自退回隐式 TextBlock 样式（Fluent 字体，三个 item 长得一样）。
+                                             ContentTemplate 设在 item 身上，显式容器一定用它渲染 Content；里面的 TextBlock 用显式局部绑定
+                                             把 FontFamily 绑回所属 ComboBoxItem 的 FontFamily（代码后端设的值），局部绑定压过样式设置器。
                                              Kostar = 内嵌原版 SC:R 字体（默认）：拉丁复刻原字体 + 谚文，无中文（中文回退系统字体） -->
-                                        <ComboBoxItem x:Name="FontKostar" Content="Kostar"/>
-                                        <ComboBoxItem x:Name="FontYaHei" Content="Microsoft YaHei"/>
-                                        <ComboBoxItem x:Name="FontArial" Content="Arial"/>
+                                        <ComboBox.Resources>
+                                            <DataTemplate x:Key="FontPreviewTemplate">
+                                                <!-- Text 必须显式绑：DataTemplate 里 TextBlock 不会自动把字符串内容当 Text 显示
+                                                     （那是默认 ContentPresenter 的行为），漏了会渲染成空白 -->
+                                                <TextBlock Text="{Binding}" FontFamily="{Binding FontFamily, RelativeSource={RelativeSource AncestorType=ComboBoxItem}}"/>
+                                            </DataTemplate>
+                                        </ComboBox.Resources>
+                                        <ComboBoxItem x:Name="FontKostar" Content="Kostar" ContentTemplate="{StaticResource FontPreviewTemplate}"/>
+                                        <ComboBoxItem x:Name="FontYaHei" Content="Microsoft YaHei" ContentTemplate="{StaticResource FontPreviewTemplate}"/>
+                                        <ComboBoxItem x:Name="FontArial" Content="Arial" ContentTemplate="{StaticResource FontPreviewTemplate}"/>
                                     </ComboBox>
                                     <TextBlock Text="字号" Style="{StaticResource RowLabel}" Width="50" Margin="16,0,8,0"/>
                                     <TextBox x:Name="FontSizeBox" Width="50"/>

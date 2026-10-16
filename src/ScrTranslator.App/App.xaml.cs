@@ -28,6 +28,26 @@ public partial class App : Application
     /// <summary>公开给外部（M4：Ctrl+F9 全局热键接线）打开配置窗口。</summary>
     public void OpenSettingsWindow() => _openSettingsAction?.Invoke();
 
+    /// <summary>重启 App：释放单实例锁 → 启动新进程 → 关闭当前进程。
+    /// 用于"改 CPU/GPU 设备需重启生效"——引擎是单例、构造时定死执行器，只有重启才能换。
+    /// 必须先 ReleaseMutex，否则新实例拿到锁前会判"已在运行"直接 Environment.Exit。</summary>
+    public void RestartApp()
+    {
+        var exePath = Environment.ProcessPath;
+        if (exePath is null) return;
+        _instanceMutex?.ReleaseMutex();   // 让新进程能拿到锁
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = true,   // 脱离当前进程树独立启动
+            });
+        }
+        catch { /* 启动失败不影响当前进程继续退出 */ }
+        Shutdown();   // 走完整 WPF 关闭流程（释放捕获/热键/托盘）
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -70,7 +90,15 @@ public partial class App : Application
         string baseDir = AppContext.BaseDirectory;
         builder.Services.AddSingleton<FileLogger>(_ =>
             new FileLogger(Path.Combine(baseDir, "logs", "app.log")));
-        builder.Services.AddSingleton<IOcrEngine>(_ => new PaddleOcrEngine(Path.Combine(baseDir, "models")));
+        // numThread 取实时配置的 OcrThreads（默认 4）、device 取 Ocr.Device（CPU/GPU）。OCR 引擎是单例、
+        // 线程数与设备在首次解析时定死，改 OcrThreads/Device 需重启应用生效（RapidOcrNet.InitModels 在构造时一次性设定）。
+        builder.Services.AddSingleton<IOcrEngine>(sp =>
+        {
+            var ocr = sp.GetRequiredService<SettingsHolder>().Current.Ocr;
+            // 后台初始化失败（InitModels 抛错）走日志；缺模型文件仍在构造同步快速失败。
+            return new PaddleOcrEngine(Path.Combine(baseDir, "models"), ocr.OcrThreads, ocr.Device,
+                msg => sp.GetRequiredService<FileLogger>().Error(msg));
+        });
         builder.Services.AddSingleton<CaptureService>();
 
         // --- 翻译管线 DI（B3）---
@@ -244,6 +272,7 @@ public partial class App : Application
             {
                 ProbeStart.Ok => "已开启",
                 ProbeStart.WaitingForWindow => $"未找到游戏窗口（进程 {info.ProcessName}），转入等待：窗口出现后自动开始翻译（游戏需窗口化/无边框）",
+                ProbeStart.WaitingForModels => "模型加载中（OCR/HY-MT2），就绪后自动开始翻译",
                 ProbeStart.CaptureUnsupported => "无法开启：系统不支持窗口捕获（需 Win10 1803+，且非 WSL）",
                 ProbeStart.NoRoi => "预设加载失败（layout-presets.json 不可用或为空）：请确认文件存在且完好，详见启动日志",
                 ProbeStart.WindowNotFound => $"{info.ProcessName} 窗口查找异常：请确认游戏已以窗口化/无边框模式启动",
@@ -431,9 +460,11 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // 先停翻译循环（停捕获、停看门狗、清屏），确保没有正在跑的 OCR 帧再销毁 OCR 引擎，避免边跑边销毁。
+        try { _host?.Services.GetRequiredService<TranslationEngine>().Stop(); } catch { }
         _hotkeys?.Dispose();
         _trayService?.Dispose();
-        _host?.Dispose();
+        _host?.Dispose(); // OCR 引擎的重活销毁已甩后台线程（PaddleOcrEngine.Dispose 幂等、后台执行），不再卡 UI 线程
         _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
         base.OnExit(e);

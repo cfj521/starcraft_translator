@@ -48,6 +48,22 @@ internal static class Program
             int rbx = int.Parse(args[5]), rby = int.Parse(args[6]);
             return RaceCompare(repoRoot, left, top, rw, rh, rbx, rby);
         }
+        if (args.Length > 0 && args[0] == "roomcompare")
+        {
+            return RoomCompare(repoRoot);
+        }
+        if (args.Length > 0 && args[0] == "fullcompare")
+        {
+            return FullCompare(repoRoot);
+        }
+        if (args.Length > 0 && args[0] == "randomcompare")
+        {
+            return RandomCompare(repoRoot);
+        }
+        if (args.Length > 0 && args[0] == "write3840")
+        {
+            return Write3840(repoRoot);
+        }
         var factoryPath = Path.Combine(repoRoot, "src", "ScrTranslator.App", "scene-refs.json");
         var store = SceneRefStore.Load(factoryPath);
         if (!store.IsUsable)
@@ -426,6 +442,195 @@ internal static class Program
     }
 
     /// <summary>
+    /// 两张 room 参考图互比 frame-left 指纹区域：room-1920x1080.png 与 room-1176x664.png。
+    /// 区域按 1920x1080 基准 (240,0,183,42) 等比换算到各图，块 45x10（与 scene-refs.json 一致）。
+    /// 命中高=两图同一块边框内容可比（降分辨率不影响指纹）；命中低=内容不一致或区域错位。
+    /// </summary>
+    static int RoomCompare(string repoRoot)
+    {
+        // 加载出厂参考，拿 room 的 1920x1080 基准（区域几何 + 存的指纹字节）
+        var factoryPath = Path.Combine(repoRoot, "src", "ScrTranslator.App", "scene-refs.json");
+        var store = SceneRefStore.Load(factoryPath);
+        if (!store.IsUsable)
+        {
+            Console.Error.WriteLine($"出厂参考加载失败：{store.LoadError}");
+            return 1;
+        }
+        var room = store.Find("room") ?? throw new InvalidOperationException("找不到 room 参考");
+        if (!room.TryResolution(1920, 1080, out var baseRes))
+            throw new InvalidOperationException("room 无 1920x1080 基准参考");
+
+        var r = baseRes.Regions[0]; // room 只有一个区域 frame-left
+        int baseX = (int)r.X, baseY = (int)r.Y, baseW = (int)r.Width, baseH = (int)r.Height;
+        int bx = r.BlocksX, by = r.BlocksY;
+        Console.WriteLine($"出厂 room 参考（1920x1080）：{r.Name} ({baseX},{baseY},{baseW}x{baseH}) 块 {bx}x{by}，指纹 {baseRes.Fingerprint.Length} 字节");
+        Console.WriteLine($"容差 {store.ChannelTolerance}，阈值 {store.MinHitRatio:P0}");
+        Console.WriteLine();
+
+        (string Name, string Path, int W, int H)[] imgs =
+        {
+            ("1920x1080", "resources/ss-scenes/room-1920x1080.png", 1920, 1080),
+            ("1176x664",  "resources/ss-scenes/room-1176x664.png",  1176, 664),
+            ("3840x2160", "resources/ss-scenes/room-3840x2160.png",  3840, 2160),
+        };
+
+        // 先算全部图的指纹，再以 1176x664 为基准，比其他图和它的差值。
+        var fps = new List<(string Name, byte[] Fp)>();
+        foreach (var (name, path, W, H) in imgs)
+        {
+            double sy = H / 1080.0;
+            double ar = W / (double)H;
+            // room 只在有黑边（ar 偏离最近标准比例超 0.08）才裁（与运行时 SceneRecognizer 一致）
+            double crop = ResolutionAnalyzer.Analyze(W, H).HasBlackBars ? (1920 - 1080 * ar) / 2.0 : 0.0;
+            int x = (int)Math.Round((baseX - crop) * sy);
+            int y = (int)Math.Round(baseY * sy);
+            int w = (int)Math.Round(baseW * sy);
+            int h = (int)Math.Round(baseH * sy);
+            x = Math.Clamp(x, 0, W - 1); y = Math.Clamp(y, 0, H - 1);
+            w = Math.Min(w, W - x); h = Math.Min(h, H - y);
+            using var bm = Decode(Path.Combine(repoRoot, path));
+            byte[] fp = Live(bm, x, y, w, h, bx, by);
+            fps.Add((name, fp));
+        }
+        // 以 3840x2160 区域指纹为基准，对比 1920x1080 和 1176x664 的匹配度
+        int idx3840 = -1;
+        for (int i = 0; i < fps.Count; i++) if (fps[i].Name == "3840x2160") idx3840 = i;
+        var baseFp = fps[idx3840];
+        Console.WriteLine($"基准 = {baseFp.Name} 区域指纹（{baseFp.Fp.Length} 字节），其他 vs 它：");
+        foreach (var f in fps)
+        {
+            if (f.Name == baseFp.Name) continue;
+            double hit = HitRatio(f.Fp, baseFp.Fp);
+            Console.WriteLine($"  {f.Name}  vs 基准 命中 {hit:P2}  差值 {(1 - hit):P2}");
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// 全图相似度：两张 room 参考图统一上采样到 1920x1080，对整图做 96x20 块均值指纹互比。
+    /// 命中高=整图内容一致（仅分辨率差异）；命中低=内容有差异（房间名/下拉值/光标等 UI 不同）。
+    /// </summary>
+    static int FullCompare(string repoRoot)
+    {
+        (string Name, string Path)[] imgs =
+        {
+            ("1920x1080", "resources/ss-scenes/room-1920x1080.png"),
+            ("1176x664",  "resources/ss-scenes/room-1176x664.png"),
+        };
+        const int bx = 96, by = 20; // 全图细网格（@1080p 每块 ~20x54 px）
+        var fps = new List<(string Name, byte[] Fp)>();
+        foreach (var (name, path) in imgs)
+        {
+            var src = Decode(Path.Combine(repoRoot, path));
+            SKBitmap? upscaled = null;
+            if (src.Width != 1920 || src.Height != 1080)
+            {
+                upscaled = new SKBitmap(1920, 1080, SKColorType.Bgra8888, SKAlphaType.Opaque);
+                using var cc = new SKCanvas(upscaled);
+                var paint = new SKPaint { FilterQuality = SKFilterQuality.High };
+                cc.DrawBitmap(src, new SKRect(0, 0, 1920, 1080), paint);
+                src.Dispose();
+            }
+            using var target = upscaled ?? src;
+            byte[] fp = Live(target, 0, 0, 1920, 1080, bx, by);
+            fps.Add((name, fp));
+        }
+        double hit = HitRatio(fps[0].Fp, fps[1].Fp);
+        Console.WriteLine($"全图对比（统一上采样到 1920x1080，整图 {bx}x{by} 块均值指纹）：");
+        Console.WriteLine($"  1920x1080 vs 1176x664 命中 {hit:P1}  {(hit >= MinHitRatio ? "✓ 内容基本一致" : "✗ 内容有差异")}");
+        return 0;
+    }
+
+    /// <summary>
+    /// 把 3840x2160 的 frame-left 区域指纹写成出厂值：room 场景新增 "3840x2160" 分辨率条目。
+    /// 区域几何按 FittingRegions 公式缩放到 3840x2160，块均值指纹 base64 写入。
+    /// 写完后需重跑 tools/SceneRefGen 更新出厂层 SHA-256 校验和。
+    /// </summary>
+    static int Write3840(string repoRoot)
+    {
+        const int W = 3840, H = 2160;
+        // room 的 frame-left 1080p 基准区域
+        const int baseX = 240, baseY = 0, baseW = 183, baseH = 42, bx = 45, by = 10;
+        double sy = H / 1080.0;
+        double crop = (1920 - 1080 * (W / (double)H)) / 2.0; // room: centerCrop=true
+        int x = (int)Math.Round((baseX - crop) * sy);
+        int y = (int)Math.Round(baseY * sy);
+        int w = (int)Math.Round(baseW * sy);
+        int h = (int)Math.Round(baseH * sy);
+        x = Math.Clamp(x, 0, W - 1); y = Math.Clamp(y, 0, H - 1);
+        w = Math.Min(w, W - x); h = Math.Min(h, H - y);
+        using var bm = Decode(Path.Combine(repoRoot, "resources", "ss-scenes", "room-3840x2160.png"));
+        byte[] fp = Live(bm, x, y, w, h, bx, by);
+        string b64 = Convert.ToBase64String(fp);
+        Console.WriteLine($"3840x2160 frame-left 区域 ({x},{y},{w}x{h})  块 {bx}x{by}  指纹 {fp.Length} 字节");
+        Console.WriteLine($"base64 长度 {b64.Length}");
+
+        // 读 scene-refs.json，找 room，加 "3840x2160" 条目
+        string path = Path.Combine(repoRoot, "src", "ScrTranslator.App", "scene-refs.json");
+        var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
+        var roomNode = node["scenes"]["room"];
+        var resNode = roomNode["resolutions"];
+        if (resNode["3840x2160"] is not null)
+        {
+            Console.Error.WriteLine("room 已有 3840x2160 条目，请先删掉");
+            return 1;
+        }
+        var regionNode = new System.Text.Json.Nodes.JsonObject
+        {
+            ["name"] = "frame-left",
+            ["rect"] = new System.Text.Json.Nodes.JsonArray(x / W, y / H, w / W, h / H),
+            ["blockPx"] = 8,
+            ["blocks"] = new System.Text.Json.Nodes.JsonArray(bx, by),
+            ["data"] = b64,
+        };
+        var resEntry = new System.Text.Json.Nodes.JsonObject
+        {
+            ["source"] = "room-3840x2160.png",
+            ["regions"] = new System.Text.Json.Nodes.JsonArray(regionNode),
+        };
+        resNode["3840x2160"] = resEntry;
+        File.WriteAllText(path, node.ToJsonString(new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        }), new System.Text.UTF8Encoding(false));
+        Console.WriteLine("已写入 room/3840x2160。请重跑 tools/SceneRefGen 更新 SHA-256。");
+        return 0;
+    }
+
+    /// <summary>
+    /// 随机取 3 个 150x150 像素区域（1920x1080 坐标），缩放到 1176x664 对应位置，块均值指纹互比。
+    /// 用来看两张图的差异是集中在 frame-left 硬边、还是均匀分布在各处。块 10x10（每块 15x15 px）。
+    /// </summary>
+    static int RandomCompare(string repoRoot)
+    {
+        const string p0 = "resources/ss-scenes/room-1920x1080.png";
+        const string p1 = "resources/ss-scenes/room-1176x664.png";
+        const int baseW = 1920, baseH = 1080, W1 = 1176, H1 = 664;
+        const int region = 150, bx = 10, by = 10; // 150x150 区域，10x10 块
+        var rng = new Random(42);
+        var regions = new List<(int X, int Y)>();
+        for (int i = 0; i < 3; i++)
+        {
+            regions.Add((rng.Next(0, baseW - region), rng.Next(0, baseH - region)));
+        }
+        using var bm0 = Decode(Path.Combine(repoRoot, p0));
+        using var bm1 = Decode(Path.Combine(repoRoot, p1));
+        double sx = W1 / (double)baseW, sy = H1 / (double)baseH;
+        Console.WriteLine($"随机 3 个 {region}x{region} 区域（1920x1080 坐标），缩放到 1176x664 互比（块 {bx}x{by}，容差 {Tolerance}，阈值 {MinHitRatio:P0}）：");
+        foreach (var (x, y) in regions)
+        {
+            int x1 = (int)Math.Round(x * sx), y1 = (int)Math.Round(y * sy);
+            int w1 = (int)Math.Round(region * sx), h1 = (int)Math.Round(region * sy);
+            byte[] fp0 = Live(bm0, x, y, region, region, bx, by);
+            byte[] fp1 = Live(bm1, x1, y1, w1, h1, bx, by);
+            double hit = HitRatio(fp0, fp1);
+            Console.WriteLine($"  区域 ({x},{y},{region}x{region}) → ({x1},{y1},{w1}x{h1})  命中 {hit:P1}  {(hit >= MinHitRatio ? "✓" : "✗")}");
+        }
+        return 0;
+    }
+
+    /// <summary>
     /// 垂直扫描：把参考区域（缩放到 w×h）沿 Y 轴从 0 滑到帧底，X 固定在 fixX，
     /// 找出命中率最高的落点——用来定位非 16:9 图里装饰板/边框的真实位置。
     /// </summary>
@@ -441,26 +646,30 @@ internal static class Program
         Console.WriteLine($"{name}: 最佳落点 X={fixX} Y={bestY} (相对Y {bestY / (double)bm.Height:F3})  命中 {best:P1}");
     }
 
-    /// <summary>把区域等分为 blocksX×blocksY 块（浮点边界，整块覆盖，不丢边缘），逐块 RGB 均值，RGB24 行优先。</summary>
+    /// <summary>
+    /// 把区域等分为 blocksX×blocksY 块，逐块 RGB 均值，RGB24 行优先。
+    /// **块边界必须与运行时 SceneFingerprint.Compute 完全一致（用 Round 四舍五入，不是截断）**，
+    /// 否则块落点偏 1px，硬边区域命中掉十几个点，跟 app.log 对不上。
+    /// </summary>
     static byte[] Live(SKBitmap bm, int x, int y, int w, int h, int blocksX, int blocksY)
     {
         var bytes = new byte[blocksX * blocksY * 3];
         var (ro, go, bo) = ChannelOffsets(bm);
+        double bsx = w / (double)blocksX;
+        double bsy = h / (double)blocksY;
         unsafe
         {
             byte* p = (byte*)bm.GetPixels();
             for (int gy = 0; gy < blocksY; gy++)
             {
-                int y0 = y + (int)((double)gy / blocksY * h);
-                int y1 = y + (int)((double)(gy + 1) / blocksY * h);
-                if (y1 <= y0) { y1 = y0 + 1; }
-                y0 = Math.Clamp(y0, 0, bm.Height - 1); y1 = Math.Clamp(y1, y0 + 1, bm.Height);
+                int y0 = y + (int)Math.Round(gy * bsy);
+                int y1 = Math.Min(y + (int)Math.Round((gy + 1) * bsy), bm.Height);
+                y0 = Math.Clamp(y0, 0, bm.Height - 1);
                 for (int gx = 0; gx < blocksX; gx++)
                 {
-                    int x0 = x + (int)((double)gx / blocksX * w);
-                    int x1 = x + (int)((double)(gx + 1) / blocksX * w);
-                    if (x1 <= x0) { x1 = x0 + 1; }
-                    x0 = Math.Clamp(x0, 0, bm.Width - 1); x1 = Math.Clamp(x1, x0 + 1, bm.Width);
+                    int x0 = x + (int)Math.Round(gx * bsx);
+                    int x1 = Math.Min(x + (int)Math.Round((gx + 1) * bsx), bm.Width);
+                    x0 = Math.Clamp(x0, 0, bm.Width - 1);
                     long sr = 0, sg = 0, sb = 0; int n = 0;
                     for (int yy = y0; yy < y1; yy++)
                         for (int xx = x0; xx < x1; xx++)
@@ -469,7 +678,7 @@ internal static class Program
                             sr += q[ro]; sg += q[go]; sb += q[bo]; n++;
                         }
                     int o = (gy * blocksX + gx) * 3;
-                    bytes[o] = (byte)(sr / n); bytes[o + 1] = (byte)(sg / n); bytes[o + 2] = (byte)(sb / n);
+                    bytes[o] = (byte)(n == 0 ? 0 : sr / n); bytes[o + 1] = (byte)(n == 0 ? 0 : sg / n); bytes[o + 2] = (byte)(n == 0 ? 0 : sb / n);
                 }
             }
         }

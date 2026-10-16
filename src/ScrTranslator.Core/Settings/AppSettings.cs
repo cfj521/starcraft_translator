@@ -10,14 +10,28 @@ public sealed record GeneralSettings
     /// <summary>DEBUG 模式：左上角显示诊断面板（场景识别/帧/ROI/翻译状态），便于实机排障。默认关。</summary>
     public bool DebugMode { get; init; } = false;
 }
+/// <summary>OCR 推理设备。Cpu = onnxruntime CPU（占内存少、稍慢、无 GPU 也能跑）；
+/// Gpu = DirectML（onnxruntime 的 DML 执行提供者，甩到 GPU、CPU 基本不动、免装 CUDA）。</summary>
+public enum OcrDevice { Cpu, Gpu }
+
 public sealed record OcrSettings
 {
+    /// <summary>OCR 设备：CPU 或 GPU（DirectML）。默认 Cpu（安全：无 GPU 的机器也能跑，行为与旧版一致）。
+    /// 用户在"识别"页选 GPU 后，OCR 甩到显卡、CPU 大降。改此值需重启应用（引擎单例、构造时定死设备）。</summary>
+    public OcrDevice Device { get; init; } = OcrDevice.Cpu;
+
     /// <summary>场景检测轮询（毫秒）。默认 20：识别只读几块静态区做块均值比对（&lt;1ms），
     /// 20ms 一次开销可忽略，换来"切界面立刻跟上"——慢了就出现"人已在房间内、还在按老 ROI 翻"的窗口期。</summary>
     public int SceneDetectPollMs { get; init; } = 20;
 
     /// <summary>翻译轮询（毫秒）。默认 200：一轮 = 各 ROI 裁剪 + OCR + 翻译上屏。</summary>
     public int TranslatePollMs { get; init; } = 200;
+
+    /// <summary>OCR（onnxruntime）intra-op 并行线程数。默认 4。
+    /// RapidOcrNet.InitModels 的 numThread 默认 0 = 用全部核：20 核机上每次推理都把全核拉满，
+    /// 是"一开翻译 CPU 全满"的根因（帧转换只占单核，对不上全核满载）。限到少量核后 CPU 大降，
+    /// OCR 单次稍慢但仍远在轮询窗口内完成。OCR 引擎是单例、线程数在首次加载时定死，改此值需重启应用。</summary>
+    public int OcrThreads { get; init; } = 4;
 
     // 曾有 ChatPollMs/OtherPollMs 两个值（按"场景里有没有聊天 ROI"二选一）：其他界面根本不翻译，
     // 给它单独配一个"翻译轮询"是无意义的假旋钮 → 收敛成上面这两个正交的轮询节拍。

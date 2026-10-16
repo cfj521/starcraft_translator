@@ -43,19 +43,29 @@ public sealed class LineStabilizer
             li.Add(i);
         }
 
-        // 按旧稳定顺序走：每个文本的前 min(已提交次数, 本帧出现次数) 次出现被确认（位置用本帧 bounds），
-        // 尾部出现本帧没见到 → 缺失（打标记，按文本统一裁决）。
+        // 按旧稳定顺序走。**按位置认行而非精确文本**：OCR 对同一行会因渲染/背景抖动读出不同文本
+        // （同一位置、文本略变），若按精确文本匹配，旧读法被判缺失、新读法还没凑够两帧 → 整行撤销
+        // 约 800ms 再重现（周期性闪烁）。改为：本帧里与该行位置重叠、且未被其它已提交行认领的读法
+        // = 该行仍在（文本更新为本帧最新读法）；找不到同位置读法才算缺失。一帧内一行只占一个位置，
+        // 故一对一认领即可，重复行（同文不同位置）各认各的、不串扰。
         var kept = new List<(string Text, RectangleF Bounds, int LastFrameIdx, bool Missing)>();
         var confirmedSoFar = new Dictionary<string, int>();
         var missingNow = new Dictionary<string, int>();
+        var matchedReading = new HashSet<int>(); // 已被某已提交行认领的本帧读法下标
         foreach (var s in roi.Stable)
         {
-            int confirmed = confirmedSoFar.GetValueOrDefault(s.Text);
-            if (confirmed < frameCount.GetValueOrDefault(s.Text))
+            int idx = -1;
+            for (int i = 0; i < n; i++)
             {
-                int idx = frameOccIdx[s.Text][confirmed];
-                confirmedSoFar[s.Text] = confirmed + 1;
-                kept.Add((s.Text, frameBounds[idx], idx, false));
+                if (matchedReading.Contains(i)) continue;
+                if (Overlaps(s.Bounds, frameBounds[i])) { idx = i; break; }
+            }
+            if (idx >= 0)
+            {
+                matchedReading.Add(idx);
+                string readingText = frameLines[idx]; // 该行本帧最新读法（可能与上次不同）
+                confirmedSoFar[readingText] = confirmedSoFar.GetValueOrDefault(readingText) + 1;
+                kept.Add((readingText, frameBounds[idx], idx, false));
             }
             else
             {
@@ -104,6 +114,16 @@ public sealed class LineStabilizer
         var bounds = new List<RectangleF>(newStable.Count);
         foreach (var s in newStable) { lines.Add(s.Item1); bounds.Add(s.Item2); }
         return (lines, bounds);
+    }
+
+    /// <summary>两行矩形是否"同一行"：竖直范围重叠（含半行高余量，吸收 OCR 边界上下抖动）且水平范围相交。
+    /// 用位置而非文本认行：OCR 对同一行会读出略不同的文本，但位置稳定。</summary>
+    private static bool Overlaps(RectangleF a, RectangleF b)
+    {
+        double margin = Math.Max(a.Height, b.Height) * 0.5;
+        bool vertical = a.Top < b.Bottom + margin && b.Top < a.Bottom + margin;
+        bool horizontal = a.Left < b.Right && b.Left < a.Right;
+        return vertical && horizontal;
     }
 
     /// <summary>ROI 集变化（换场景/分辨率/增删）：清掉全部 ROI 的共识状态。</summary>

@@ -88,7 +88,8 @@ public class SceneRefCaptureTests
         Assert.True(reference.TryResolution(128, 128, out var res));
         Assert.Equal("现场采集", res.Source);
         Assert.Single(res.Regions);
-        Assert.Equal(16, res.Regions[0].Width);
+        // 比例键不携带分辨率，绝对像素一律按基准分辨率（1920×1080）换算：0~1 的 16/128 → 16/128×1920 = 240。
+        Assert.Equal(240, res.Regions[0].Width);
         File.Delete(overridePath);
     }
 
@@ -147,8 +148,8 @@ public class SceneRefCaptureTests
     [Fact]
     public void BaseRegions_ReturnsBaseResolutionRegions()
     {
-        // BaseRegions 找的是 1920x1080 基准，所以样本必须建在那个分辨率上（SceneRefJson 默认是 64x64，故内联造）
-        string resKey = "1920x1080";
+        // BaseRegions 找的是 16:9 基准（1920x1080 归约），所以样本必须建在那个比例上（SceneRefJson 默认是 64x64，故内联造）
+        string resKey = "16:9";
         var data = Enumerable.Repeat((byte)5, 4 * 4 * 3).ToArray();
         var entries = new List<SceneRefIntegrity.Entry>
         {

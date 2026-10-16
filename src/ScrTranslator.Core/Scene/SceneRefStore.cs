@@ -40,10 +40,10 @@ public sealed record SceneReference(
     string Id, string Label, GameScene Scene, GameRace Race,
     IReadOnlyDictionary<string, SceneRefResolution> Resolutions)
 {
-    /// <summary>取该分辨率的参考。必须**精确匹配**：块均值网格随分辨率变，借用别的分辨率参考会整片错位。</summary>
+    /// <summary>取该比例的参考。必须**精确匹配**：块均值网格随分辨率变，借用别的分辨率参考会整片错位。</summary>
     public bool TryResolution(int width, int height, out SceneRefResolution resolution)
     {
-        var key = $"{width}x{height}";
+        var key = SceneRefStore.RatioKey(width, height);
         if (Resolutions.TryGetValue(key, out var found) && found is not null)
         {
             resolution = found;
@@ -96,6 +96,15 @@ public sealed class SceneRefStore
     public bool IsUsable => LoadError is null && References.Count > 0;
 
     public SceneReference? Find(string id) => References.FirstOrDefault(r => r.Id == id);
+
+    /// <summary>把宽高归约成比例键（"16:9"）。同比例的任意分辨率（1920x1080 / 3840x2160）归约后是同一个键。</summary>
+    public static string RatioKey(int width, int height)
+    {
+        if (width <= 0 || height <= 0) return "0:1";
+        int g = Gcd(width, height);
+        return $"{width / g}:{height / g}";
+    }
+    static int Gcd(int a, int b) => b == 0 ? a : Gcd(b, a % b);
 
     /// <summary>按四态场景取参考条目（游戏内会返回三条：ingame_t/p/z）。</summary>
     public IEnumerable<SceneReference> ForScene(GameScene scene) => References.Where(r => r.Scene == scene);
@@ -189,9 +198,10 @@ public sealed class SceneRefStore
             // 校验输入 = 各条目的"键 + 几何 + 指纹字节"，与 tools/SceneRefGen 共用 SceneRefIntegrity。
             var entries = new List<SceneRefIntegrity.Entry>();
             var refs = new List<SceneReference>();
+            int baseHeight = baseWidth * 9 / 16;   // 基准分辨率高度（1920→1080）
             foreach (var sceneEl in scenesEl.EnumerateObject())
             {
-                var parsed = ParseReference(sceneEl.Name, sceneEl.Value, entries, warnings);
+                var parsed = ParseReference(sceneEl.Name, sceneEl.Value, entries, warnings, baseWidth, baseHeight);
                 if (parsed is not null) refs.Add(parsed);
             }
             if (refs.Count == 0) { error = $"{what} 没有任何可用条目"; return new SceneRefStore(); }
@@ -260,7 +270,7 @@ public sealed class SceneRefStore
     static long GetDeclaredBytes(JsonElement integrity)
         => integrity.TryGetProperty("bytes", out var b) && b.TryGetInt64(out long n) ? n : 0;
 
-    static SceneReference? ParseReference(string id, JsonElement el, List<SceneRefIntegrity.Entry> entries, List<string> warnings)
+    static SceneReference? ParseReference(string id, JsonElement el, List<SceneRefIntegrity.Entry> entries, List<string> warnings, int baseWidth, int baseHeight)
     {
         string label = el.TryGetProperty("label", out var l) ? l.GetString() ?? id : id;
         var race = GameRaces.FromLetter(el.TryGetProperty("race", out var r) ? r.GetString() : null);
@@ -273,7 +283,7 @@ public sealed class SceneRefStore
         var resolutions = new Dictionary<string, SceneRefResolution>();
         foreach (var rp in resEl.EnumerateObject())
         {
-            var res = ParseResolution(id, rp.Name, rp.Value, entries, warnings);
+            var res = ParseResolution(id, rp.Name, rp.Value, entries, warnings, baseWidth, baseHeight);
             if (res is not null) resolutions[rp.Name] = res;
         }
         if (resolutions.Count == 0)
@@ -293,14 +303,10 @@ public sealed class SceneRefStore
         return new SceneReference(id, label, gameScene, race, resolutions);
     }
 
-    static SceneRefResolution? ParseResolution(string id, string key, JsonElement el, List<SceneRefIntegrity.Entry> entries, List<string> warnings)
+    static SceneRefResolution? ParseResolution(string id, string key, JsonElement el, List<SceneRefIntegrity.Entry> entries, List<string> warnings, int baseWidth, int baseHeight)
     {
-        var parts = key.Split('x');
-        if (parts.Length != 2 || !int.TryParse(parts[0], out int width) || !int.TryParse(parts[1], out int height))
-        {
-            warnings.Add($"参考 {id}/{key} 的分辨率键非法");
-            return null;
-        }
+        // key 现在是比例键（如 "16:9"），不再携带分辨率。绝对像素一律按基准分辨率换算
+        // （方案 B：所有参考归一到 1080p 基准，运行时再按统一高度因子缩放到当前帧）。
         if (!el.TryGetProperty("regions", out var regionsEl) || regionsEl.ValueKind != JsonValueKind.Array)
         {
             warnings.Add($"参考 {id}/{key} 缺 regions");
@@ -332,8 +338,8 @@ public sealed class SceneRefStore
                     warnings.Add($"参考 {id}/{key}/{name} 指纹长度 {data.Length} ≠ {bx * by * 3}，该分辨率已丢弃");
                     return null;
                 }
-                // 几何（进 sha256）用 JSON 里的相对值；记录存绝对像素（相对 × 分辨率宽高）。
-                regions.Add(new SceneRefRegion(name, x * width, y * height, w * width, h * height, blockPx, bx, by));
+                // 几何（进 sha256）用 JSON 里的相对值；记录存绝对像素（相对 × 基准宽高，方案 B 统一到 1080p）。
+                regions.Add(new SceneRefRegion(name, x * baseWidth, y * baseHeight, w * baseWidth, h * baseHeight, blockPx, bx, by));
                 entries.Add(new SceneRefIntegrity.Entry(
                     SceneRefIntegrity.Key(id, key, name),
                     SceneRefIntegrity.Geometry(x, y, w, h, blockPx, bx, by),
@@ -352,7 +358,7 @@ public sealed class SceneRefStore
             return null;
         }
         string source = el.TryGetProperty("source", out var s) ? s.GetString() ?? "" : "";
-        return new SceneRefResolution(source, width, height, regions, bytes.ToArray());
+        return new SceneRefResolution(source, baseWidth, baseHeight, regions, bytes.ToArray());
     }
 
     static int GetInt(JsonElement el, string name, int fallback)
