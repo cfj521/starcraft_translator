@@ -54,6 +54,10 @@ public static class SettingsStore
             // 自定义模型（OpenAI 兼容）：老池里没有则补上（启用态），新用户在默认池里位于第二行。
             if (providers.All(p => p.Id != TranslationProviderEntry.CustomModel))
                 providers.Add(new TranslationProviderEntry(TranslationProviderEntry.CustomModel, true));
+            // 本地 Hy-MT2（库模式、进程内推理）：老池里没有则插到**第一行**（离线主翻译，用户可拖拽改序）。
+            // 插到 index 0 而非尾部：它是离线/不限流的主力，应优先于云端 provider 被取用。
+            if (providers.All(p => p.Id != TranslationProviderEntry.HyMt2))
+                providers.Insert(0, new TranslationProviderEntry(TranslationProviderEntry.HyMt2, true));
             return s with { Hotkeys = merged, Translation = s.Translation with { Providers = providers } };
         }
         catch { return new AppSettings(); } // 损坏/反序列化失败 → 默认

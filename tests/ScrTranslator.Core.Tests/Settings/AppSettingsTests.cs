@@ -13,9 +13,10 @@ public class AppSettingsTests
         Assert.InRange(a.Appearance.Opacity, 0.0, 1.0);
         Assert.Equal(0.8, a.Appearance.BackplateAlpha(), 3); // 文字底衬默认 80% 黑底
         Assert.Equal(1.0, a.Appearance.FontWidthScale); // 字宽缩放默认正常
-        Assert.Equal(TranslationProviderEntry.Aliyun, a.Translation.Providers[0].Id); // 默认池首位＝阿里云（先免费）
-        Assert.Equal(TranslationProviderEntry.CustomModel, a.Translation.Providers[1].Id); // 默认池第二行＝自定义模型
-        Assert.Equal(5, a.Translation.Providers.Count); // 含自定义模型与 OpenAI API 模式（已移除腾讯云）
+        Assert.Equal(TranslationProviderEntry.HyMt2, a.Translation.Providers[0].Id); // 默认池首位＝本地 Hy-MT2（离线优先）
+        Assert.Equal(TranslationProviderEntry.Aliyun, a.Translation.Providers[1].Id); // 默认池第二行＝阿里云（免费机器翻译）
+        Assert.Equal(TranslationProviderEntry.CustomModel, a.Translation.Providers[2].Id); // 默认池第三行＝自定义模型
+        Assert.Equal(6, a.Translation.Providers.Count); // 含本地 Hy-MT2、自定义模型与 OpenAI API 模式（已移除腾讯云）
     }
 
     [Theory]

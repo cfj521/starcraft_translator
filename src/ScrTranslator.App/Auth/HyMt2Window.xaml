@@ -1,0 +1,28 @@
+<Window x:Class="ScrTranslator.App.Auth.HyMt2Window"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="配置本地 Hy-MT2"
+        Width="520" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    <StackPanel Margin="16">
+        <TextBlock Text="模型文件（GGUF）：" Margin="0,0,0,8"/>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="PathBox" Grid.Column="0"/>
+            <Button x:Name="BrowseButton" Grid.Column="1" Content="浏览…" Width="64" Margin="8,0,0,0" Click="OnBrowse"/>
+        </Grid>
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+            <RadioButton x:Name="CpuRadio" GroupName="BackendGroup" Content="CPU" IsChecked="True" VerticalAlignment="Center" Margin="0,0,16,0"/>
+            <RadioButton x:Name="GpuRadio" GroupName="BackendGroup" Content="GPU" VerticalAlignment="Center"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="OkButton" Content="确定" Width="80" Margin="0,0,8,0" Click="OnOk" IsDefault="True"/>
+            <Button x:Name="CancelButton" Content="取消" Width="80" Click="OnCancel" IsCancel="True"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

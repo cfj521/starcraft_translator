@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using SkiaSharp;
+using ScrTranslator.App.Interop;
+using Windows.Graphics;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
@@ -59,6 +61,117 @@ public sealed class CaptureService : IDisposable
 
     public IntPtr Hwnd { get; private set; }
 
+    // ── 窗口尺寸事件驱动：WGC 会话按"建会话那一刻"的窗口尺寸交帧，游戏切分辨率后不自己更新，
+    //    帧就锁死在旧分辨率上（帧数照涨、尺寸不变），非得重建会话才恢复。这里用 WinEventHook
+    //    监听目标窗口尺寸变化，变了才 Stop+Start 重建，事件驱动、不轮询、不靠 watchdog 提醒。──
+    private IntPtr _hookedHwnd; // 当前要盯的游戏窗口；钩线程据此装/解钩
+    private (int W, int H) _captureSize;
+    private volatile bool _isRestarting;
+    // WinEventProc 委托须保活整个实例生命周期。单一实例+永不置空=函数指针恒有效，
+    // 杜绝"A callback was made on a garbage collected delegate"。
+    private readonly NativeMethods.WinEventProc _winEventProc;
+    // 专用消息泵线程：WINEVENT_OUTOFCONTEXT 钩子必须装在带消息循环的线程上，系统才把事件投递过来。
+    // 看门狗/首捕跑在无线程池消息循环的线程上，钩子装了也收不到——"改分辨率不重建"的根因就在这。
+    private readonly object _hookGate = new();
+    private Thread? _hookThread;
+    private volatile bool _hookThreadLive;
+
+    public CaptureService()
+    {
+        _winEventProc = (hook, dwEvent, targetHwnd, idObject, idChild, dwEventThread, dwTimeStamp) =>
+        {
+            if (targetHwnd != _hookedHwnd) return; // 只处理当前盯住的窗口；换窗/重建前后的过期回调丢弃
+            OnWindowSizeEvent(dwEvent, targetHwnd);
+        };
+    }
+
+    private static (int W, int H) GetWindowSize(IntPtr hwnd)
+    {
+        var r = NativeMethods.GetWindowScreenRect(hwnd);
+        return (r.Width, r.Height);
+    }
+
+    /// <summary>盯住游戏窗口尺寸：记 _hookedHwnd，确保专用消息泵线程在跑（线程自己装钩+泵消息）。</summary>
+    private void HookSizeEvents(IntPtr hwnd)
+    {
+        _hookedHwnd = hwnd;
+        EnsureHookThread();
+    }
+
+    /// <summary>解除尺寸监听：_hookedHwnd 置 0，钩线程自行解钩。线程留着复用，下次 Start 直接装钩。</summary>
+    private void UnhookSizeEvents()
+    {
+        _hookedHwnd = IntPtr.Zero;
+    }
+
+    private void EnsureHookThread()
+    {
+        lock (_hookGate)
+        {
+            if (_hookThread is { IsAlive: true }) return;
+            _hookThreadLive = true;
+            _hookThread = new Thread(HookThreadMain) { IsBackground = true, Name = "CaptureHook" };
+            _hookThread.SetApartmentState(ApartmentState.STA); // WinEventHook 需 STA 消息循环
+            _hookThread.Start();
+        }
+    }
+
+    /// <summary>钩线程：按 _hookedHwnd 装/解钩，并持续泵消息。钩子事件经系统隐藏窗口投递到本线程，不泵消息收不到。</summary>
+    private void HookThreadMain()
+    {
+        IntPtr hook = IntPtr.Zero;
+        try
+        {
+            while (_hookThreadLive)
+            {
+                IntPtr target = _hookedHwnd;
+                if (target != IntPtr.Zero && hook == IntPtr.Zero)
+                {
+                    hook = NativeMethods.SetWinEventHook(
+                        NativeMethods.EVENT_OBJECT_SHOW, NativeMethods.EVENT_OBJECT_RESIZED,
+                        IntPtr.Zero, Marshal.GetFunctionPointerForDelegate(_winEventProc),
+                        0, 0, NativeMethods.WINEVENT_OUTOFCONTEXT);
+                }
+                else if (target == IntPtr.Zero && hook != IntPtr.Zero)
+                {
+                    NativeMethods.UnhookWinEvent(hook);
+                    hook = IntPtr.Zero;
+                }
+                NativeMethods.MSG msg;
+                while (NativeMethods.PeekMessage(out msg, IntPtr.Zero, 0, 0, NativeMethods.PM_REMOVE))
+                {
+                    NativeMethods.TranslateMessage(ref msg);
+                    NativeMethods.DispatchMessage(ref msg);
+                }
+                Thread.Sleep(20); // 无消息时让出，避免空转
+            }
+        }
+        finally
+        {
+            if (hook != IntPtr.Zero) NativeMethods.UnhookWinEvent(hook);
+        }
+    }
+
+    /// <summary>尺寸/显隐事件回调：读当前窗口尺寸，与建会话基准不同 → 游戏切了分辨率，Stop+Start 重建。</summary>
+    private void OnWindowSizeEvent(uint dwEvent, IntPtr hwnd)
+    {
+        if (hwnd != _hookedHwnd) return; // 过期钩子（窗口已换/已重建），丢弃
+        if (_isRestarting) return;
+        if (dwEvent == NativeMethods.EVENT_OBJECT_HIDE) return; // 隐藏/最小化由 watchdog 管，这里不重建
+        var (w, h) = GetWindowSize(hwnd);
+        if (w <= 0 || h <= 0) return;
+        if (w == _captureSize.W && h == _captureSize.H) return; // 没变，不动
+        _isRestarting = true;
+        try
+        {
+            LogDebug?.Invoke($"[capture] 窗口尺寸 {w}x{h} ≠ 捕获基准 {_captureSize.W}x{_captureSize.H}，重建捕获会话以刷新分辨率");
+            Stop();
+            Start(hwnd);
+        }
+        catch (Exception ex) { LogError?.Invoke($"[capture] 尺寸变化重建失败: {ex.Message}"); }
+        finally { _isRestarting = false; }
+    }
+
     public bool Start(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return false;
@@ -69,11 +182,20 @@ public sealed class CaptureService : IDisposable
         Marshal.Release(itemPtr);
 
         _device = CreateDirect3DDevice();
+        // 帧池上限=窗口所在显示器的物理尺寸（取不到才退回窗口自身尺寸 item.Size）。
+        // 若用 item.Size（创建那一刻的窗口尺寸）做上限：游戏从窗口态切全屏后，新尺寸超出帧池上限，
+        // WGC 交不出新分辨率的帧，帧就"锁"在旧分辨率上，非得 F9 重建会话才恢复——这就是"分辨率不实时"的根因。
+        // 显示器尺寸是窗口能达到的最大尺寸，任何窗口/全屏都装得下，WGC 逐帧交真实尺寸，分辨率永远最新。
+        var (monW, monH) = NativeMethods.GetMonitorSize(hwnd);
+        var maxSize = monW > 0 && monH > 0 ? new Windows.Graphics.SizeInt32(monW, monH) : item.Size;
         _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
-            _device, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, item.Size);
+            _device, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, maxSize);
         _framePool.FrameArrived += OnFrameArrived;
         _session = _framePool.CreateCaptureSession(item);
         _session.StartCapture();
+        // 记录建会话时的窗口尺寸，挂尺寸事件钩：变了就重建会话（见 OnWindowSizeEvent）。
+        _captureSize = GetWindowSize(hwnd);
+        HookSizeEvents(hwnd);
         return true;
     }
 
@@ -212,11 +334,16 @@ public sealed class CaptureService : IDisposable
 
     public void Stop()
     {
+        UnhookSizeEvents(); // 先解尺寸事件钩，防重建期间误触发
         if (_framePool is not null) _framePool.FrameArrived -= OnFrameArrived;
         _session?.Dispose(); _session = null;
         _framePool?.Dispose(); _framePool = null;
         _device?.Dispose(); _device = null;
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        _hookThreadLive = false; // 钩线程退出循环并解钩
+        Stop();
+    }
 }

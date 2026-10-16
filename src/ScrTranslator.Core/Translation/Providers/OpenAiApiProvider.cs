@@ -25,9 +25,11 @@ public sealed class OpenAiApiProvider : ITranslationProvider
         if (lines.Count == 0) return Array.Empty<string>();
         try
         {
-            var reply = await _client.CompleteAsync(_model(), PromptBuilder.BuildSystemPrompt(ctx), BatchProtocol.BuildUser(lines), ct);
+            // 只翻韩文保护：非韩文串（英文/数字/标点）换 ⟨N⟩ 占位符，只翻韩文；收译文后还原，丢了回退原文。
+            var (protectedLines, tokens) = KoreanOnlyProtector.Protect(lines);
+            var reply = await _client.CompleteAsync(_model(), PromptBuilder.BuildSystemPrompt(ctx, KoreanOnlyProtector.HasTokens(tokens)), BatchProtocol.BuildUser(protectedLines), ct);
             _cooldown.Reset(); // 成功：清冷却、退避归零
-            return BatchProtocol.Parse(reply, lines.Count) ?? lines;
+            return KoreanOnlyProtector.ParseAndRestore(reply, lines, protectedLines, tokens) ?? lines;
         }
         catch (RateLimitException ex)
         {

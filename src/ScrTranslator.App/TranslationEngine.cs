@@ -8,6 +8,7 @@ using ScrTranslator.Core.Ocr;
 using ScrTranslator.Core.Scene;
 using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
+using ScrTranslator.Core.Translation.Providers;
 using SkiaSharp;
 using Windows.Graphics.Capture;
 using System.Windows.Threading;
@@ -31,6 +32,7 @@ public sealed class TranslationEngine : IDisposable
     private readonly FileLogger _log;
     private readonly OverlayWindow _overlay;
     private readonly TranslationOrchestrator _orchestrator;
+    private readonly HyMt2Provider _hyMt2; // 本地引擎实例：调试面板显示其加载状态（未加载/加载中/可用/不可用）
     private readonly SettingsHolder _settings;
     private readonly string _glossaryHint;
     // 启动时人在哪个界面是**未知**的，所以初值取 Other（不翻译）而不是猜"寻找房间"：
@@ -90,6 +92,10 @@ public sealed class TranslationEngine : IDisposable
     private bool _windowLost;   // 已就"窗口丢失"通知过（重连成功后复位）
     private bool _waitingForWindow; // Start 时未找到窗口→看门狗等待首连（不报"丢失"，连上报"自动开始"）
     private bool _wasIconic;    // 上一轮询周期是否最小化（转移时才通知）
+    /// <summary>翻译是否进行中（F9 开→true，Stop→false）。ProcessFrame 在 await 翻译的续延里读它：
+    /// 翻译等待期间若被 F9 Stop()，_running 已置 false，本次结果丢弃不上屏——否则最后一帧的
+    /// ShowLines 会排在 Stop 的清空之后，把刚关掉的译文重新画回悬浮层（"关翻译后字还在"的竞态根因）。</summary>
+    private volatile bool _running;
     // 零帧/停滞诊断（实机排障：捕获会话活着但一帧不来 = 多半独占全屏；帧在来但处理不动 = _busy 卡死）
     private bool _firstFrameLogged;
     private long _lastFrameCount; private int _zeroFrameTicks; private bool _noFrameNotified;
@@ -103,6 +109,8 @@ public sealed class TranslationEngine : IDisposable
     private SceneRecognition _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
         GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别");
     private long _lastTranslateMs; private bool _lastAllResolved; private int _lastLineCount;
+    // 本批命中数（非池大小）：真正送进引擎翻译的行 / 术语表命中 / 缓存命中。调试面板显示的是这批实际数。
+    private int _lastEngineHits; private int _lastCacheHits; private int _lastGlossaryHits;
     private string? _lastTranslateError;   // 最近一次 provider 失败原因（null=正常）；也是"同因只提示一次"的去重键
 
     /// <summary>目标进程名（设置驱动，默认 StarCraft）。Start 与看门狗重连共用。</summary>
@@ -111,12 +119,12 @@ public sealed class TranslationEngine : IDisposable
 
     public TranslationEngine(CaptureService capture, IOcrEngine ocr, SceneRecognizer scene, LayoutPresetStore layout, FileLogger log, OverlayWindow overlay,
         string sceneRefsPath, string sceneOverridesPath,
-        TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug)
+        TranslationOrchestrator orchestrator, SettingsHolder settings, Glossary glossary, DebugWindow debug, HyMt2Provider hyMt2)
     {
         _capture = capture; _ocr = ocr; _scene = scene; _layout = layout; _log = log; _overlay = overlay; _debug = debug;
         _sceneRefsPath = sceneRefsPath; _sceneOverridesPath = sceneOverridesPath;
         RefreshRoiDerivedFlags();
-        _orchestrator = orchestrator; _settings = settings;
+        _orchestrator = orchestrator; _settings = settings; _hyMt2 = hyMt2;
         _glossaryCount = glossary.Entries.Count;
         _glossaryHint = PromptBuilder.BuildGlossaryHint(glossary.Entries);
         _capture.FrameArrived += OnFrame;
@@ -286,7 +294,7 @@ public sealed class TranslationEngine : IDisposable
             _log.Debug($"[probe] FindByProcess({proc}) hwnd={hwnd}");
             // 看门狗：窗口丢失重连/最小化恢复(5-3)，以及"等待游戏窗口"模式——F9 时游戏没开不再算失败，
             // 挂 2s 轮询，窗口一出现自动开始捕获翻译（也承载 General.AutoTranslateOnLaunch 的启动自动开）。
-            _windowLost = false; _wasIconic = false;
+            _windowLost = false; _wasIconic = false; _running = true; // 引擎进入运行态（含等待首连：窗口出现自动续译也属运行中）
             _firstFrameLogged = false; _lastFrameCount = _capture.FrameCount;
             _zeroFrameTicks = 0; _noFrameNotified = false;
             _lastProcessed = _processed; _stallTicks = 0; _stallNotified = false;
@@ -410,15 +418,21 @@ public sealed class TranslationEngine : IDisposable
             : $"ROI[{_activeScene.Label()}]:\n" +
               string.Join("\n", roiNames.Select(n => $"  {n}  累计翻译={_cumTranslated.GetValueOrDefault(n)}行")) + "\n";
         var recent = _orchestrator.RecentProviders;
+        // 翻译引擎：当前池首 provider（内部/外部单选，池里就它一个）。HY-MT2 附带加载状态（未加载/加载中/可用/不可用）。
+        var engine = _orchestrator.Providers.FirstOrDefault();
+        string engineLine = engine is null
+            ? "翻译引擎: (无)\n"
+            : $"翻译引擎: {engine.Name}{(engine.Name == TranslationProviderEntry.HyMt2 ? $"（{_hyMt2.DescribeLoadState()}）" : "")}\n";
         return
             $"场景: {SceneDisplay(_activeScene, _activeRace)}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
             $"轮询: 检测{detectMs}ms 翻译{translateMs}ms 捕获{PollInterval.CaptureFloor(ocr)}ms\n" +
             roiSection +
-            $"翻译: {_lastLineCount}行 {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
+            engineLine +
+            $"翻译: {_lastEngineHits}行(共{_lastLineCount}行) {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
             (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
             $"引擎(最近3次): {(recent.Count == 0 ? "(无)" : string.Join("  ", recent))}\n" +
-            $"命中缓存: {_orchestrator.CacheCount}  命中术语表: {_glossaryCount}";
+            $"命中缓存: {_lastCacheHits}  命中术语表: {_lastGlossaryHits}";
     }
 
     /// <summary>帧流健康检查（每看门狗周期调用）：
@@ -471,6 +485,7 @@ public sealed class TranslationEngine : IDisposable
 
     public void Stop()
     {
+        _running = false; // 先置运行态 false：在途的 ProcessFrame 翻译续延醒来后读到这里，丢弃结果不上屏（防"关翻译字还在"竞态）
         _watchdog?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
         _capture.Stop();
         ResetAllChangeDetection(); // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
@@ -583,7 +598,8 @@ public sealed class TranslationEngine : IDisposable
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
             // ── 每 part 独立收集 OCR 结果（下标=该 part 在当前预设列表里的位置）──
-            var rois = new List<(string name, List<string> lines, List<RectangleF> bounds)>();
+            // offsetX/offsetY：该 part 的文字偏移（物理像素，来自 RelRect），只影响译文摆放，不影响 OCR 区域
+            var rois = new List<(string name, List<string> lines, List<RectangleF> bounds, double offsetX, double offsetY)>();
             foreach (var (name, rect) in presetParts(frame.Width, frame.Height))
             {
                 Rectangle px = rect.ToPixels(frame.Width, frame.Height);
@@ -623,7 +639,7 @@ public sealed class TranslationEngine : IDisposable
                 var (stableLines, stableBounds) = _stabilizer.Stabilize(rois.Count, lines, bounds);
                 if (stableLines.Count != lines.Count)
                     _log.Debug($"[{name}][stable] OCR={lines.Count} 稳定={stableLines.Count}");
-                rois.Add((name, stableLines, stableBounds));
+                rois.Add((name, stableLines, stableBounds, rect.OffsetX, rect.OffsetY));
             }
             // 调试面板逐行显示"被选用"的识别区域：本帧实际进 OCR 的有效列表。
             _lastEffectiveRoiNames = rois.Select(r => r.name).ToArray();
@@ -651,15 +667,23 @@ public sealed class TranslationEngine : IDisposable
             }
             if (toTranslate.Count == 0) return; // 所有 ROI 都没变 → 整帧跳过（finally 仍会 Dispose/复位 _busy）
 
+            // ── 变化的 ROI 先隐藏旧译文（露出原始内容，避免旧译占位挡住观看），译完再显示新译文 ──
+            // ShowLines 是全量替换：这里只摆「未变化」ROI 的行，变化 ROI 的旧行立即从悬浮层消失。
+            var changedSet = new System.Collections.Generic.HashSet<int>(toTranslate);
+            var keepItems = new List<OverlayItem>();
+            foreach (var kv in _displayedPerRoi)
+                if (!changedSet.Contains(kv.Key)) keepItems.AddRange(kv.Value);
+            _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(keepItems));
+
             // ── 只翻译变化的 ROI 的行（一批一请求）──
             var koLines = new List<string>();
-            var metas = new List<(RectangleF frameBounds, string roiName, int roiIdx)>();
+            var metas = new List<(RectangleF frameBounds, string roiName, int roiIdx, double offsetX, double offsetY)>();
             foreach (int r in toTranslate)
             {
                 for (int i = 0; i < rois[r].lines.Count; i++)
                 {
                     koLines.Add(rois[r].lines[i]);
-                    metas.Add((rois[r].bounds[i], rois[r].name, r));
+                    metas.Add((rois[r].bounds[i], rois[r].name, r, rois[r].offsetX, rois[r].offsetY));
                 }
             }
 
@@ -669,8 +693,12 @@ public sealed class TranslationEngine : IDisposable
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var outcome = await _orchestrator.TranslateAsync(koLines, ctx, cts.Token);
+            // 翻译等待期间若被 F9 Stop()，_running 已置 false：丢弃本次结果不上屏。
+            // 不拦的话，这里的 ShowLines(allItems) 会排在 Stop() 的清空之后，把刚关掉的译文重新画上。
+            if (!_running) return; // finally 仍会 Dispose(frame) 并复位 _busy
             sw.Stop();
             _lastTranslateMs = sw.ElapsedMilliseconds; _lastAllResolved = outcome.AllResolved; _lastLineCount = koLines.Count;
+            _lastEngineHits = outcome.EngineHits; _lastCacheHits = outcome.CacheHits; _lastGlossaryHits = outcome.GlossaryHits;
 
             // ── 上屏：变化的 ROI 重算 items；未变化的 ROI 沿用上次显示的行；合并后整窗摆放 ──
             var itemsPerRoi = new Dictionary<int, List<OverlayItem>>();
@@ -681,11 +709,12 @@ public sealed class TranslationEngine : IDisposable
                 // **原文照抄的行不上屏**：provider 失败/超时时编排会回落原文，
                 // 把它当译文显示出去，用户看到的就是"识别到韩文却没翻译"，比什么都不显示更误导。
                 if (zh == koLines[k]) continue;
-                var (frameBounds, _, roiIdx) = metas[k];
+                var (frameBounds, _, roiIdx, offsetX, offsetY) = metas[k];
                 var scr = ScreenMapper.MapFrameToScreen(frameBounds, frameSize, winRect);
                 if (!itemsPerRoi.TryGetValue(roiIdx, out var list)) itemsPerRoi[roiIdx] = list = new List<OverlayItem>();
                 // Source=该行韩文原文：供悬浮层"原文+译文双行"模式使用（单行模式忽略）。
-                list.Add(new OverlayItem(zh, scr.X, scr.Y, koLines[k]));
+                // offsetX/offsetY：该 part 的文字偏移（物理像素），叠加到译文摆放位置（0=不偏移）。
+                list.Add(new OverlayItem(zh, scr.X + offsetX, scr.Y + offsetY, koLines[k]));
             }
             // 变化的 ROI：更新其显示行（没翻出任何行的 → 清掉旧显示）
             foreach (var kv in itemsPerRoi) _displayedPerRoi[kv.Key] = kv.Value;

@@ -9,9 +9,12 @@ public static class PromptBuilder
 {
     public const int GlossaryHintMaxChars = 1200;
 
-    public static string BuildSystemPrompt(TranslationContext ctx)
+    /// <param name="hasPlaceholders">行内带 ⟨N⟩ 占位符（只翻韩文保护）时为 true，system prompt 加一句"占位符原样保留"。</param>
+    public static string BuildSystemPrompt(TranslationContext ctx, bool hasPlaceholders = false)
     {
         var sb = new StringBuilder(BatchProtocol.SystemPrompt);
+        if (hasPlaceholders)
+            sb.Append(" 行内的 ⟨N⟩ 是占位符（代表英文/数字/标点），请原样保留，不要翻译或修改。");
         sb.Append(" 当前场景：").Append(SceneText(ctx.Scene)).Append('。');
         if (!string.IsNullOrWhiteSpace(ctx.GlossaryHint))
             sb.Append(" 遇到下列术语请统一采用给定译法：").Append(ctx.GlossaryHint);

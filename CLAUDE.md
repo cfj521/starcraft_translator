@@ -1,7 +1,7 @@
 # CLAUDE.md — 项目说明（给 Claude Code）
 
 ## 这个项目是什么
-《星际争霸：重制版》(SC:R) **实时屏幕翻译软件**：抓游戏窗口画面 → 区域 OCR 韩文 → LLM 翻译（术语表/缓存命中直出，否则调 provider）→ 透明置顶悬浮窗显示中文。主要翻译**联机聊天、战网房间名、地图信息**（韩→中）；**玩家 ID 不翻译**。**翻译提供方 = provider 池**：阿里云**免费机器翻译** ＋ OpenAI 订阅（ChatGPT/Codex OAuth）/ OpenAI API（sk- 密钥）/ 阿里云 DashScope **LLM**，配置页可拖拽排序、每行启用/禁用，从上到下取第一个「启用且可用」的，不可用或额度耗尽跳下一个（默认先免费后 LLM；不再用 Claude/Papago）。
+《星际争霸：重制版》(SC:R) **实时屏幕翻译软件**：抓游戏窗口画面 → 区域 OCR 韩文 → LLM 翻译（术语表/缓存命中直出，否则调 provider）→ 透明置顶悬浮窗显示中文。主要翻译**联机聊天、战网房间名、地图信息**（韩→中）；**玩家 ID 不翻译**。**翻译提供方 = provider 池**：分**两组**——**内部引擎**（本地 Hy-MT2，腾讯翻译模型、纯 C# 进程内 CPU 推理、离线/不限流）与**外部引擎**（阿里云**免费机器翻译** ＋ 自定义模型 / OpenAI 订阅（ChatGPT/Codex OAuth）/ OpenAI API（sk- 密钥）/ 阿里云 DashScope **LLM**）。内部/外部**单选**（二选一），组内可拖拽排序、每行启用/禁用，选中组内从上到下取第一个「启用且可用」的，不可用或额度耗尽跳到组内下一个（不再用 Claude/Papago）。
 
 ## 先读这些文档
 - 需求：`docs/PRD.md`
@@ -10,7 +10,7 @@
 - 开发计划（按 Phase 推进）：`docs/ROADMAP.md`
 - 韩文术语表：`docs/GLOSSARY.md`
 
-**当前进度**：Phase 0–6 代码完成（main，版本 0.1.1）。管线：捕获(WGC→SKBitmap) → **场景识别（图像指纹，非 OCR）** → 区域（内置布局预设，唯一来源）→ 变化检测 ＋ 内容闸门（含谚文才翻）→ PaddleOCR → 单级翻译（术语表/缓存直出，未命中一批一请求）→ 悬浮上屏（每条带 80% 黑底）。场景统一命名 browsing/room/ingame + other 四态；参考 `scene-refs.json`（含 sha256 覆盖几何+数据）由 `tools/SceneRefGen` 生成，实测同场景 100%、跨场景最高 25.2%、阈值 90%。校准窗可现场采集场景指纹（`SceneRefCapture`：把出厂 1080p 基准区域按当前分辨率等比缩放、从当前帧算块均值指纹、写入 `scene-overrides.json` 覆盖层，写后探测即时重读、免重启）。布局预设 `layout-presets.json`（聊天框 + 房间名列表区域 + 房间名称/地图名称，按宽高比量得，识别区域唯一来源，直接读写出厂文件、仅 DEBUG 模式可用），`tools/LayoutCheck` 可核验落位。两个正交节拍：`SceneDetectPollMs`=200 / `TranslatePollMs`=500（捕获闸门取较快值）。其余：配置窗六页、托盘、5 个热键、看门狗（窗口丢失重连/最小化清屏/分辨率提示/零帧与卡死诊断）、开机自启、启动自动翻译、DEBUG 面板（F8）+ 诊断复制（Ctrl+F6）、单实例守护、分级日志 `logs/app.log`、单文件打包。已移除：两级翻译、OCR 关键词场景判定、假设置（预处理/灵敏度/ChatPollMs）、单活跃引擎（`TranslationEngine`/`Active` 改 provider 池）。Core 单测 235/235 绿。**剩余：实机 e2e 验收（真实 SC:R，需用户）**——按 `docs/E2E_CHECKLIST.md` 逐项勾，尤其 §4 场景识别与 §5 布局预设/校准。发布产物在 `publish/`（已 gitignore）。
+**当前进度**：Phase 0–6 代码完成（main，版本 0.2.0）。管线：捕获(WGC→SKBitmap) → **场景识别（图像指纹，非 OCR）** → 区域（内置布局预设，唯一来源）→ 变化检测 ＋ 内容闸门（含谚文才翻）→ PaddleOCR → 单级翻译（术语表/缓存直出，未命中一批一请求）→ 悬浮上屏（每条带 80% 黑底）。场景统一命名 browsing/room/ingame + other 四态；参考 `scene-refs.json`（含 sha256 覆盖几何+数据）由 `tools/SceneRefGen` 生成，实测同场景 100%、跨场景最高 25.2%、阈值 90%。校准窗可现场采集场景指纹（`SceneRefCapture`：把出厂 1080p 基准区域按当前分辨率等比缩放、从当前帧算块均值指纹、写入 `scene-overrides.json` 覆盖层，写后探测即时重读、免重启）。布局预设 `layout-presets.json`（聊天框 + 房间名列表区域 + 房间名称/地图名称，按宽高比量得，识别区域唯一来源，直接读写出厂文件、仅 DEBUG 模式可用），`tools/LayoutCheck` 可核验落位。两个正交节拍：`SceneDetectPollMs`=200 / `TranslatePollMs`=500（捕获闸门取较快值）。其余：配置窗六页、托盘、5 个热键、看门狗（窗口丢失重连/最小化清屏/分辨率提示/零帧与卡死诊断）、开机自启、启动自动翻译、DEBUG 面板（F8）+ 诊断复制（Ctrl+F6）、单实例守护、分级日志 `logs/app.log`、单文件打包。已移除：两级翻译、OCR 关键词场景判定、假设置（预处理/灵敏度/ChatPollMs）、单活跃引擎（`TranslationEngine`/`Active` 改 provider 池）。Core 单测 235/235 绿。**剩余：实机 e2e 验收（真实 SC:R，需用户）**——按 `docs/E2E_CHECKLIST.md` 逐项勾，尤其 §4 场景识别与 §5 布局预设/校准。发布产物在 `publish/`（已 gitignore）。
 
 ## 技术栈与环境
 - **.NET 10 (LTS) + WPF**，目标框架 `net10.0-windows10.0.19041.0`，`UseWPF=true`。
@@ -22,7 +22,7 @@
 1. SC:R 须以**窗口化/无边框**运行，独占全屏会盖住悬浮窗——代码与文档都要体现这一前提。
 2. 悬浮窗必须**点击穿透**（`WS_EX_TRANSPARENT|WS_EX_LAYERED`），不能抢游戏焦点。
 3. **房间名列表是单一识别区域、整块翻译**：列式翻译（按列拆房间名/地图/ID，各有独立开关）已随用户 ROI 层移除，四个内容范围开关 `TranslateChat`/`TranslateRoomName`/`TranslateMapInfo`/`TranslatePlayerId` 随之删除，不再有逐列开关——整块送翻译。
-4. 翻译提供方是 **provider 池**（阿里云免费机器翻译 + OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM），配置页可拖拽排序、每行启用/禁用，从上到下取第一个「启用且可用」的，不可用或额度耗尽自动跳下一个（默认先免费后 LLM）；命中术语表/缓存直出，省费用。**翻译为单级：一批未命中只发一次请求**（曾实现过"两级=快引擎临时态→主力定稿原地替换"，因任务很窄、低价模型单发已够好而移除；勿再引入）。
+4. 翻译提供方是 **provider 池**，分两组：**内部引擎**（本地 Hy-MT2，进程内 CPU 推理、离线/不限流）与**外部引擎**（阿里云免费机器翻译 + 自定义模型 / OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM）。内部/外部**单选**（二选一），组内可拖拽排序、每行启用/禁用，选中组内从上到下取第一个「启用且可用」的，不可用或额度耗尽自动跳到组内下一个；命中术语表/缓存直出，省费用。**翻译为单级：一批未命中只发一次请求**（曾实现过"两级=快引擎临时态→主力定稿原地替换"，因任务很窄、低价模型单发已够好而移除；勿再引入）。
 5. API Key / OAuth token 本地 **DPAPI 加密**存储（`SecretStore`），除翻译/OAuth 请求外不上传数据。
 6. **纯读屏**——不注入游戏进程、不改游戏文件、不读游戏内存（降低封号风险）。
 7. **场景名一律 `browsing` / `room` / `ingame`**（枚举 `GameScene`、`layout-presets.json` 键、提示词、文档同一套）；`other`=游戏前台但不属三场景，此态**不翻译**。老校准文件的 `custom_games_listing`/`waiting_room`/`in_game` 由 `GameSceneIds.Normalize` 兼容。
@@ -40,7 +40,8 @@
 - 用 DI（Microsoft.Extensions.DependencyInjection）组织模块。
 
 ## 翻译 provider（应用翻译用，非 Claude Code 本身）
-- **不再用 Claude/Papago/百度**。四个 provider（一个免费机器翻译 ＋ 三个 LLM），裸 HttpClient 实现（`ScrTranslator.Core.Translation.Providers`）：
+- **不再用 Claude/Papago/百度**。六个 provider（一个本地 CPU LLM ＋ 一个免费机器翻译 ＋ 四个云端 LLM），云端用裸 HttpClient、本地进程内推理（`ScrTranslator.Core.Translation.Providers`）：
+  - **本地 Hy-MT2**（`HyMt2Provider`）：腾讯翻译专用模型，纯 C# 进程内 CPU 推理（库模式，`Sdcb.HyMT2Sharp`），用户自配 GGUF 权重路径（默认 2-bit），离线/不限流/不 429；首次翻译懒加载权重（约数秒、~1GB 内存）。当前 CPU；GPU（Vulkan/Metal）为后续版本。
   - **阿里云机器翻译**（`AliyunMtProvider`）：RPC 签名（AccessKeyId/AccessKeySecret，`AliyunMtSigner`），`mt.aliyuncs.com` `TranslateGeneral`（`Scene=general`，响应读 `Data.Translated`），免费 100 万字符/月。
   - **阿里云 DashScope**：OpenAI 兼容端点 `.../compatible-mode/v1` 的 Chat Completions，API Key 鉴权（默认 `qwen3.8-flash`）。
   - **OpenAI 订阅（ChatGPT/Codex）**：Codex OAuth（PKCE + 本地 1455 回调 + refresh）→ Responses 流式 API `https://chatgpt.com/backend-api/codex`（默认 `gpt-6-luna`）。参考实现见 `D:\sanyan\projects\news-videos-workflow`（勿搬真实密钥）。

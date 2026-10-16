@@ -20,6 +20,7 @@ using ScrTranslator.Core;
 using ScrTranslator.Core.Scene;
 using ScrTranslator.Core.Settings;
 using ScrTranslator.Core.Translation;
+using ScrTranslator.Core.Translation.Providers;
 
 namespace ScrTranslator.App.Config;
 
@@ -41,14 +42,39 @@ public partial class SettingsWindow : Window
     private readonly Action? _onStateChanged;
     /// <summary>预设被本页"编辑/删除"改动后的回调（= probe.ReloadLayoutPresets），让正在跑的探测立即用新区域。</summary>
     private readonly Action? _onRoisChanged;
+    /// <summary>本地 Hy-MT2 provider：保存时按选中组冷加载/卸载（内部→Load，外部→Unload）。启动时的预加载在 App 里做，这里只管保存。</summary>
+    private readonly HyMt2Provider? _hyMt2;
     /// <summary>界面布局预设（直写出厂文件，可重载：保存后必须重读，否则表里还是旧值）。</summary>
     private LayoutPresetStore _layout = new();
     private string _layoutFactoryPath = "";
     /// <summary>250ms 同步区域 tab 可见性：本窗非模态，F8/托盘在本窗口打开期间切 DEBUG 也要反映。</summary>
     private DispatcherTimer? _regionTabTimer;
     private readonly HotkeyService _hotkeyService;
-    /// <summary>provider 池的行（顺序即优先级）。拖动改顺序、勾选改启用；「应用/确定」时回写成 TranslationSettings.Providers。</summary>
-    private readonly System.Collections.ObjectModel.ObservableCollection<ProviderRow> _providerRows = new();
+    /// <summary>本地 provider 池的行（顺序即组内优先级）。离线 CPU 推理（现为 Hy-MT2）。组顺序固定：本地在前、外部在后。</summary>
+    private readonly System.Collections.ObjectModel.ObservableCollection<ProviderRow> _localRows = new();
+    /// <summary>外部 provider 池的行（顺序即组内优先级）。云端 API（阿里云/自定义模型/ChatGPT/DashScope/OpenAI API）。</summary>
+    private readonly System.Collections.ObjectModel.ObservableCollection<ProviderRow> _externalRows = new();
+    /// <summary>全部行（本地在前、外部在后，即池取用顺序）。供日志与「确定」回写。</summary>
+    private IEnumerable<ProviderRow> AllRows => _localRows.Concat(_externalRows);
+    /// <summary>按 id 找行（先本地后外部）。ChatGPT 登录等只关心某一行时用。</summary>
+    private ProviderRow? FindRow(string id) =>
+        _localRows.FirstOrDefault(r => r.Id == id) ?? _externalRows.FirstOrDefault(r => r.Id == id);
+    /// <summary>ListView → 对应行集合（既非本地也非外部列表返回 null）。共享拖拽 handler 据此判列表。</summary>
+    private System.Collections.ObjectModel.ObservableCollection<ProviderRow>? RowsForListView(object? sender) =>
+        sender == LocalProviderListView ? _localRows : sender == ExternalProviderListView ? _externalRows : null;
+
+    /// <summary>内部/外部分组单选切换（RadioButton Checked 事件）。只启用选中组的列表，另一组禁用（置灰、不可拖拽/勾选）。</summary>
+    private void OnGroupSelectionChanged(object sender, RoutedEventArgs e) => ApplyGroupSelection();
+
+    /// <summary>按当前单选态启用/禁用两组列表：选内部→启用内部列表、禁用外部；选外部反之。加载/恢复默认/点选都会调。
+    /// 空值守卫：radio 带初始 IsChecked 时，创建瞬间就触发 Checked 事件，此刻列表控件可能还没建出来（null），直接返回。</summary>
+    private void ApplyGroupSelection()
+    {
+        if (InternalGroupRadio is null || LocalProviderListView is null || ExternalProviderListView is null) return;
+        bool internalActive = InternalGroupRadio.IsChecked == true;
+        LocalProviderListView.IsEnabled = internalActive;
+        ExternalProviderListView.IsEnabled = !internalActive;
+    }
 
     /// <summary>区域表的一行：预设识别区域的一块（预设是唯一来源）。Name 存块名（chat/roomNameList/gameName/mapName）。</summary>
     private sealed record RoiRow(string SceneId, string Scene, string Resolution, string Name, string Rect);
@@ -105,9 +131,14 @@ public partial class SettingsWindow : Window
         HotkeyService hotkeyService,
         Func<string>? sceneIdProvider = null,
         Action? onRoisChanged = null,
-        LayoutPresetStore? layout = null)
+        LayoutPresetStore? layout = null,
+        HyMt2Provider? hyMt2 = null)
     {
         InitializeComponent();
+        // 字体列表 item 用对应字体渲染，方便用户预览效果（Kostar 走输出目录文件字体，其余为系统字体）
+        FontKostar.FontFamily = BuildFileFontFamily("Kostar.ttf", "Kostar");
+        FontYaHei.FontFamily = new FontFamily("Microsoft YaHei");
+        FontArial.FontFamily = new FontFamily("Arial");
         _sceneIdProvider = sceneIdProvider ?? new Func<string>(() => ScrTranslator.Core.Scene.GameSceneIds.Browsing);
         _holder = holder;
         _settingsPath = settingsPath;
@@ -115,6 +146,7 @@ public partial class SettingsWindow : Window
         _oauth = oauth;
         _log = log;
         _openCalibration = openCalibration;
+        _hyMt2 = hyMt2;
         _log.Log("[settings] 配置窗口打开");
         _onStateChanged = onStateChanged;
         _onRoisChanged = onRoisChanged;
@@ -138,6 +170,19 @@ public partial class SettingsWindow : Window
         _regionTabTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _regionTabTimer.Tick += (_, _) => ApplyRegionTabVisibility(_holder.Current.General.DebugMode); // F8/托盘切 DEBUG 实时反映
         _regionTabTimer.Start();
+    }
+
+    /// <summary>按输出目录里的字体文件构造 FontFamily（Kostar 等内嵌游戏字体随构建拷到 exe 同级）。
+    /// 用文件 URI + #族名 加载（族名须与 ttf 内嵌 nameID 1 一致）；文件缺失/失败回落微软雅黑。</summary>
+    private static FontFamily BuildFileFontFamily(string file, string family)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, file);
+        if (File.Exists(path))
+        {
+            try { return new FontFamily(new Uri(path, UriKind.Absolute).AbsoluteUri + "#" + family); }
+            catch { /* 落到下方兜底 */ }
+        }
+        return new FontFamily("Microsoft YaHei");
     }
 
     // 若用户在"录制中"（已点修改、尚未按键/Esc）关闭本窗口，PreviewKeyDown 订阅本会一直挂着；
@@ -266,13 +311,21 @@ public partial class SettingsWindow : Window
     /// <summary>按 settings 里存的池顺序/启用态重建列表行，并刷新每行状态。</summary>
     private void LoadProviderPool(TranslationSettings t)
     {
-        _providerRows.Clear();
+        _localRows.Clear();
+        _externalRows.Clear();
         foreach (var entry in t.Providers)
         {
-            var (name, kind) = ProviderMeta(entry.Id);
+            var (name, kind, isLocal) = ProviderMeta(entry.Id);
+            if (entry.Id == TranslationProviderEntry.HyMt2)
+                kind = t.HyMt2Backend == "gpu" ? "GPU" : "CPU"; // 徽章按配置里实际选的后端显示（随 CPU/GPU 选择变化），不写死
             var row = new ProviderRow { Id = entry.Id, Enabled = entry.Enabled, Name = name, Kind = kind };
             switch (entry.Id)
             {
+                case TranslationProviderEntry.HyMt2:
+                    // GGUF 权重路径在配置窗里（不进列表行），故 ShowModel=false，点「配置」开窗
+                    row.ShowModel = false;
+                    row.ConfigButtonText = "配置"; // 本地 Hy-MT2：GGUF 权重路径
+                    break;
                 case TranslationProviderEntry.ChatGpt:
                     row.ShowModel = true;
                     row.Model = t.ChatGptModel;
@@ -297,23 +350,29 @@ public partial class SettingsWindow : Window
                     row.ConfigButtonText = "配置KEY"; // AccessKeyId + AccessKeySecret
                     break;
             }
-            _providerRows.Add(row);
+            (isLocal ? _localRows : _externalRows).Add(row);
         }
-        ProviderListView.ItemsSource = _providerRows;
+        LocalProviderListView.ItemsSource = _localRows;
+        ExternalProviderListView.ItemsSource = _externalRows;
+        // 内部/外部分组单选：从设置恢复单选态（默认内部＝本地引擎）。只有一组参与翻译。
+        InternalGroupRadio.IsChecked = t.SelectedGroup == TranslationGroup.Internal;
+        ExternalGroupRadio.IsChecked = t.SelectedGroup == TranslationGroup.External;
+        ApplyGroupSelection(); // 未选中组的列表禁用（置灰、不可交互）
         // 诊断级：池顺序+启用态是"翻译取哪个 provider"的直接依据，只在 DEBUG 模式记（加载/重绑/恢复默认都会触发，业务级会刷屏）
-        _log.Debug($"[settings] 加载 provider 池：{string.Join(" → ", _providerRows.Select(r => $"{r.Name}({(r.Enabled ? "启用" : "停用")})"))}");
+        _log.Debug($"[settings] 加载 provider 池（选中组＝{(t.SelectedGroup == TranslationGroup.Internal ? "内部" : "外部")}）：{string.Join(" → ", AllRows.Select(r => $"{r.Name}({(r.Enabled ? "启用" : "停用")})"))}");
         RefreshProviderStatuses();
     }
 
-    /// <summary>provider id → 展示名 + 类别（免费机器翻译 / LLM）。OpenAI/阿里云 LLM 行不带括号副标题。</summary>
-    private static (string Name, string Kind) ProviderMeta(string id) => id switch
+    /// <summary>provider id → 展示名 + 类别（免费机器翻译 / LLM）+ 是否本地（本地组：离线 CPU 推理；外部组：云端 API）。OpenAI/阿里云 LLM 行不带括号副标题。</summary>
+    private static (string Name, string Kind, bool IsLocal) ProviderMeta(string id) => id switch
     {
-        TranslationProviderEntry.Aliyun => ("阿里云机器翻译", "免费"),
-        TranslationProviderEntry.CustomModel => ("自定义模型", "LLM"),
-        TranslationProviderEntry.ChatGpt => ("OpenAI LLM（订阅）", "LLM"),
-        TranslationProviderEntry.DashScope => ("阿里云 LLM", "LLM"),
-        TranslationProviderEntry.OpenAiApi => ("OpenAI LLM（API）", "LLM"),
-        _ => (id, "未知"),
+        TranslationProviderEntry.HyMt2 => ("本地 Hy-MT2", "CPU/GPU", true),
+        TranslationProviderEntry.Aliyun => ("阿里云机器翻译", "API", false),
+        TranslationProviderEntry.CustomModel => ("自定义模型", "API", false),
+        TranslationProviderEntry.ChatGpt => ("ChatGPT LLM", "订阅", false),
+        TranslationProviderEntry.DashScope => ("阿里云 LLM", "API", false),
+        TranslationProviderEntry.OpenAiApi => ("OpenAI LLM（API）", "API", false),
+        _ => (id, "未知", false),
     };
 
     /// <summary>从密钥/OAuth 实时算出每行状态（已配置/未配置/未登录）。只反映「凭据是否填了」，**不代表密钥有效**——
@@ -322,10 +381,14 @@ public partial class SettingsWindow : Window
     {
         var sec = _secretStore.Load();
         var (loggedIn, email, plan) = _oauth.Status();
-        foreach (var row in _providerRows)
+        foreach (var row in AllRows)
         {
             row.Status = row.Id switch
             {
+                // 本地 Hy-MT2：路径非空且文件存在＝已配置（不联网、不加载权重，懒加载在首次翻译）
+                TranslationProviderEntry.HyMt2 =>
+                    !string.IsNullOrWhiteSpace(_holder.Current.Translation.HyMt2ModelPath)
+                    && File.Exists(_holder.Current.Translation.HyMt2ModelPath) ? "已配置" : "未配置",
                 TranslationProviderEntry.Aliyun => sec.Aliyun.IsSet ? "已配置" : "未配置",
                 TranslationProviderEntry.ChatGpt => loggedIn ? "已登录" : "未登录",
                 TranslationProviderEntry.DashScope => string.IsNullOrWhiteSpace(sec.DashScopeApiKey) ? "未配置" : "已配置",
@@ -604,6 +667,9 @@ public partial class SettingsWindow : Window
         _log.Log($"[settings] 点「配置」按钮 provider={id}");
         switch (id)
         {
+            case TranslationProviderEntry.HyMt2:
+                LogKeyDialogResult("本地 Hy-MT2", new HyMt2Window(_holder, _settingsPath, _hyMt2!) { Owner = this }.ShowDialog());
+                break;
             case TranslationProviderEntry.Aliyun:
                 LogKeyDialogResult("阿里云", new AliyunKeyWindow(_secretStore) { Owner = this }.ShowDialog());
                 break;
@@ -636,7 +702,7 @@ public partial class SettingsWindow : Window
     /// 端口占用/网络等＝Failed（弹框报失败）。</summary>
     private async Task<bool> LoginChatGptAsync()
     {
-        var chatgptRow = _providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.ChatGpt);
+        var chatgptRow = FindRow(TranslationProviderEntry.ChatGpt);
         if (chatgptRow is not null) chatgptRow.Status = "登录中…（浏览器完成授权）";
         try
         {
@@ -674,31 +740,36 @@ public partial class SettingsWindow : Window
     // ── provider 池：拖动排序 ────────────────────────────────────────────
 
     /// <summary>拖拽源＝光标下的行。用隧道事件 PreviewMouseLeftButtonDown 启动：冒泡事件会被
-    /// ListViewItem 的选中逻辑抢先标记 Handled，导致列表级 handler 不跑、DoDragDrop 没启动。</summary>
+    /// ListViewItem 的选中逻辑抢先标记 Handled，导致列表级 handler 不跑、DoDragDrop 没启动。
+    /// 本地/外部两个列表共用本 handler，按 sender 判列表、只在本列表内换位（组顺序固定：本地在前）。</summary>
     private void OnProviderListMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        var rows = RowsForListView(sender);
+        if (rows is null) return;
         var src = e.OriginalSource as DependencyObject;
         // 点在行内按钮/勾选框/模型输入框上时不启动拖动：DoDragDrop 的模态循环会吞掉它们的 Click/Toggle/Focus，对应功能就用不了
         if (FindAncestor<Button>(src) is not null || FindAncestor<CheckBox>(src) is not null || FindAncestor<TextBox>(src) is not null) return;
         // 直接抓光标下的行作为拖拽源：不必先选中再拖
         if (FindAncestor<ListViewItem>(src)?.DataContext is not ProviderRow row) return;
-        ProviderListView.SelectedItem = row;
-        DragDrop.DoDragDrop(ProviderListView, row, DragDropEffects.Move);
+        var list = (ListView)sender; // 已通过 RowsForListView 校验（必为本地/外部列表之一）
+        list.SelectedItem = row;
+        DragDrop.DoDragDrop(list, row, DragDropEffects.Move);
     }
 
     private void OnProviderListDragOver(object sender, DragEventArgs e)
     {
         e.Effects = DragDropEffects.Move;
-        if (e.Data.GetData(typeof(ProviderRow)) is not ProviderRow source)
+        var rows = RowsForListView(sender);
+        if (rows is null || e.Data.GetData(typeof(ProviderRow)) is not ProviderRow source)
         { e.Effects = DragDropEffects.None; return; }
         var item = FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject);
         if (item?.DataContext is not ProviderRow target) { e.Effects = DragDropEffects.None; return; }
         if (ReferenceEquals(target, source)) { e.Effects = DragDropEffects.None; return; }
-        int from = _providerRows.IndexOf(source);
-        int to = _providerRows.IndexOf(target);
+        int from = rows.IndexOf(source);
+        int to = rows.IndexOf(target);
         if (from >= 0 && to >= 0 && from != to)
-            _providerRows.Move(from, to); // 即时移动，拖动过程中列表实时换位
+            rows.Move(from, to); // 即时移动，拖动过程中列表实时换位（仅本列表内）
         e.Handled = true;
     }
 
@@ -706,7 +777,7 @@ public partial class SettingsWindow : Window
     {
         e.Handled = true;
         // 诊断级：拖拽排序改变 provider 优先级，只在 DEBUG 模式记（拖拽过程会高频触发 DragOver，业务级会刷屏）
-        _log.Debug($"[settings] provider 顺序已调整：{string.Join(" → ", _providerRows.Select(r => r.Name))}");
+        _log.Debug($"[settings] provider 顺序已调整：{string.Join(" → ", AllRows.Select(r => r.Name))}");
     }
 
     /// <summary>从光标下的最深元素沿视觉树往上找最近的 ListViewItem。</summary>
@@ -982,10 +1053,12 @@ public partial class SettingsWindow : Window
                 break;
             case "翻译":
                 LoadProviderPool(d.Translation); // 含 LLM 行的模型名重置
-                // 自定义模型的 URL/模型 ID 无列表行控件（在配置窗/Holder 里），直接写回 Holder 默认值（空＝未配置）；
+                // 自定义模型的 URL/模型 ID、本地 Hy-MT2 的权重路径均无列表行控件（在配置窗/Holder 里），
+                // 直接写回 Holder 默认值（URL/ID 空＝未配置；路径为出厂默认权重位置）。
                 // KEY 不清（与其它 provider 恢复默认一致——只重置模型/顺序，不动密钥）。
                 _holder.Current = _holder.Current with { Translation = _holder.Current.Translation with
-                    { CustomModelUrl = d.Translation.CustomModelUrl, CustomModelId = d.Translation.CustomModelId } };
+                    { CustomModelUrl = d.Translation.CustomModelUrl, CustomModelId = d.Translation.CustomModelId,
+                      HyMt2ModelPath = d.Translation.HyMt2ModelPath } };
                 TimeoutSecondsBox.Text = d.Translation.TimeoutSeconds.ToString();
                 break;
             case "识别":
@@ -1028,6 +1101,21 @@ public partial class SettingsWindow : Window
             _log.Error($"[settings] 保存 settings.json 失败: {ex.Message}");
             MessageBox.Show(this, $"保存设置失败：{ex.Message}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+        // 本地 Hy-MT2 延迟加载/卸载：只在「确定保存」时执行（radio 切换 ApplyGroupSelection 不动模型）。
+        // 选中内部组→后台冷加载权重；选中外部组→卸载释放 ~1GB 内存。
+        if (_hyMt2 is not null)
+        {
+            if (settings.Translation.SelectedGroup == TranslationGroup.Internal)
+            {
+                _hyMt2.Load();
+                _log.Log("[settings] 已选中内部组，Hy-MT2 后台冷加载中");
+            }
+            else
+            {
+                _hyMt2.Unload();
+                _log.Log("[settings] 已选中外部组，Hy-MT2 已卸载");
+            }
+        }
         // 开机自启接线 HKCU Run 键（5-4）：失败不影响其他设置，单独提示。
         if (!Services.AutoStartService.Apply(settings.General.AutoStart, Environment.ProcessPath, out var autoStartErr))
         {
@@ -1051,17 +1139,20 @@ public partial class SettingsWindow : Window
         };
 
         // 模型名从对应行读取（ChatGPT/DashScope/OpenAI API 行的 Model 字段；行缺失时用当前值兜底）
-        string chatGptModel = OrDefault(_providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.ChatGpt)?.Model, original.Translation.ChatGptModel);
-        string dashScopeModel = OrDefault(_providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.DashScope)?.Model, original.Translation.DashScopeModel);
-        string openAiApiModel = OrDefault(_providerRows.FirstOrDefault(r => r.Id == TranslationProviderEntry.OpenAiApi)?.Model, original.Translation.OpenAiApiModel);
+        string chatGptModel = OrDefault(FindRow(TranslationProviderEntry.ChatGpt)?.Model, original.Translation.ChatGptModel);
+        string dashScopeModel = OrDefault(FindRow(TranslationProviderEntry.DashScope)?.Model, original.Translation.DashScopeModel);
+        string openAiApiModel = OrDefault(FindRow(TranslationProviderEntry.OpenAiApi)?.Model, original.Translation.OpenAiApiModel);
         var translation = original.Translation with
         {
-            // 池的顺序 + 每行启用态直接回写。拖动排序、勾选/取消都落在这里。
-            Providers = _providerRows.Select(r => new TranslationProviderEntry(r.Id, r.Enabled)).ToList(),
+            // 池的顺序 + 每行启用态直接回写。拖动排序（组内）、勾选/取消都落在这里。
+            // 组顺序固定：内部行在前、外部行在后（AllRows = 内部 Concat 外部）。
+            Providers = AllRows.Select(r => new TranslationProviderEntry(r.Id, r.Enabled)).ToList(),
+            // 内部/外部分组单选：从单选按钮读取（默认内部）。
+            SelectedGroup = InternalGroupRadio.IsChecked == true ? TranslationGroup.Internal : TranslationGroup.External,
             DashScopeModel = dashScopeModel,
             ChatGptModel = chatGptModel,
             OpenAiApiModel = openAiApiModel,
-            // 自定义模型的 URL/模型 ID 由配置窗即时写回 Holder 并落盘，此处不覆盖（with 保留 original 的值）。
+            // 自定义模型的 URL/模型 ID、本地 Hy-MT2 的权重路径由配置窗即时写回 Holder 并落盘，此处不覆盖（with 保留 original 的值）。
             TimeoutSeconds = ParseIntOr(TimeoutSecondsBox.Text, original.Translation.TimeoutSeconds),
         };
 

@@ -2,8 +2,9 @@ using System.Drawing;
 
 namespace ScrTranslator.Core;
 
-/// <summary>相对内容区的矩形（0~1 比例）。跨分辨率通用：运行时乘以当前帧宽高即得物理像素。</summary>
-public record RelRect(double X, double Y, double W, double H)
+/// <summary>相对内容区的矩形（0~1 比例）。跨分辨率通用：运行时乘以当前帧宽高即得物理像素。
+/// OffsetX/OffsetY 是**物理像素**单位的文字偏移（0=不偏移），只作用于悬浮层译文摆放，不影响 OCR 区域。</summary>
+public record RelRect(double X, double Y, double W, double H, double OffsetX = 0, double OffsetY = 0)
 {
     /// <summary>
     /// 校准窗画布框（DIP）→ 游戏画面相对矩形（0~1）。这是原 BoxToRoi 的纯数学部分，抽到 Core 便于测。

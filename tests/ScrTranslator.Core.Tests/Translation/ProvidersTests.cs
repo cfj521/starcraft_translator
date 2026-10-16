@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using System.Text.Json;
 using ScrTranslator.Core.Translation;
@@ -172,6 +173,88 @@ public class ProvidersTests
     {
         var stub = new StubHttpMessageHandler("{}");
         var p = new CustomModelProvider(new HttpClient(stub), () => "m", () => "https://x/v1", () => "sk");
+        var r = await p.TranslateAsync(Array.Empty<string>(), Ctx, CancellationToken.None);
+        Assert.Empty(r);
+    }
+
+    [Fact]
+    public void HyMt2_NameAndKind()
+    {
+        var p = new HyMt2Provider(() => @"D:\models\Tencent\Hy-MT2\Hy-MT2-1.8B-2Bit.gguf", () => "cpu");
+        Assert.Equal("hy_mt2", p.Name);
+        Assert.Equal(EngineKind.LLM, p.Kind);
+    }
+
+    [Fact]
+    public void KoreanOnlyProtector_ProtectsNonKorean_AndRestores()
+    {
+        // 非韩文串（英文/数字/标点）换占位符；空格/韩文原样。回填还原；占位符丢失 → null。
+        var (protectedLines, tokens) = KoreanOnlyProtector.Protect(new[] { "안녕? A1, 안녕!", "순수한 한글" });
+        // ? 紧挨 안녕（无空格）→ 안녕⟨0⟩；A1, 连写 → ⟨1⟩；! 紧挨 안녕 → 안녕⟨2⟩
+        Assert.Equal("안녕⟨0⟩ ⟨1⟩ 안녕⟨2⟩", protectedLines[0]);
+        Assert.Equal(new[] { "?", "A1,", "!" }, tokens[0]);
+        Assert.Equal("순수한 한글", protectedLines[1]); // 纯韩文无占位符
+        Assert.Empty(tokens[1]);
+        Assert.Equal("안녕? A1, 안녕!", KoreanOnlyProtector.Restore(protectedLines[0], tokens[0]));
+        Assert.Null(KoreanOnlyProtector.Restore("안녕 ⟨0⟩ 안녕", tokens[0])); // ⟨2⟩ 丢失 → null
+        Assert.True(KoreanOnlyProtector.HasTokens(tokens));
+    }
+
+    [Fact]
+    public void KoreanOnlyProtector_ParseAndRestore_RestoresAndEchoesBack()
+    {
+        var original = new[] { "안녕 A", "안녕 B" };
+        var (protectedLines, tokens) = KoreanOnlyProtector.Protect(original);
+        // 正常：译文保留占位符 → 还原成原文的英文/标点
+        Assert.Equal(new[] { "你好 A", "你好 B" },
+            KoreanOnlyProtector.ParseAndRestore("[1] 你好 ⟨0⟩\n[2] 你好 ⟨0⟩", original, protectedLines, tokens));
+        // 回声（引擎把占位符原文吐回来）→ 回退原文（同一引用，编排器据此判未翻成）
+        var echoed = KoreanOnlyProtector.ParseAndRestore("[1] 안녕 ⟨0⟩\n[2] 안녕 ⟨0⟩", original, protectedLines, tokens);
+        Assert.Same(original[0], echoed![0]);
+        // Parse 失败（行数不符）→ null（整批回退原文）
+        Assert.Null(KoreanOnlyProtector.ParseAndRestore("[1] 你好", original, protectedLines, tokens));
+    }
+
+    [Fact]
+    public void HyMt2_EmptyPath_IsNoCreds()
+    {
+        var p = new HyMt2Provider(() => "", () => "cpu");
+        Assert.Equal(ProviderState.NoCredentials, p.GetStatus().State);
+        Assert.False(p.GetStatus().Usable);
+        Assert.Contains("Hy-MT2", p.GetStatus().Detail);
+    }
+
+    [Fact]
+    public void HyMt2_MissingFile_IsNoCreds()
+    {
+        // 用临时目录里绝不存在的文件名，保证"文件不存在"（避免撞上真实权重路径）。
+        string missing = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".gguf");
+        var p = new HyMt2Provider(() => missing, () => "cpu");
+        Assert.Equal(ProviderState.NoCredentials, p.GetStatus().State);
+        Assert.False(p.GetStatus().Usable);
+    }
+
+    [Fact]
+    public void HyMt2_ExistingFile_IsAvailable()
+    {
+        string f = Path.GetTempFileName(); // 创建临时文件（GetStatus 只查存在性，不加载权重）
+        try
+        {
+            var p = new HyMt2Provider(() => f, () => "cpu");
+            Assert.Equal(ProviderState.Available, p.GetStatus().State);
+            Assert.True(p.GetStatus().Usable);
+        }
+        finally
+        {
+            File.Delete(f);
+        }
+    }
+
+    [Fact]
+    public async Task HyMt2_EmptyLines_ReturnsEmpty_WithoutLoadingModel()
+    {
+        // 空批直接返回空，不触碰模型（懒加载不触发）。路径给个不存在的文件也无妨。
+        var p = new HyMt2Provider(() => Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".gguf"), () => "cpu");
         var r = await p.TranslateAsync(Array.Empty<string>(), Ctx, CancellationToken.None);
         Assert.Empty(r);
     }

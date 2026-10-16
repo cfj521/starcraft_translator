@@ -27,7 +27,7 @@
        为何不用 pack URI 内嵌：实测 WPF 对 .g.resources 里的 .ttf 取得到流却不加载为字体（回落 Arial），
        文件路径方式则正常，故走 Content 拷贝 + 文件 URI。 -->
   <ItemGroup>
-    <Content Include="..\..\resources\Kostar.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\resources\fonts\Kostar.ttf" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -38,7 +38,7 @@
     <UseWPF>true</UseWPF>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>0.1.1</Version>
+    <Version>0.2.0</Version>
     <Company>SC:R Translator</Company>
     <Product>SC:R Translator</Product>
     <Copyright>MIT License</Copyright>

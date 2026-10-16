@@ -4,7 +4,8 @@ namespace ScrTranslator.Core.Translation;
 /// <param name="AllResolved">本批每一行都真翻出来了。false 时未翻成的行在 <see cref="Texts"/> 里仍是原文，
 /// 调用方**必须**按"文本==原文"过滤掉，否则原文会被当译文显示出去。</param>
 /// <param name="Error">provider 失败原因（null=没失败）。池内全部 provider 都不可用/失败时才非空。</param>
-public sealed record TranslateOutcome(IReadOnlyList<string> Texts, bool AllResolved, string? Error);
+public sealed record TranslateOutcome(IReadOnlyList<string> Texts, bool AllResolved, string? Error,
+    int GlossaryHits = 0, int CacheHits = 0, int EngineHits = 0);
 
 /// <summary>
 /// 翻译编排：**术语表 → 缓存 → provider 池回退链**，单级，一批一次请求。
@@ -55,15 +56,16 @@ public sealed class TranslationOrchestrator
         var text = new string[n];
         var missIdx = new List<int>();
         var missText = new List<string>();
+        int glossaryHits = 0, cacheHits = 0;
         for (int i = 0; i < n; i++)
         {
             var ko = koreanLines[i];
-            if (_glossary.TryGet(ko, out var g)) text[i] = g;            // 术语表：本地直出，零请求
-            else if (_cache.TryGet(ko, out var c)) text[i] = c;          // 缓存：同上
-            else { text[i] = ko; missIdx.Add(i); missText.Add(ko); }     // 先占位原文，翻成后覆盖
+            if (_glossary.TryGet(ko, out var g)) { text[i] = g; glossaryHits++; }        // 术语表：本地直出，零请求
+            else if (_cache.TryGet(ko, out var c)) { text[i] = c; cacheHits++; }          // 缓存：同上
+            else { text[i] = ko; missIdx.Add(i); missText.Add(ko); }                      // 先占位原文，翻成后覆盖
         }
 
-        if (missText.Count == 0) return new TranslateOutcome(text, true, null);
+        if (missText.Count == 0) return new TranslateOutcome(text, true, null, glossaryHits, cacheHits, 0);
 
         // 池回退链：从上到下，跳过不可用（无凭据/额度耗尽），翻译失败跳到下一个。
         var providers = _pool();
@@ -90,8 +92,8 @@ public sealed class TranslationOrchestrator
 
         if (zh is null)
         {
-            // 全部 provider 都不可用/失败：整批回落原文。
-            return new TranslateOutcome(text, false, error ?? "没有可用的翻译 provider");
+            // 全部 provider 都不可用/失败：整批回落原文（miss 行已送引擎，engine 命中照计）。
+            return new TranslateOutcome(text, false, error ?? "没有可用的翻译 provider", glossaryHits, cacheHits, missText.Count);
         }
 
         bool allResolved = true;
@@ -102,6 +104,6 @@ public sealed class TranslationOrchestrator
             text[missIdx[j]] = zh[j];
             _cache.Set(missText[j], zh[j]);   // 只缓存真翻出来的
         }
-        return new TranslateOutcome(text, allResolved, error);
+        return new TranslateOutcome(text, allResolved, error, glossaryHits, cacheHits, missText.Count);
     }
 }

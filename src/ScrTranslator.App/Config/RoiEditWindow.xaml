@@ -18,6 +18,8 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="8"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Grid.Column="0" Text="场景" VerticalAlignment="Center"/>
@@ -48,6 +50,18 @@
                 <TextBlock Text="宽 / 高" VerticalAlignment="Center"/>
                 <TextBox Grid.Column="1" x:Name="WBox" Margin="0,0,12,0"/>
                 <TextBox Grid.Column="3" x:Name="HBox"/>
+            </Grid>
+
+            <Grid Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="76"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="12"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="文字偏移" VerticalAlignment="Center"/>
+                <TextBox Grid.Column="1" x:Name="OffsetXBox" Margin="0,0,12,0"/>
+                <TextBox Grid.Column="3" x:Name="OffsetYBox"/>
             </Grid>
         </Grid>
 

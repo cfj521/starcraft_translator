@@ -36,6 +36,9 @@ public partial class RoiEditWindow : Window
         YBox.Text = rect.Y.ToString("F4", CultureInfo.InvariantCulture);
         WBox.Text = rect.W.ToString("F4", CultureInfo.InvariantCulture);
         HBox.Text = rect.H.ToString("F4", CultureInfo.InvariantCulture);
+        // 文字偏移：物理像素（可负数），0=不偏移。与相对矩形不同，不限 0~1。
+        OffsetXBox.Text = rect.OffsetX.ToString("F0", CultureInfo.InvariantCulture);
+        OffsetYBox.Text = rect.OffsetY.ToString("F0", CultureInfo.InvariantCulture);
     }
 
     private void OnOk(object sender, RoutedEventArgs e)
@@ -43,7 +46,14 @@ public partial class RoiEditWindow : Window
         if (!TryRel(XBox, out double x) || !TryRel(YBox, out double y)
             || !TryRel(WBox, out double w) || !TryRel(HBox, out double h))
         {
-            ErrorText.Text = "四个值都得是 0~1 的数字";
+            ErrorText.Text = "矩形四个值都得是 0~1 的数字";
+            return;
+        }
+        // 文字偏移：物理像素整数（可负数），不限 0~1
+        if (!int.TryParse(OffsetXBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int offX)
+            || !int.TryParse(OffsetYBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int offY))
+        {
+            ErrorText.Text = "文字偏移得是整数像素（可负数）";
             return;
         }
         if (w <= 0 || h <= 0) { ErrorText.Text = "宽/高必须大于 0"; return; }
@@ -53,7 +63,7 @@ public partial class RoiEditWindow : Window
             ErrorText.Text = "超出画面（左+宽、顶+高都必须 ≤ 1）";
             return;
         }
-        Result = (_sceneId, _partName, new RelRect(x, y, w, h));
+        Result = (_sceneId, _partName, new RelRect(x, y, w, h, offX, offY));
         DialogResult = true;
         Close();
     }

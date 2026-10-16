@@ -97,19 +97,23 @@ public partial class OverlayWindow : Window
         }
     }
 
-    /// <summary>Kostar 字体随构建拷贝到输出目录（与 exe 同级），族名 Kostar。
-    /// 用纯族名 "Kostar" 选中，实际经文件路径加载——不用 pack URI 内嵌：实测 WPF 对 .g.resources 里的
-    /// .ttf 取得到资源流却不加载为字体（FamilyNames 回落 Arial），文件 URI 方式则正常解析出 Kostar。</summary>
-    private static FontFamily KostarFamily()
+    /// <summary>内置游戏字体随构建拷贝到输出目录（与 exe 同级）。
+    /// 用纯族名选中，实际经文件路径加载——不用 pack URI 内嵌：实测 WPF 对 .g.resources 里的
+    /// .ttf 取得到资源流却不加载为字体（FamilyNames 回落 Arial），文件 URI 方式则正常解析出对应族名。
+    /// file=输出目录里的文件名，family=字体真实族名（须与 <paramref name="file"/> 内嵌的 nameID 1 精确一致）。</summary>
+    private static FontFamily FileFont(string file, string family)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "Kostar.ttf");
+        string path = Path.Combine(AppContext.BaseDirectory, file);
         if (File.Exists(path))
         {
-            try { return new FontFamily(new Uri(path, UriKind.Absolute).AbsoluteUri + "#Kostar"); }
+            try { return new FontFamily(new Uri(path, UriKind.Absolute).AbsoluteUri + "#" + family); }
             catch { /* 落到下方兜底 */ }
         }
         return new FontFamily("Microsoft YaHei");
     }
+
+    /// <summary>Kostar = 原版 SC:R 游戏字体（族名 Kostar）。</summary>
+    private static FontFamily KostarFamily() => FileFont("Kostar.ttf", "Kostar");
 
     /// <summary>字体名解析：内置 Kostar 走输出目录文件 URI；空/非法一律回落微软雅黑
     /// （WPF 对未知 FamilyName 不抛错但渲染回落系统默认，宁可显式兜底）。</summary>

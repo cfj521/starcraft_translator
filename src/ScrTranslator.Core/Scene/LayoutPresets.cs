@@ -157,10 +157,10 @@ public sealed class LayoutPresetStore
                 firstRes = false;
                 sb.Append($"\n      \"{p.Resolution}\": {{");
                 var parts = new List<string>();
-                if (p.Chat is { } c) parts.Add($" \"chat\": [{c.X}, {c.Y}, {c.W}, {c.H}]");
-                if (p.RoomNameList is { } rnl) parts.Add($" \"roomNameList\": [{rnl.X}, {rnl.Y}, {rnl.W}, {rnl.H}]");
-                if (p.GameName is { } gn) parts.Add($" \"gameName\": [{gn.X}, {gn.Y}, {gn.W}, {gn.H}]");
-                if (p.MapName is { } mn) parts.Add($" \"mapName\": [{mn.X}, {mn.Y}, {mn.W}, {mn.H}]");
+                if (p.Chat is { } c) parts.Add($" \"chat\": [{c.X}, {c.Y}, {c.W}, {c.H}, {c.OffsetX}, {c.OffsetY}]");
+                if (p.RoomNameList is { } rnl) parts.Add($" \"roomNameList\": [{rnl.X}, {rnl.Y}, {rnl.W}, {rnl.H}, {rnl.OffsetX}, {rnl.OffsetY}]");
+                if (p.GameName is { } gn) parts.Add($" \"gameName\": [{gn.X}, {gn.Y}, {gn.W}, {gn.H}, {gn.OffsetX}, {gn.OffsetY}]");
+                if (p.MapName is { } mn) parts.Add($" \"mapName\": [{mn.X}, {mn.Y}, {mn.W}, {mn.H}, {mn.OffsetX}, {mn.OffsetY}]");
                 sb.Append(string.Join(",", parts));
                 sb.Append(" }");
             }
@@ -250,7 +250,9 @@ public sealed class LayoutPresetStore
     {
         if (!el.TryGetProperty(name, out var p) || p.ValueKind != JsonValueKind.Array) return null;
         var a = p.EnumerateArray().Select(e => e.GetDouble()).ToArray();
+        // [x, y, w, h]（旧，无偏移）或 [x, y, w, h, offsetX, offsetY]（新，物理像素偏移）
         if (a.Length == 4 && a[2] > 0 && a[3] > 0) return new RelRect(a[0], a[1], a[2], a[3]);
+        if (a.Length == 6 && a[2] > 0 && a[3] > 0) return new RelRect(a[0], a[1], a[2], a[3], a[4], a[5]);
         warnings.Add($"{scene}/{resolution} 的 {name} 矩形非法：[{string.Join(",", a)}]");
         return null;
     }

@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <PackageReference Include="RapidOcrNet" Version="2.0.0" />
+    <!-- 本地 Hy-MT2（腾讯翻译模型）纯 C# 进程内推理，库模式。权重 GGUF 用户自配，不打包在 dll 里。 -->
+    <PackageReference Include="Sdcb.HyMT2Sharp" Version="2.0.0" />
   </ItemGroup>
 
   <ItemGroup>

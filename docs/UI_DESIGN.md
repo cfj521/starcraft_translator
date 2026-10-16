@@ -75,14 +75,17 @@
 ```
 
 ### 3.2 翻译 Translation  ★（含"翻译玩家 ID"）
-> 实现对齐（Phase 2–6）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = **provider 池列表**（5 provider：阿里云免费机器翻译 ＋ 自定义模型(OpenAI 兼容) / OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM），**可拖拽排序、每行启用/禁用**，从上到下取第一个「启用且可用」，不可用或额度耗尽跳下一个（先免费后 LLM）。**单级**。密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
+> 实现对齐（Phase 2–6）：**无"快引擎/LLM 三模式"与 Papago/Claude**。实际 = **provider 池列表**，分**两组**：**内部翻译引擎**（离线 · CPU 推理，现为 Hy-MT2）与**外部翻译引擎**（云端 API：阿里云免费机器翻译 ＋ 自定义模型(OpenAI 兼容) / OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM），共 **6 provider**。内部/外部**单选**（二选一），**组内可拖拽排序、每行启用/禁用**，选中组内从上到下取第一个「启用且可用」，不可用或额度耗尽跳到组内下一个。**单级**。本地引擎权重路径进 `settings.json`（非密钥）；云端密钥/登录走 `SecretStore`(DPAPI) 与 OAuth，不进 `settings.json`。
 
 ```
-Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密钥/登录）
-  [✓] 阿里云机器翻译   [免费]   未配置        [ 配置… ]
-  [✓] OpenAI LLM(ChatGPT 订阅)  [LLM]  未登录    [ 配置… ]
-  [✓] 阿里云 LLM(DashScope)  [LLM]  未配置      [ 配置… ]
-  [✓] OpenAI LLM(API)  [LLM]  未配置      [ 配置… ]
+Provider 池（内部/外部单选；组内拖动调整顺序；勾选=启用；配置…按行填各家密钥/登录）
+  (•) 内部翻译引擎（离线 · CPU 推理）
+      [✓] 本地 Hy-MT2      [LLM]   未配置        [ 配置… ]   ← GGUF 权重路径，离线/不限流
+  ( ) 外部翻译引擎（云端 API）
+      [✓] 阿里云机器翻译   [免费]   未配置        [ 配置… ]
+      [✓] OpenAI LLM(ChatGPT 订阅)  [LLM]  未登录    [ 配置… ]
+      [✓] 阿里云 LLM(DashScope)  [LLM]  未配置      [ 配置… ]
+      [✓] OpenAI LLM(API)  [LLM]  未配置      [ 配置… ]
         [ 恢复默认顺序 ]
   模型            DashScope [ qwen3.8-flash ]   ChatGPT [ gpt-6-luna ]   OpenAI API [ gpt-6-luna ]
 
@@ -99,6 +102,8 @@ Provider 池（拖动调整顺序；勾选=启用；配置…按行填各家密�
   [✓] 启用翻译缓存                 ← 进程内 LRU，容量固定，无 TTL；只存最终态（始终启用）
   ⓘ LLM 节流（429 限流冷却）     已实现、静默——被限流自动冷却并让位池内下一个 provider（详见 日志 页）
 ```
+
+> **本地 Hy-MT2「配置…」窗**（`HyMt2Window`）：填 GGUF 权重文件路径（可「浏览…」选文件）。确定即写回 Holder 并落盘 `settings.json`（路径非密钥，不走 `SecretStore`）。懒加载：改路径不立刻加载权重，首次翻译才加载（约数秒、占 ~1GB 内存）；路径空或文件不存在则不加载、不占内存，`GetStatus` 报「未配置」由编排器跳过。当前为 CPU 推理（无驱动依赖）；GPU 加速（Vulkan/Metal）为后续版本。
 
 ### 3.3 OCR
 > 实现对齐：OCR **仅 PaddleOCR**（RapidOcrNet + 韩文 mobile ONNX 模型随包分发），已取代 Windows 内置 OCR 方案，**无需系统语言包**，识别语言固定韩文。
@@ -255,12 +260,14 @@ class AppSettings {
 }
 
 class TranslationSettings {
-    IReadOnlyList<TranslationProviderEntry> Providers;  // 有序 provider 池（默认 阿里云→自定义模型→OpenAI LLM(订阅)→阿里云 LLM(DashScope)→OpenAI LLM(API)；原 TranslationEngine Active 已移除）
+    IReadOnlyList<TranslationProviderEntry> Providers;  // 有序 provider 池（内部组在前：本地 Hy-MT2；外部组在后：阿里云→自定义模型→OpenAI LLM(订阅)→阿里云 LLM(DashScope)→OpenAI LLM(API)；原 TranslationEngine Active 已移除）
+    TranslationGroup SelectedGroup;  // 内部/外部分组单选（二选一），只有选中组参与翻译；默认内部（本地引擎）
     string DashScopeModel;        // 默认 qwen3.8-flash
     string ChatGptModel;          // 默认 gpt-6-luna
     string OpenAiApiModel;        // 默认 gpt-6-luna
     string CustomModelUrl;        // 自定义模型 Base URL（OpenAI 兼容），默认空＝未配置
     string CustomModelId;         // 自定义模型 ID，默认空＝未配置
+    string HyMt2ModelPath;        // 本地 Hy-MT2 GGUF 权重路径（非密钥，进 settings.json），默认出厂 2-bit 权重
     int TimeoutSeconds;           // 单次翻译超时（整条回退链共享），默认 10，配置页可调
 }
 ```

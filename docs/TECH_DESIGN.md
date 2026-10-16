@@ -10,7 +10,7 @@
 | UI / 悬浮层 | WPF | 透明窗口、矢量渲染、CJK 字体好 |
 | 屏幕捕获 | `Windows.Graphics.Capture` (WinRT) | 抓指定窗口、性能好、官方 API；DXGI Desktop Duplication 备选 |
 | OCR | PaddleOCR / RapidOcrNet (ONNX Runtime) + 韩文 mobile 模型 | 韩文识别准、随包分发、**无需系统语言包**（已取代原 `Windows.Media.Ocr` 方案） |
-| 翻译 provider 池 | 免费机器翻译：**阿里云 MT**（RPC 签名 `TranslateGeneral`）＋ LLM：**自定义模型（用户自配 URL/KEY/模型，OpenAI 兼容 Chat）** / **OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** / **OpenAI API（sk- 密钥）** / **阿里云 DashScope（OpenAI 兼容 Chat）**；池可拖拽排序，回退链先免费后 LLM | 免费额度兜底 + 懂游戏黑话、可加术语表与上下文；自定义模型可指向任意 OpenAI 兼容端点（自建推理/第三方代理）。**不再用 Claude / Papago / 百度**。详见 `docs/superpowers/specs/2026-07-02-phase2-translation-design.md` |
+| 翻译 provider 池 | **本地 Hy-MT2**（腾讯翻译模型，纯 C# 进程内 CPU 推理，库模式，离线/不限流，用户自配 GGUF 权重）＋ 免费机器翻译：**阿里云 MT**（RPC 签名 `TranslateGeneral`）＋ LLM：**自定义模型（用户自配 URL/KEY/模型，OpenAI 兼容 Chat）** / **OpenAI 订阅（ChatGPT/Codex OAuth+Responses）** / **OpenAI API（sk- 密钥）** / **阿里云 DashScope（OpenAI 兼容 Chat）**；池分两组（内部/外部，**单选二选一**），组内可拖拽排序，只有选中组参与翻译（非回退链） | 内部组＝本地引擎（离线、不限流、不 429，默认选中作主翻译）；外部组＝云端引擎（免费额度 ＋ LLM 兜底，懂游戏黑话、可加术语表与上下文）；自定义模型可指向任意 OpenAI 兼容端点（自建推理/第三方代理）。**不再用 Claude / Papago / 百度**。详见 `docs/superpowers/specs/2026-07-02-phase2-translation-design.md` |
 | 配置/序列化 | System.Text.Json | 内置 |
 | 依赖注入 | Microsoft.Extensions.DependencyInjection | 模块解耦 |
 | 日志 | Microsoft.Extensions.Logging + Serilog(可选) | 排障 |
@@ -143,7 +143,7 @@
   1. **内容闸门**：整行不含谚文（地图名、`Top vs Bottom`、表头、ID 等）→ 不翻译，原样输出（提示词要求"纯英文原样保留"）；含谚文才进后续管线。识别区域是预设、整块必翻，无逐列开关。
   2. **术语表**：整句或分词命中 GLOSSARY → 直接映射（无网络）。
   3. **缓存**：`MemoryCache<原文, 译文>` 命中 → 直出。
-  4. **翻译 provider 池**（`ITranslationProvider`：阿里云机器翻译 ＋ OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM）按序回退批量调用 → 上屏中文。**单级**（术语/缓存未命中即走 provider 池回退链，取第一个「启用且可用」）。
+  4. **翻译 provider 池**（`ITranslationProvider`：内部组＝本地 Hy-MT2，外部组＝阿里云机器翻译 ＋ 自定义模型 / OpenAI 订阅 / OpenAI API / 阿里云 DashScope LLM）按内部/外部**单选**过滤、选中组内按序回退批量调用 → 上屏中文。**单级**（术语/缓存未命中即走选中组内的 provider 池回退链，取第一个「启用且可用」）。本地 Hy-MT2 走进程内 CPU 推理（懒加载权重，首次翻译才加载），离线不受限流影响，故默认选中内部组。
   5. **单级（原"两级编排"已移除）**：曾实现"快引擎出临时态（灰斜体）→ 主力引擎定稿原地替换"，但这是很窄的翻译任务（游戏聊天/房间名短句），低价模型单发就够好，两级只让每个未命中批次多打一次请求、并多一套临时态视觉与状态分支 → 整体删除（含 `TwoLevel/FastEngine/FastModel` 三字段、`TranslationStage`、托盘与配置页开关）。现由 `TranslationOrchestrator` 编排：术语表 → 缓存 → **provider 池回退链**，一批一次请求。
 - **LLM Prompt 要点**：系统提示设定"星际争霸韩服游戏聊天翻译"角色；附术语表；要求口语化、简短、保留游戏黑话语气；ID/数字/英文缩写不乱翻。
 - **限流**：主动侧靠变化检测+单飞+缓存（同文不重复请求）；被动侧是 LLM provider 的 429 限流冷却（`RateLimitCooldown`：优先服务端 Retry-After，没有则指数退避 5s→×2→60s 封顶，成功请求归零复位）。冷却期 `GetStatus` 报 `RateLimited`、`RateLimitException` 重抛触发池回退链——编排器跳过它、本批落到池内下一个 provider，全程静默（只进日志，不弹气泡）。
@@ -237,7 +237,7 @@ starcraft_translator/
 │     ├─ RelRect.cs                 # 相对矩形 record + ToPixels 扩展（识别区域唯一数据结构）
 │     ├─ Scene/                     # SceneRefStore、SceneFingerprint、SceneRecognizer、SceneRefCapture、LayoutPresets、Scene
 │     ├─ Ocr/                       # IOcrEngine + PaddleOcrEngine(RapidOcrNet)
-│     ├─ Translation/               # ITranslationProvider、四 provider(腾讯/阿里云 MT + OpenAI/DashScope LLM)、Glossary、Cache、
+│     ├─ Translation/               # ITranslationProvider、六 provider(本地 Hy-MT2 + 阿里云 MT + 自定义/OpenAI 订阅/OpenAI API/DashScope LLM)、Glossary、Cache、
 │     │                             #   TranslationOrchestrator(单级 provider 池回退)、PromptBuilder、BatchProtocol
 │     ├─ Settings/                  # AppSettings、SettingsStore、PollInterval(两节拍)
 │     └─ KoreanText.cs              # 谚文判定：翻译入口的内容闸门

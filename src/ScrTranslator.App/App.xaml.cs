@@ -137,6 +137,14 @@ public partial class App : Application
         builder.Services.AddSingleton<ITranslationProvider>(sp => new AliyunMtProvider(
             sp.GetRequiredService<HttpClient>(),
             () => { var a = sp.GetRequiredService<SecretStore>().Load().Aliyun; return (a.AccessKeyId, a.AccessKeySecret); }));
+        // 本地 Hy-MT2（腾讯翻译模型，纯 C# 进程内推理，库模式）。模型路径取自实时配置（用户可随时改）；
+        // 懒加载：首次翻译才加载 GGUF 权重，禁用/未配置时不加载、不占内存。
+        builder.Services.AddSingleton(sp => new HyMt2Provider(
+            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.HyMt2ModelPath,
+            () => sp.GetRequiredService<SettingsHolder>().Current.Translation.HyMt2Backend,
+            msg => sp.GetRequiredService<FileLogger>().Error(msg),
+            msg => sp.GetRequiredService<FileLogger>().Info(msg)));
+        builder.Services.AddSingleton<ITranslationProvider>(sp => sp.GetRequiredService<HyMt2Provider>());
         builder.Services.AddSingleton(sp =>
         {
             var settings = sp.GetRequiredService<SettingsHolder>();
@@ -144,11 +152,13 @@ public partial class App : Application
             var all = sp.GetServices<ITranslationProvider>().ToList();
             var byId = all.ToDictionary(p => p.Name);
 
-            // provider 池：按 settings.Providers 的顺序返回已启用的 provider。用 Func 每次现取，
-            // 配置页拖拽排序/启用禁用即时生效，不必重建本对象。
+            // provider 池：按 settings.Providers 的顺序返回「选中组」里已启用的 provider。用 Func 每次现取，
+            // 配置页拖拽排序/启用禁用/切换组即时生效，不必重建本对象。
+            // 内部/外部**单选**：只有 SelectedGroup 那组的 provider 参与，另一组完全不参与（不是回退链）。
             IReadOnlyList<ITranslationProvider> Pool() =>
                 settings.Current.Translation.Providers
-                    .Where(p => p.Enabled && byId.ContainsKey(p.Id))
+                    .Where(p => p.Enabled && byId.ContainsKey(p.Id)
+                        && TranslationSettings.GroupOf(p.Id) == settings.Current.Translation.SelectedGroup)
                     .Select(p => byId[p.Id])
                     .ToList();
 
@@ -174,7 +184,8 @@ public partial class App : Application
             sp.GetRequiredService<TranslationOrchestrator>(),
             sp.GetRequiredService<SettingsHolder>(),
             sp.GetRequiredService<Glossary>(),
-            sp.GetRequiredService<DebugWindow>()));
+            sp.GetRequiredService<DebugWindow>(),
+            sp.GetRequiredService<HyMt2Provider>()));
 
         _host = builder.Build();
 
@@ -214,16 +225,18 @@ public partial class App : Application
             // 而且失败发生在网络层、离配置页很远——必须在开翻译这一刻就说破（只进日志，不弹气泡）。
             if (running)
             {
+                var t = _host.Services.GetRequiredService<SettingsHolder>().Current.Translation;
+                // 只体检「选中组」里启用的 provider（内部/外部单选，另一组根本不参与翻译，不该被点名）。
                 var enabled = _host.Services.GetServices<ITranslationProvider>()
-                    .Where(p => _host!.Services.GetRequiredService<SettingsHolder>()
-                        .Current.Translation.Providers.Any(pe => pe.Id == p.Name && pe.Enabled))
+                    .Where(p => t.Providers.Any(pe => pe.Id == p.Name && pe.Enabled
+                        && TranslationSettings.GroupOf(pe.Id) == t.SelectedGroup))
                     .ToList();
                 var usable = enabled.Where(p => p.GetStatus().Usable).ToList();
                 if (usable.Count == 0 && enabled.Count > 0)
                 {
                     string reasons = string.Join("；", enabled.Select(p =>
                         $"{p.Name}（{p.GetStatus().Detail}）"));
-                    log.Warn($"[app] 开翻译但启用的 provider 全都不可用：{reasons}。韩文能识别但翻不成中文，请到 配置→翻译 配密钥/登录或启用其它 provider。");
+                    log.Warn($"[app] 开翻译但选中组里启用的 provider 全都不可用：{reasons}。韩文能识别但翻不成中文，请到 配置→翻译 配密钥/登录或启用其它 provider（或切换到另一组）。");
                 }
             }
 
@@ -332,7 +345,8 @@ public partial class App : Application
                 () => probe.CurrentSceneId,
                 // 区域页保存后重载预设（直写出厂 layout-presets.json）；DI 里的 store 是单例，不重读盘就是旧值。
                 () => probe.ReloadLayoutPresets(),
-                probe.Layout);   // 区域页要展示布局预设行；传 probe 重载后的实例而非 DI 单例（保存后 DI 单例是启动旧值）
+                probe.Layout,   // 区域页要展示布局预设行；传 probe 重载后的实例而非 DI 单例（保存后 DI 单例是启动旧值）
+                _host.Services.GetRequiredService<HyMt2Provider>()); // 保存时按选中组冷加载/卸载本地模型
             settingsWindow.Closed += (_, _) => settingsWindow = null;
             settingsWindow.Show();
             settingsWindow.Activate();
@@ -403,6 +417,15 @@ public partial class App : Application
         {
             log.Log("[startup] AutoTranslateOnLaunch=on，自动开启翻译");
             ToggleProbe();
+        }
+
+        // 本地 Hy-MT2 模型后台预加载：选中内部组时，app 启动完成后立即后台加载权重（延迟加载→预加载），
+        // 让用户开始翻译时模型已就绪、无"首帧翻译加载等待"。启动时只跑这一次；配置页保存时切组的加载/卸载由 SettingsWindow 处理。
+        var hyMt2 = _host.Services.GetRequiredService<HyMt2Provider>();
+        if (settingsHolder.Current.Translation.SelectedGroup == TranslationGroup.Internal)
+        {
+            hyMt2.Load();
+            log.Info("[startup] 选中内部组，Hy-MT2 模型后台加载中");
         }
     }
 

@@ -59,6 +59,82 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern uint GetDpiForSystem();
 
+    // ── 窗口所在显示器物理尺寸（捕获帧池上限用）────────────────────────────────
+    // 帧池最大尺寸必须 ≥ 窗口可能的最大尺寸。全屏窗口=整屏，窗口再大也不超过显示器，
+    // 所以用显示器物理尺寸做上限：任何窗口/全屏尺寸都装得下，WGC 逐帧交真实尺寸，无需重建会话。
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, out MONITORINFO lpmi);
+
+    /// <summary>窗口所在显示器的物理像素尺寸 (宽,高)。取不到（窗口无效/无显示器）时返回 (0,0)。</summary>
+    public static (int W, int H) GetMonitorSize(IntPtr hwnd)
+    {
+        const uint MONITOR_DEFAULTTONEAREST = 2;
+        IntPtr mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (mon == IntPtr.Zero) return (0, 0);
+        if (!GetMonitorInfo(mon, out MONITORINFO mi)) return (0, 0);
+        return (mi.rcMonitor.Right - mi.rcMonitor.Left, mi.rcMonitor.Bottom - mi.rcMonitor.Top);
+    }
+
+    // ── 窗口事件钩（事件驱动，取代尺寸轮询）─────────────────────────────────
+    // 游戏窗口 resize 时 WGC 仍按建会话那一刻的尺寸交帧，须重建会话。这里用 WinEventHook
+    // 监听目标窗口的尺寸/显隐变化，变了才回调重建，不轮询、不靠 watchdog。
+    public const uint EVENT_OBJECT_SHOW = 0x8002;      // 窗口显示（创建/恢复）
+    public const uint EVENT_OBJECT_HIDE = 0x8003;      // 窗口隐藏（最小化/销毁）
+    public const uint EVENT_OBJECT_LOCATIONCHANGED = 0x8007; // 窗口位置/尺寸变化
+    public const uint EVENT_OBJECT_RESIZED = 0x8008;   // 窗口尺寸变化
+    public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    public delegate void WinEventProc(IntPtr hWinEventHook, uint dwEvent, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwTimeStamp);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, IntPtr gpwinEventProc,
+        uint idEvent, uint idWinEventProc, uint wflags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
+
+    // ── 消息泵：WINEVENT_OUTOFCONTEXT 钩子装在哪个线程，事件就投递到那个线程的隐藏窗口。
+    //    装钩线程必须泵消息（GetMessage/PeekMessage 循环）才能收到事件。──
+    public const uint PM_REMOVE = 0x0001;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MSG
+    {
+        public IntPtr hwnd;
+        public uint message;
+        public IntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public int ptX;
+        public int ptY;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool PeekMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool TranslateMessage(ref MSG lpMsg);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr DispatchMessage(ref MSG lpMsg);
+
     // ── 窗口状态探测（Phase 5 异常恢复看门狗用） ─────────────────────────────
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

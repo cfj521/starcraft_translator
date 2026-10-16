@@ -2,8 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="SC:R Translator — 配置"
-        Width="850" Height="650"
-        MinWidth="680" MinHeight="480"
+        Width="850" Height="720"
+        MinWidth="680" MinHeight="640"
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="True">
     <Window.Resources>
@@ -16,6 +16,43 @@
             <Setter Property="Orientation" Value="Horizontal"/>
             <Setter Property="Margin" Value="0,6,0,6"/>
         </Style>
+        <!-- provider 池行模板：本地/外部两个列表共用。⠿=拖拽柄，名称，（仅 LLM 行）模型名输入框，MT/LLM 徽标，状态，配置按钮 -->
+        <DataTemplate x:Key="ProviderRowTemplate">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="⠿" Foreground="Gray" Margin="0,0,4,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <!-- 模型名输入框：仅 LLM 行（ChatGPT/DashScope，ShowModel=True）显示，放在名称之后。
+                         圆角 Border 包住 + TextBox 无边框透明（白底由 Border 提供）。不设固定高度（全局 Fluent 样式会给 TextBox 加 Padding=6,3，固定 Height 会把文字裁掉只剩顶部） -->
+                    <Border VerticalAlignment="Center" Margin="0,0,8,0" Background="White" BorderBrush="#C0C0C0" BorderThickness="1" CornerRadius="4" Padding="4,0">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ShowModel}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBox Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}" Width="100" Padding="1,1" BorderThickness="0" Background="Transparent" VerticalAlignment="Center"/>
+                    </Border>
+                    <Border CornerRadius="3" Background="#F0F0F0" Padding="6,1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Kind}" Foreground="Gray"/>
+                    </Border>
+                </StackPanel>
+                <TextBlock Grid.Column="2" Text="{Binding Status}" Foreground="#B8860B" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                <!-- 登录账号 tooltip：仅 ChatGPT「订阅登录」按钮显示，且已登录后才出现（StatusTooltip 未登录时为空=不显示） -->
+                <Button Grid.Column="3" Content="{Binding ConfigButtonText}" VerticalAlignment="Stretch" Tag="{Binding Id}" ToolTip="{Binding StatusTooltip}" Click="OnProviderConfigureClick"/>
+            </Grid>
+        </DataTemplate>
     </Window.Resources>
     <DockPanel Margin="8">
         <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
@@ -76,58 +113,49 @@
             <TabItem Header="翻译">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8">
-                        <GroupBox Header="翻译提供商">
+                        <GroupBox Header="翻译引擎">
                             <StackPanel>
-                                <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,0,0,6"
-                                           Text="ⓘ 可拖拽调整顺序。取用顺序从上到下，建议优先使用机翻。额度不足或不可用时逐级下跳"/>
-                                <ListView x:Name="ProviderListView" Height="212" Margin="0,0,0,6"
+                                <RadioButton x:Name="InternalGroupRadio" GroupName="ProviderGroup" IsChecked="True"
+                                             Content="内部翻译引擎（离线）" FontWeight="Bold" Margin="0,0,0,4"
+                                             Checked="OnGroupSelectionChanged"/>
+                                <!-- 不设固定 Height：按行内容自适应，行内模型输入框不被压扁裁剪 -->
+                                <ListView x:Name="LocalProviderListView" Margin="0,0,0,4"
                                           AllowDrop="True" DragOver="OnProviderListDragOver" Drop="OnProviderListDrop"
-                                          PreviewMouseLeftButtonDown="OnProviderListMouseDown">
+                                          PreviewMouseLeftButtonDown="OnProviderListMouseDown"
+                                          ItemTemplate="{StaticResource ProviderRowTemplate}">
                                     <!-- 列表内文本统一小一号（13）：覆盖全局 14 号的隐式 TextBlock 样式 -->
                                     <ListView.Resources>
                                         <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
                                             <Setter Property="FontSize" Value="13"/>
                                         </Style>
                                     </ListView.Resources>
-                                    <ListView.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                                    <TextBlock Text="⠿" Foreground="Gray" Margin="0,0,4,0" VerticalAlignment="Center"/>
-                                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                    <!-- 模型名输入框：仅 LLM 行（ChatGPT/DashScope，ShowModel=True）显示，放在名称之后。
-                                                         圆角 Border 包住 + TextBox 无边框透明（白底由 Border 提供）。不设固定高度（全局 Fluent 样式会给 TextBox 加 Padding=6,3，固定 Height 会把文字裁掉只剩顶部） -->
-                                                    <Border VerticalAlignment="Center" Margin="0,0,8,0" Background="White" BorderBrush="#C0C0C0" BorderThickness="1" CornerRadius="4" Padding="4,0">
-                                                        <Border.Style>
-                                                            <Style TargetType="Border">
-                                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding ShowModel}" Value="True">
-                                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Border.Style>
-                                                        <TextBox Text="{Binding Model, UpdateSourceTrigger=PropertyChanged}" Width="100" Padding="1,1" BorderThickness="0" Background="Transparent" VerticalAlignment="Center"/>
-                                                    </Border>
-                                                    <Border CornerRadius="3" Background="#F0F0F0" Padding="6,1" VerticalAlignment="Center">
-                                                        <TextBlock Text="{Binding Kind}" Foreground="Gray"/>
-                                                    </Border>
-                                                </StackPanel>
-                                                <TextBlock Grid.Column="2" Text="{Binding Status}" Foreground="#B8860B" VerticalAlignment="Center" Margin="8,0,8,0"/>
-                                                <!-- 登录账号 tooltip：仅 ChatGPT「订阅登录」按钮显示，且已登录后才出现（StatusTooltip 未登录时为空=不显示） -->
-                                                <Button Grid.Column="3" Content="{Binding ConfigButtonText}" VerticalAlignment="Stretch" Tag="{Binding Id}" ToolTip="{Binding StatusTooltip}" Click="OnProviderConfigureClick"/>
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ListView.ItemTemplate>
                                 </ListView>
+                                <RadioButton x:Name="ExternalGroupRadio" GroupName="ProviderGroup"
+                                             Content="外部翻译引擎（云端 API）" FontWeight="Bold" Margin="0,8,0,4"
+                                             Checked="OnGroupSelectionChanged"/>
+                                <!-- 不设固定 Height：按行内容自适应，行内模型输入框不被压扁裁剪 -->
+                                <ListView x:Name="ExternalProviderListView" Margin="0,0,0,6"
+                                          AllowDrop="True" DragOver="OnProviderListDragOver" Drop="OnProviderListDrop"
+                                          PreviewMouseLeftButtonDown="OnProviderListMouseDown"
+                                          ItemTemplate="{StaticResource ProviderRowTemplate}">
+                                    <!-- 列表内文本统一小一号（13）：覆盖全局 14 号的隐式 TextBlock 样式 -->
+                                    <ListView.Resources>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                            <Setter Property="FontSize" Value="13"/>
+                                        </Style>
+                                    </ListView.Resources>
+                                </ListView>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="翻译超时">
+                            <StackPanel>
+                                <StackPanel Style="{StaticResource Row}">
+                                    <TextBlock Text="单次翻译超时" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="超时" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="TimeoutSecondsBox" Width="60" Margin="4,0,4,0"/>
+                                    <TextBlock Text="秒后放弃本批、回落原文（整条回退链共享，默认 10）" VerticalAlignment="Center"/>
+                                </StackPanel>
                             </StackPanel>
                         </GroupBox>
 
@@ -138,17 +166,6 @@
                                     <Button x:Name="EditGlossaryButton" Content="编辑术语表…" Margin="12,0,0,0" Click="OnEditGlossaryClick"/>
                                 </StackPanel>
                                 <CheckBox x:Name="CacheEnabledCheck" Content="启用翻译缓存" IsChecked="True" IsEnabled="False" Margin="0,4,0,4"/>
-                            </StackPanel>
-                        </GroupBox>
-
-                        <GroupBox Header="超时">
-                            <StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="单次翻译超时" Style="{StaticResource RowLabel}"/>
-                                    <TextBlock Text="超时" VerticalAlignment="Center"/>
-                                    <TextBox x:Name="TimeoutSecondsBox" Width="60" Margin="4,0,4,0"/>
-                                    <TextBlock Text="秒后放弃本批、回落原文（整条回退链共享，默认 10）" VerticalAlignment="Center"/>
-                                </StackPanel>
                             </StackPanel>
                         </GroupBox>
                     </StackPanel>
@@ -278,12 +295,11 @@
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="字体" Style="{StaticResource RowLabel}"/>
                                     <ComboBox x:Name="FontFamilyBox" Width="160" IsEditable="True">
-                                        <!-- Kostar = 内嵌原版 SC:R 字体（默认）：拉丁复刻原字体 + 谚文，无中文（中文回退系统字体） -->
-                                        <ComboBoxItem Content="Kostar"/>
-                                        <ComboBoxItem Content="Microsoft YaHei"/>
-                                        <ComboBoxItem Content="Microsoft YaHei UI"/>
-                                        <ComboBoxItem Content="SimHei"/>
-                                        <ComboBoxItem Content="SimSun"/>
+                                        <!-- 每个 item 用对应字体渲染（代码后端设 FontFamily），方便预览效果。
+                                             Kostar = 内嵌原版 SC:R 字体（默认）：拉丁复刻原字体 + 谚文，无中文（中文回退系统字体） -->
+                                        <ComboBoxItem x:Name="FontKostar" Content="Kostar"/>
+                                        <ComboBoxItem x:Name="FontYaHei" Content="Microsoft YaHei"/>
+                                        <ComboBoxItem x:Name="FontArial" Content="Arial"/>
                                     </ComboBox>
                                     <TextBlock Text="字号" Style="{StaticResource RowLabel}" Width="50" Margin="16,0,8,0"/>
                                     <TextBox x:Name="FontSizeBox" Width="50"/>
