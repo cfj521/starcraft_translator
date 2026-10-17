@@ -31,7 +31,7 @@ public sealed class SecretStore
         // 解密/反序列化失败＝已有密钥被静默清空成"未配置/未登录"，这是"状态不对却无处可查"的头号来源，必须恒记(Warn)。
         catch (Exception ex)
         {
-            _log?.Warn($"[secrets] secrets.dat 读取失败，按空密钥处理（所有 provider 显示未配置/未登录）: {ex.GetType().Name}: {ex.Message}");
+            _log?.Warn($"[app][secrets] secrets.dat 读取失败，按空密钥处理（所有 provider 显示未配置/未登录）: {ex.GetType().Name}: {ex.Message}");
             return new SecretData();
         }
     }
@@ -49,7 +49,7 @@ public sealed class SecretStore
         // 落盘失败＝用户刚填的密钥丢了。记 Error 后重新抛出：不吞（吞了会让调用方误以为保存成功），也不在这里弹框（由上层处理）。
         catch (Exception ex)
         {
-            _log?.Error($"[secrets] secrets.dat 保存失败: {ex.GetType().Name}: {ex.Message}");
+            _log?.Error($"[app][secrets] secrets.dat 保存失败: {ex.GetType().Name}: {ex.Message}");
             throw;
         }
     }

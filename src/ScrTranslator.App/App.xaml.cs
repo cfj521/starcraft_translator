@@ -232,7 +232,7 @@ public partial class App : Application
         var startupSettings = _host.Services.GetRequiredService<SettingsHolder>();
         log.DebugEnabled = startupSettings.Current.General.DebugMode; // 启动即同步，避免首帧诊断漏记
         log.Info($"──── SC:R Translator v{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version} 启动 ────");
-        log.Info($"[app] 配置={settingsPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
+        log.Info($"[app][basic] 配置={settingsPath} | 调试日志={(log.DebugEnabled ? "开(全量诊断)" : "关(仅业务)")}");
 
         var probe = _host.Services.GetRequiredService<TranslationEngine>();
         bool running = false;
@@ -243,7 +243,7 @@ public partial class App : Application
                 probe.Stop();
                 running = false;
                 _trayService.SetProbeRunning(false);
-                log.Info("[app] 翻译已关闭（F9）");
+                log.Info("[app][basic] 翻译已关闭（F9）");
                 return;
             }
             var info = probe.Start();
@@ -264,7 +264,7 @@ public partial class App : Application
                 {
                     string reasons = string.Join("；", enabled.Select(p =>
                         $"{p.Name}（{p.GetStatus().Detail}）"));
-                    log.Warn($"[app] 开翻译但选中组里启用的 provider 全都不可用：{reasons}。韩文能识别但翻不成中文，请到 配置→翻译 配密钥/登录或启用其它 provider（或切换到另一组）。");
+                    log.Warn($"[app][basic] 开翻译但选中组里启用的 provider 全都不可用：{reasons}。韩文能识别但翻不成中文，请到 配置→翻译 配密钥/登录或启用其它 provider（或切换到另一组）。");
                 }
             }
 
@@ -279,7 +279,7 @@ public partial class App : Application
                 ProbeStart.CaptureFailed => "启动屏幕捕获失败，详见日志",
                 _ => "无法开启",
             };
-            log.Info($"[app] 翻译开启结果：{result}");
+            log.Info($"[app][basic] 翻译开启结果：{result}");
             _trayService.SetProbeRunning(running);
         }
         _trayService.ToggleProbe = ToggleProbe;
@@ -300,13 +300,13 @@ public partial class App : Application
         {
             var resList = string.Join(",", sceneStore.References
                 .SelectMany(r => r.Resolutions.Keys).Distinct().OrderBy(k => k));
-            log.Info($"[app] 场景参考={sceneStore.References.Count}条[{string.Join(" ", sceneStore.References.Select(r => r.Id))}] " +
+            log.Info($"[app][basic] 场景参考={sceneStore.References.Count}条[{string.Join(" ", sceneStore.References.Select(r => r.Id))}] " +
                      $"| 已收录分辨率 {resList} | 现场覆盖 {sceneStore.OverrideCount} 条 | 块{sceneStore.BlockSize} 容差{sceneStore.ChannelTolerance} 阈值{sceneStore.MinHitRatio:P0}");
-            foreach (var w in sceneStore.Warnings) log.Warn($"[app] 场景参考告警: {w}");
+            foreach (var w in sceneStore.Warnings) log.Warn($"[app][basic] 场景参考告警: {w}");
         }
         else
         {
-            log.Error($"[app] 场景参考不可用：{sceneStore.LoadError} —— 场景识别将停在“其他界面”，翻译不会上屏。" +
+            log.Error($"[app][basic] 场景参考不可用：{sceneStore.LoadError} —— 场景识别将停在“其他界面”，翻译不会上屏。" +
                       "请确认 exe 旁存在 scene-refs.json（或重跑 tools/SceneRefGen 生成）");
         }
 
@@ -318,7 +318,7 @@ public partial class App : Application
             // DEBUG 门控：校准直写出厂预设，仅 DEBUG 模式可用（F8 切换）
             if (!holder.Current.General.DebugMode)
             {
-                log.Info("[app] 校准仅 DEBUG 模式可用（按 F8 切换）");
+                log.Info("[app][basic] 校准仅 DEBUG 模式可用（按 F8 切换）");
                 return;
             }
             // 校准的前提是"看得见游戏画面"：校准窗是半透明覆盖层，且要靠抓屏做场景检测。
@@ -328,17 +328,17 @@ public partial class App : Application
             var hwnd = WindowFinder.FindByProcess(proc);
             if (hwnd == IntPtr.Zero)
             {
-                log.Info($"[app] 无法校准：未找到游戏窗口（进程 {proc}）。请先启动 SC:R（窗口化/无边框）。");
+                log.Info($"[app][basic] 无法校准：未找到游戏窗口（进程 {proc}）。请先启动 SC:R（窗口化/无边框）。");
                 return;
             }
             if (NativeMethods.IsIconic(hwnd))
             {
-                log.Info("[app] 无法校准：游戏处于最小化状态，请先还原窗口再按 Ctrl+F9。");
+                log.Info("[app][basic] 无法校准：游戏处于最小化状态，请先还原窗口再按 Ctrl+F9。");
                 return;
             }
             if (NativeMethods.GetForegroundWindow() != hwnd)
             {
-                log.Info("[app] 无法校准：游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 Ctrl+F9。");
+                log.Info("[app][basic] 无法校准：游戏不在前台，校准会看不清要对齐的画面。请点一下游戏窗口再按 Ctrl+F9。");
                 return;
             }
 
@@ -391,15 +391,15 @@ public partial class App : Application
             settingsHolder.Current = cur with { General = cur.General with { DebugMode = newVal } };
             log.DebugEnabled = newVal; // 即时生效，诊断日志与面板同步切换（探测定时器亦会兜底同步）
             try { SettingsStore.Save(settingsHolder.Current, settingsPath); }
-            catch (Exception ex) { log.Error($"[hotkey] 保存 settings.json 失败: {ex.Message}"); }
-            log.Info($"[app] DEBUG 模式: {(newVal ? "开（全量诊断日志+面板）" : "关（仅业务日志）")}");
+            catch (Exception ex) { log.Error($"[app][hotkey] 保存 settings.json 失败: {ex.Message}"); }
+            log.Info($"[app][basic] DEBUG 模式: {(newVal ? "开（全量诊断日志+面板）" : "关（仅业务日志）")}");
         }
 
         // 复制诊断快照（Ctrl+F8）：把面板同源文本拷到剪贴板，无需面板可点/不抢焦点。
         void CopyDebug()
         {
-            try { Clipboard.SetText(probe.GetDebugSnapshot()); log.Info("[app] 诊断快照已复制到剪贴板（Ctrl+F8）"); }
-            catch (Exception ex) { log.Warn($"[app] 复制诊断失败: {ex.Message}"); }
+            try { Clipboard.SetText(probe.GetDebugSnapshot()); log.Info("[app][basic] 诊断快照已复制到剪贴板（Ctrl+F8）"); }
+            catch (Exception ex) { log.Warn($"[app][basic] 复制诊断失败: {ex.Message}"); }
         }
 
         // 截图保存（F6）：把下一帧捕获帧存成 PNG 到 <项目根>/screenshots/。
@@ -408,8 +408,8 @@ public partial class App : Application
         {
             string dir;
             try { dir = System.IO.Path.Combine(FindProjectRoot(), "screenshots"); }
-            catch (Exception ex) { log.Warn($"[app] 无法确定项目目录，跳过截图: {ex.Message}"); return; }
-            log.Info($"[app] 请求截图（F6），下一帧存到 {dir}");
+            catch (Exception ex) { log.Warn($"[app][basic] 无法确定项目目录，跳过截图: {ex.Message}"); return; }
+            log.Info($"[app][basic] 请求截图（F6），下一帧存到 {dir}");
             probe.Screenshot(dir);
         }
 
@@ -439,12 +439,12 @@ public partial class App : Application
         };
         var hotkeyResults = _hotkeys.RegisterAll(settingsHolder.Current.Hotkeys, hotkeyActions);
         foreach (var (func, ok) in hotkeyResults)
-            log.Log($"[hotkey] 注册 {func}={ok}");
+            log.Log($"[app][hotkey] 注册 {func}={ok}");
 
         // 启动自动开翻译（General.AutoTranslateOnLaunch）：游戏没开也不报错——看门狗会等待窗口出现自动续译。
         if (settingsHolder.Current.General.AutoTranslateOnLaunch)
         {
-            log.Log("[startup] AutoTranslateOnLaunch=on，自动开启翻译");
+            log.Log("[app][startup] AutoTranslateOnLaunch=on，自动开启翻译");
             ToggleProbe();
         }
 
@@ -454,7 +454,7 @@ public partial class App : Application
         if (settingsHolder.Current.Translation.SelectedGroup == TranslationGroup.Internal)
         {
             hyMt2.Load();
-            log.Info("[startup] 选中内部组，Hy-MT2 模型后台加载中");
+            log.Info("[app][startup] 选中内部组，Hy-MT2 模型后台加载中");
         }
     }
 

@@ -32,7 +32,7 @@ public sealed class OpenAiOAuth : ITokenSource
     public void Logout()
     {
         var d = _store.Load(); d.OpenAi = new OpenAiTokens(); _store.Save(d);
-        _log?.Info("[oauth] 已登出 ChatGPT（清空本地 token）");
+        _log?.Info("[app][oauth] 已登出 ChatGPT（清空本地 token）");
     }
 
     public async Task<(string, string)> GetAsync(CancellationToken ct)
@@ -43,7 +43,7 @@ public sealed class OpenAiOAuth : ITokenSource
         long? exp = DateTimeOffset.TryParse(t.ExpiresAt, out var dt) ? dt.ToUnixTimeSeconds() : null;
         if (JwtClaims.NeedsRefresh(exp, DateTimeOffset.UtcNow))
         {
-            _log?.Debug("[oauth] access_token 需刷新，走 refresh_token 流程");
+            _log?.Debug("[app][oauth] access_token 需刷新，走 refresh_token 流程");
             await _refreshLock.WaitAsync(ct);
             try
             {
@@ -60,12 +60,12 @@ public sealed class OpenAiOAuth : ITokenSource
                         ["scope"] = OAuthPkce.Scope,
                     }, ct);
                     ApplyTokens(data, tok); _store.Save(data); t = data.OpenAi;
-                    _log?.Info("[oauth] refresh_token 刷新成功");
+                    _log?.Info("[app][oauth] refresh_token 刷新成功");
                 }
             }
             catch (Exception ex)
             {
-                _log?.Warn($"[oauth] token 刷新失败: {ex.GetType().Name}: {ex.Message}");
+                _log?.Warn($"[app][oauth] token 刷新失败: {ex.GetType().Name}: {ex.Message}");
                 throw;
             }
             finally { _refreshLock.Release(); }
@@ -81,18 +81,18 @@ public sealed class OpenAiOAuth : ITokenSource
         // 必须双栈——RedirectUri 用 localhost，Windows 上常解析为 ::1，单绑 127.0.0.1 会被拒。
         using var listener = TcpListener.Create(1455);
         try { listener.Start(); }
-        catch (Exception ex) { _log?.Error($"[oauth] 本地回调端口 1455 启动失败（可能被占用）: {ex.Message}"); return LoginResult.Failed; }
-        _log?.Debug($"[oauth] 已打开授权页 state={state}，等待浏览器回调 localhost:1455");
+        catch (Exception ex) { _log?.Error($"[app][oauth] 本地回调端口 1455 启动失败（可能被占用）: {ex.Message}"); return LoginResult.Failed; }
+        _log?.Debug($"[app][oauth] 已打开授权页 state={state}，等待浏览器回调 localhost:1455");
         Process.Start(new ProcessStartInfo(OAuthPkce.BuildAuthorizeUrl(challenge, state)) { UseShellExecute = true });
         try
         {
             using var reg = ct.Register(listener.Stop);
             using var accept = await listener.AcceptTcpClientAsync(ct);
-            _log?.Debug("[oauth] 收到浏览器回调");
+            _log?.Debug("[app][oauth] 收到浏览器回调");
             var (code, gotState) = await ReadCallback(accept, ct);
             if (code is null || gotState != state)
             {
-                _log?.Warn($"[oauth] 回调校验失败：code={(code is null ? "空" : "有")} state 匹配={(gotState == state)}（可能是过期/重复回调或被拦截）");
+                _log?.Warn($"[app][oauth] 回调校验失败：code={(code is null ? "空" : "有")} state 匹配={(gotState == state)}（可能是过期/重复回调或被拦截）");
                 return LoginResult.Failed;
             }
             var tok = await PostToken(new Dictionary<string, string>
@@ -104,11 +104,11 @@ public sealed class OpenAiOAuth : ITokenSource
                 ["code_verifier"] = verifier,
             }, ct);
             var data = _store.Load(); ApplyTokens(data, tok); _store.Save(data);
-            _log?.Debug($"[oauth] token 交换成功，邮箱={data.OpenAi.Email}");
+            _log?.Debug($"[app][oauth] token 交换成功，邮箱={data.OpenAi.Email}");
             return LoginResult.Success;
         }
         catch (OperationCanceledException) { return LoginResult.Cancelled; } // 用户直接关了授权页（无回调）或等待超时，非硬错误
-        catch (Exception ex) { _log?.Error($"[oauth] 登录失败（回调读取/token 交换异常）: {ex.GetType().Name}: {ex.Message}"); return LoginResult.Failed; }
+        catch (Exception ex) { _log?.Error($"[app][oauth] 登录失败（回调读取/token 交换异常）: {ex.GetType().Name}: {ex.Message}"); return LoginResult.Failed; }
         finally { listener.Stop(); }
     }
 

@@ -108,8 +108,7 @@ public sealed class TranslationEngine : IDisposable
     private int _glossaryCount;
     private string _lastFrameWH = "—";
     private SceneRecognition _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
-        GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别",
-        Array.Empty<(SceneReference, IReadOnlyList<SceneRefRegion>)>());
+        GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别", Array.Empty<SceneRefRegion>());
     private long _lastTranslateMs; private bool _lastAllResolved; private int _lastLineCount;
     // 本批命中数（非池大小）：真正送进引擎翻译的行 / 术语表命中 / 缓存命中。调试面板显示的是这批实际数。
     private int _lastEngineHits; private int _lastCacheHits; private int _lastGlossaryHits;
@@ -203,14 +202,8 @@ public sealed class TranslationEngine : IDisposable
     {
         var rec = _scene.Recognize(frame.AsFramePixels());
         _lastRec = rec;
-        // DEBUG：画当前活动场景的指纹区域框——场景指纹取哪个区域就画哪个。
-        // 候选区域是 Recognize 用同一套 centerCrop+FittingRegions 算的，框坐标天然和裁剪/缩放一致。
-        var activeRegions = rec.CandidateRegions
-            .FirstOrDefault(cr => cr.Ref.Scene == _activeScene && cr.Ref.Race == _activeRace)
-            .Regions ?? Array.Empty<SceneRefRegion>();
-        _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowRegions(activeRegions));
-        _log.Debug($"[scene] {rec.Summary}  帧={frame.Width}x{frame.Height}  " +
-                   $"候选=[{string.Join(" ", rec.Scores.Select(s => $"{s.RefId}:{s.HitRatio:P0}"))}]");
+        // DEBUG：把最高命中那条参考的指纹区域框画到悬浮层上（帧像素坐标，随识别节拍刷新）。
+        _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowRegions(rec.WinnerRegions));
 
         switch (rec.Status)
         {
@@ -235,6 +228,7 @@ public sealed class TranslationEngine : IDisposable
                 if (rec.Scene == _pendingScene) _pendingCount++;
                 else { _pendingScene = rec.Scene; _pendingCount = 1; }
                 if (_pendingCount < Hysteresis) return false;
+                LogSceneChanged(rec, frame, rec.Scene, rec.Race);
                 SwitchScene(rec.Scene, rec.Race);
                 return true;
 
@@ -243,10 +237,42 @@ public sealed class TranslationEngine : IDisposable
                 _pendingScene = GameScene.Unknown; _pendingCount = 0;
                 if (_activeScene == GameScene.Other) return false; // 已在其他态，无需重复
                 if (_unknownCount++ < OtherThreshold) return false;
+                LogSceneChanged(rec, frame, GameScene.Other, GameRace.Unknown);
                 SwitchScene(GameScene.Other, GameRace.Unknown);
                 return true;
         }
     }
+
+    /// <summary>切场景日志（仅在真正切换时记一次）：新场景英文 ID + 旧场景 + 最高命中率 + 分辨率 + 全部候选命中率。</summary>
+    private void LogSceneChanged(SceneRecognition rec, SKBitmap frame, GameScene to, GameRace toRace)
+    {
+        var fromId = SceneEnglishId(_activeScene, _activeRace);
+        var toId = SceneEnglishId(to, toRace);
+        var cands = string.Join(" ", rec.Scores.Select(s => $"{s.RefId}={s.HitRatio:P0}"));
+        _log.Info($"[scene][changed][{toId}] from={fromId}, top1={rec.HitRatio:P0}, resl={frame.Width}x{frame.Height}, [{cands}]");
+    }
+
+    /// <summary>场景+种族 → 统一英文 ID（browsing / room / ingame_t / ingame_p / ingame_z / other / unknown）。</summary>
+    private static string SceneEnglishId(GameScene s, GameRace r) => s switch
+    {
+        GameScene.Browsing => "browsing",
+        GameScene.Room => "room",
+        GameScene.InGame => "ingame_" + RaceLetter(r),
+        GameScene.Other => "other",
+        _ => "unknown",
+    };
+
+    private static string RaceLetter(GameRace r) => r switch
+    {
+        GameRace.Terran => "t",
+        GameRace.Protoss => "p",
+        GameRace.Zerg => "z",
+        _ => "?",
+    };
+
+    /// <summary>矩形 → 紧凑 [rect=x,y,w,h]（四舍五入到整数像素）。</summary>
+    private static string RectStr(RectangleF r) =>
+        $"[rect={(int)MathF.Round(r.X)},{(int)MathF.Round(r.Y)},{(int)MathF.Round(r.Width)},{(int)MathF.Round(r.Height)}]";
 
     /// <summary>
     /// 切换活动场景（含游戏内种族）：清掉上一场景的译文、重算 ROI 标志、复位变化检测、记日志+气泡。
@@ -263,12 +289,11 @@ public sealed class TranslationEngine : IDisposable
         RefreshRoiDerivedFlags();
         ClearOverlay(); // 换场景=旧译文全部失效，立即清屏（不等下一帧）
         ResetAllChangeDetection(); _roiMissingLogged = false; // 换场景=换 ROI，重新判定上屏
-        _log.Info($"[scene] 切换 {SceneDisplay(from, GameRace.Unknown)} → {SceneDisplay(to, race)}");
         if (to != GameScene.Other && !_roiAvailable)
         {
             // 三个场景各自一套预设识别区域。切到一个没有预设的场景时必须当场说出来，
             // 否则用户的感受是"切了界面就什么都不翻"，像是区域在场景间混用。
-            _log.Info($"[probe] 当前场景[{SceneDisplay(to, race)}]无预设识别区域");
+            _log.Info($"[app][probe] 当前场景[{SceneDisplay(to, race)}]无预设识别区域");
             Notice?.Invoke(ProbeNotice.NeedsCalibration,
                 $"当前场景：{SceneDisplay(to, race)}——这个场景还没框选区域，请按 F8 校准（三个场景要各校准一次）");
         }
@@ -291,7 +316,7 @@ public sealed class TranslationEngine : IDisposable
         _layout = LayoutPresetStore.Load(_layout.FilePath);
         RefreshRoiDerivedFlags();
         ResetChangeDetection();
-        _log.Log($"[probe] 布局预设已重新加载：{_layout.Presets.Count} 条" +
+        _log.Log($"[app][probe] 布局预设已重新加载：{_layout.Presets.Count} 条" +
                  (_layout.LoadError is null ? "" : $" 错误={_layout.LoadError}"));
     }
 
@@ -303,9 +328,8 @@ public sealed class TranslationEngine : IDisposable
     {
         _scene = new SceneRecognizer(SceneRefStore.Load(_sceneRefsPath, _sceneOverridesPath));
         _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
-            GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "已重载，待识别",
-            Array.Empty<(SceneReference, IReadOnlyList<SceneRefRegion>)>());
-        _log.Log($"[probe] 场景参考已重新加载：{_scene.Store.References.Count} 条（覆盖 {_scene.Store.OverrideCount}）" +
+            GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "已重载，待识别", Array.Empty<SceneRefRegion>());
+        _log.Log($"[app][probe] 场景参考已重新加载：{_scene.Store.References.Count} 条（覆盖 {_scene.Store.OverrideCount}）" +
                   (_scene.Store.LoadError is null ? "" : $" 错误={_scene.Store.LoadError}"));
     }
 
@@ -325,23 +349,23 @@ public sealed class TranslationEngine : IDisposable
         string proc = TargetProcess();
         try
         {
-            _log.Log("[probe] Start 被调用");
+            _log.Log("[app][probe] Start 被调用");
             if (!SceneRefsAvailable)
-                _log.Warn($"[probe] 场景识别参考不可用（{_scene.Store.LoadError}）：将停在当前场景，跨界面不会自动切换");
+                _log.Warn($"[app][probe] 场景识别参考不可用（{_scene.Store.LoadError}）：将停在当前场景，跨界面不会自动切换");
             if (!GraphicsCaptureSession.IsSupported())
             {
-                _log.Warn("[probe] GraphicsCapture.IsSupported=false（系统不支持窗口捕获）");
+                _log.Warn("[app][probe] GraphicsCapture.IsSupported=false（系统不支持窗口捕获）");
                 return new ProbeStartInfo(ProbeStart.CaptureUnsupported, proc);
             }
             if (!_anySceneCalibrated)
             {
                 // 注意判断的是"有没有任何场景的预设"，不是"当前场景有没有区域"：
                 // 启动瞬间还没拿到帧，当前场景恒为 Other，按后者会永远报"尚无预设"。
-                _log.Log("[probe] 布局预设为空（预设加载失败），无法翻译");
+                _log.Log("[app][probe] 布局预设为空（预设加载失败），无法翻译");
                 return new ProbeStartInfo(ProbeStart.NoRoi, proc);
             }
             var hwnd = WindowFinder.FindByProcess(proc);
-            _log.Debug($"[probe] FindByProcess({proc}) hwnd={hwnd}");
+            _log.Debug($"[app][probe] FindByProcess({proc}) hwnd={hwnd}");
             // 看门狗：窗口丢失重连/最小化恢复(5-3)，以及"等待游戏窗口"模式——F9 时游戏没开不再算失败，
             // 挂 2s 轮询，窗口一出现自动开始捕获翻译（也承载 General.AutoTranslateOnLaunch 的启动自动开）。
             _windowLost = false; _wasIconic = false; _running = true; // 引擎进入运行态（含等待首连：窗口出现自动续译也属运行中）
@@ -354,7 +378,7 @@ public sealed class TranslationEngine : IDisposable
             _watchdog.Change(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
             if (_waitingForWindow)
             {
-                _log.Log($"[probe] 未找到 {proc} 窗口，进入等待模式");
+                _log.Log($"[app][probe] 未找到 {proc} 窗口，进入等待模式");
                 return new ProbeStartInfo(ProbeStart.WaitingForWindow, proc);
             }
             // 模型就绪门：OCR 初始化中 / HY-MT2 加载未完成时，先不抓帧、不空转烧 CPU。
@@ -362,21 +386,21 @@ public sealed class TranslationEngine : IDisposable
             if (!ModelsReady())
             {
                 _waitingForModels = true;
-                _log.Log("[probe] 模型未就绪（OCR 初始化中 / HY-MT2 加载中），推迟开轮询，模型就绪后自动开始（看门狗轮询）");
+                _log.Log("[app][probe] 模型未就绪（OCR 初始化中 / HY-MT2 加载中），推迟开轮询，模型就绪后自动开始（看门狗轮询）");
                 return new ProbeStartInfo(ProbeStart.WaitingForModels, proc);
             }
             if (!_capture.Start(hwnd))
             {
                 _watchdog.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
-                _log.Error("[probe] 捕获启动失败");
+                _log.Error("[app][probe] 捕获启动失败");
                 return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
             }
-            _log.Log("[probe] 已开始捕获（看门狗已启动）");
+            _log.Log("[app][probe] 已开始捕获（看门狗已启动）");
             return new ProbeStartInfo(ProbeStart.Ok, proc);
         }
         catch (Exception ex)
         {
-            _log.Error($"[probe] Start 异常: {ex}");
+            _log.Error($"[app][probe] Start 异常: {ex}");
             return new ProbeStartInfo(ProbeStart.CaptureFailed, proc);
         }
     }
@@ -393,12 +417,12 @@ public sealed class TranslationEngine : IDisposable
                 _waitingForModels = false;
                 var mhwnd = WindowFinder.FindByProcess(TargetProcess());
                 if (mhwnd != IntPtr.Zero && _capture.Start(mhwnd))
-                    _log.Log("[probe] 模型已就绪，开始捕获（自动）");
+                    _log.Log("[app][probe] 模型已就绪，开始捕获（自动）");
                 else
                 {
                     _waitingForModels = true; // 窗口也没了，回等待态，等窗口+模型都齐
                     _waitingForWindow = true;
-                    _log.Log("[probe] 模型已就绪但未找到游戏窗口，转入等待窗口");
+                    _log.Log("[app][probe] 模型已就绪但未找到游戏窗口，转入等待窗口");
                 }
                 return;
             }
@@ -412,7 +436,7 @@ public sealed class TranslationEngine : IDisposable
                     if (!_windowLost)
                     {
                         _windowLost = true; _wasIconic = false;
-                        _log.Log("[probe] 看门狗：游戏窗口已丢失");
+                        _log.Log("[app][probe] 看门狗：游戏窗口已丢失");
                         Notice?.Invoke(ProbeNotice.WindowLost,
                             $"游戏窗口已消失，翻译已暂停。检测到 {TargetProcess()} 重新开窗后将自动续译。");
                     }
@@ -423,7 +447,7 @@ public sealed class TranslationEngine : IDisposable
                     bool firstConnect = _waitingForWindow;
                     _waitingForWindow = false; _windowLost = false;
                     ResetChangeDetection(); // 新窗口内容需重新 OCR/上屏
-                    _log.Log($"[probe] 看门狗：已{(firstConnect ? "首次连接" : "重连")}游戏窗口 hwnd={fresh}");
+                    _log.Log($"[app][probe] 看门狗：已{(firstConnect ? "首次连接" : "重连")}游戏窗口 hwnd={fresh}");
                     Notice?.Invoke(firstConnect ? ProbeNotice.FirstConnected : ProbeNotice.Reconnected,
                         firstConnect ? "已检测到游戏窗口，翻译自动开始" : "已重新连接游戏窗口，翻译继续");
                 }
@@ -437,19 +461,19 @@ public sealed class TranslationEngine : IDisposable
                 {
                     // 修复：最小化时旧译文会滞留悬浮在桌面上——立即清空；还原后 ResetChangeDetection 重译新位置。
                     ClearOverlay();
-                    _log.Log("[probe] 看门狗：游戏最小化，悬浮已清空");
+                    _log.Log("[app][probe] 看门狗：游戏最小化，悬浮已清空");
                     Notice?.Invoke(ProbeNotice.Minimized, "游戏已最小化，翻译暂停（还原后自动继续）");
                 }
                 else
                 {
                     ResetChangeDetection();
-                    _log.Log("[probe] 看门狗：游戏已还原，触发重译");
+                    _log.Log("[app][probe] 看门狗：游戏已还原，触发重译");
                     Notice?.Invoke(ProbeNotice.Restored, "游戏已还原，翻译继续");
                 }
             }
             if (!iconic) WatchdogFrameFlow(hwnd); // 帧流健康：零帧=独占全屏/未渲染；帧在来但处理不动=卡死
         }
-        catch (Exception ex) { _log.Error($"[probe] 看门狗异常: {ex.Message}"); }
+        catch (Exception ex) { _log.Error($"[app][probe] 看门狗异常: {ex.Message}"); }
     }
 
     private void ClearOverlay() =>
@@ -495,7 +519,6 @@ public sealed class TranslationEngine : IDisposable
             ? $"ROI[{_activeScene.Label()}]: (无)\n"
             : $"ROI[{_activeScene.Label()}]:\n" +
               string.Join("\n", roiNames.Select(n => $"  {n}  累计翻译={_cumTranslated.GetValueOrDefault(n)}行")) + "\n";
-        var recent = _orchestrator.RecentProviders;
         // 翻译引擎：当前池首 provider（内部/外部单选，池里就它一个）。HY-MT2 附带加载状态（未加载/加载中/可用/不可用）。
         var engine = _orchestrator.Providers.FirstOrDefault();
         string engineLine = engine is null
@@ -516,7 +539,6 @@ public sealed class TranslationEngine : IDisposable
             engineLine +
             $"翻译: {_lastEngineHits}行(共{_lastLineCount}行) {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
             (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
-            $"引擎(最近3次): {(recent.Count == 0 ? "(无)" : string.Join("  ", recent))}\n" +
             $"命中缓存: {_lastCacheHits}  命中术语表: {_lastGlossaryHits}\n" +
             matchSection;
     }
@@ -535,7 +557,7 @@ public sealed class TranslationEngine : IDisposable
             if (++_zeroFrameTicks == 5 && !_noFrameNotified) // ~10s
             {
                 _noFrameNotified = true;
-                _log.Warn("[probe] 看门狗：10s 无新帧（独占全屏或画面静止）");
+                _log.Warn("[app][probe] 看门狗：10s 无新帧（独占全屏或画面静止）");
                 Notice?.Invoke(ProbeNotice.NoFrames,
                     "10 秒没收到新画面：若游戏是独占全屏，请改窗口化/无边框；画面静止则动一下鼠标即可。");
             }
@@ -550,7 +572,7 @@ public sealed class TranslationEngine : IDisposable
                 if (++_stallTicks == 5 && !_stallNotified)
                 {
                     _stallNotified = true;
-                    _log.Warn("[probe] 看门狗：帧在到达但 10s 未完成处理，疑似 _busy 卡死");
+                    _log.Warn("[app][probe] 看门狗：帧在到达但 10s 未完成处理，疑似 _busy 卡死");
                     Notice?.Invoke(ProbeNotice.Stalled, "画面在刷新但翻译卡住了（可能 OCR/网络阻塞），稍后自动重试；持续则重启程序。");
                 }
             }
@@ -576,7 +598,7 @@ public sealed class TranslationEngine : IDisposable
         _capture.Stop();
         ResetAllChangeDetection(); // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
         _windowLost = false; _wasIconic = false; _waitingForWindow = false;
-        _log.Log("[probe] 已停止");
+        _log.Log("[app][probe] 已停止");
         _ = _overlay.Dispatcher.InvokeAsync(() =>
         {
             _overlay.ShowLines(System.Array.Empty<OverlayItem>());
@@ -593,7 +615,7 @@ public sealed class TranslationEngine : IDisposable
     {
         if (_capture.Hwnd == IntPtr.Zero)
         {
-            _log.Warn("[screenshot] 捕获未启动（翻译没开），没有帧可截");
+            _log.Warn("[app][screenshot] 捕获未启动（翻译没开），没有帧可截");
             return;
         }
         TaskCompletionSource<SKBitmap> tcs;
@@ -612,11 +634,11 @@ public sealed class TranslationEngine : IDisposable
                 using var img = SKImage.FromBitmap(bmp);
                 using var data = img.Encode(SKEncodedImageFormat.Png, 100);
                 System.IO.File.WriteAllBytes(path, data.ToArray());
-                _log.Info($"[screenshot] 已存 {bmp.Width}x{bmp.Height} → {path}");
+                _log.Info($"[app][screenshot] 已存 {bmp.Width}x{bmp.Height} → {path}");
             }
             catch (Exception ex)
             {
-                _log.Error($"[screenshot] 保存失败: {ex.Message}");
+                _log.Error($"[app][screenshot] 保存失败: {ex.Message}");
             }
             finally { bmp.Dispose(); }
         }, TaskScheduler.Default);
@@ -627,7 +649,7 @@ public sealed class TranslationEngine : IDisposable
         if (!_firstFrameLogged)
         {
             _firstFrameLogged = true;
-            _log.Log($"[probe] 首帧到达 {frame.Width}x{frame.Height}（捕获→处理链路已通）");
+            _log.Log($"[app][probe] 首帧到达 {frame.Width}x{frame.Height}（捕获→处理链路已通）");
         }
         _lastFrameWH = $"{frame.Width}x{frame.Height}";
         // 分辨率不缓存：预设相对坐标直接用当前帧宽高换算像素（见下方 presetParts/ToPixels），每帧天然拿到最新分辨率。
@@ -642,7 +664,7 @@ public sealed class TranslationEngine : IDisposable
         if (shotTcs is not null)
         {
             try { shotTcs.SetResult(frame.Copy()); }
-            catch (Exception ex) { _log.Error($"[screenshot] 帧拷贝失败: {ex.Message}"); } // TCS 留挂起，续延不跑，无副作用
+            catch (Exception ex) { _log.Error($"[app][screenshot] 帧拷贝失败: {ex.Message}"); } // TCS 留挂起，续延不跑，无副作用
         }
         // ── 两个独立节拍：场景检测(Ocr.SceneDetectPollMs，默认 20ms) 与 翻译(Ocr.TranslatePollMs，默认 200ms)。
         // 每帧实时读设置，改设置即时生效无需重启。识别很便宜要跑得快，翻译贵(OCR+LLM)按自己节拍跑。
@@ -673,9 +695,9 @@ public sealed class TranslationEngine : IDisposable
                 if (!_roiMissingLogged)
                 {
                     if (_activeScene == GameScene.Other)
-                        _log.Debug("[probe] 其他界面（主菜单/加载等），本就不翻译"); // 其他态不催校准
+                        _log.Debug("[app][probe] 其他界面（主菜单/加载等），本就不翻译"); // 其他态不催校准
                     else
-                        _log.Info($"[probe] 当前场景[{_activeScene.Label()}]无预设识别区域——DEBUG 模式下可用校准窗拖调（直写 layout-presets.json）");
+                        _log.Info($"[app][probe] 当前场景[{_activeScene.Label()}]无预设识别区域——DEBUG 模式下可用校准窗拖调（直写 layout-presets.json）");
                     _roiMissingLogged = true;
                 }
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
@@ -684,20 +706,21 @@ public sealed class TranslationEngine : IDisposable
             var winRect = NativeMethods.GetWindowScreenRect(_capture.Hwnd);
             if (winRect.IsEmpty || winRect.Width <= 0 || winRect.Height <= 0 || winRect.Left <= -30000 || winRect.Top <= -30000)
             {
-                _log.Debug("[probe] 窗口矩形无效/最小化，跳过本帧上屏");
+                _log.Debug("[app][probe] 窗口矩形无效/最小化，跳过本帧上屏");
                 return; // finally 仍会 Dispose(frame) 并复位 _busy
             }
             // ── 每 part 独立收集 OCR 结果（下标=该 part 在当前预设列表里的位置）──
             // offsetX/offsetY：该 part 的文字偏移（物理像素，来自 RelRect），只影响译文摆放，不影响 OCR 区域
-            var rois = new List<(string name, List<string> lines, List<RectangleF> bounds, double offsetX, double offsetY)>();
-            foreach (var (name, rect) in presetParts(frame.Width, frame.Height))
+            var rois = new List<(string roiName, List<string> lines, List<RectangleF> bounds, double offsetX, double offsetY)>();
+            var sceneId = SceneEnglishId(_activeScene, _activeRace);
+            foreach (var (roiName, rect) in presetParts(frame.Width, frame.Height))
             {
                 Rectangle px = rect.ToPixels(frame.Width, frame.Height);
                 if (px.Width <= 0 || px.Height <= 0) continue;
                 using var sub = new SKBitmap(px.Width, px.Height);
                 if (!frame.ExtractSubset(sub, new SKRectI(px.Left, px.Top, px.Right, px.Bottom)))
                 {
-                    _log.Warn($"[{name}] 裁剪失败 rect={px}");
+                    _log.Warn($"[ocr][{SceneEnglishId(_activeScene, _activeRace)}] {roiName} 裁剪失败 rect={px}");
                     continue;
                 }
                 var res = await _ocr.RecognizeAsync(sub);
@@ -705,39 +728,38 @@ public sealed class TranslationEngine : IDisposable
                 var bounds = new List<RectangleF>();
                 foreach (var line in res.Lines)
                 {
-                    _log.Debug($"[{name}] \"{line.Text}\" bounds={line.Bounds} conf={line.Confidence:F2}");
+                    var fBounds = new RectangleF(line.Bounds.X + px.Left, line.Bounds.Y + px.Top, line.Bounds.Width, line.Bounds.Height);
+                    _log.Debug($"[ocr][values][{sceneId}] {roiName} {RectStr(fBounds)} \"{line.Text}\", conf={line.Confidence:F2}");
                     if (line.Confidence < MinLineConfidence)
                     {
-                        _log.Debug($"[{name}][skip-low-conf] \"{line.Text}\" conf={line.Confidence:F2}");
+                        _log.Debug($"[ocr][skip-low-conf][{sceneId}] {roiName} \"{line.Text}\", conf={line.Confidence:F2}");
                         continue;
                     }
                     // 内容闸门：无韩文的行（地图名、"Top vs Bottom"、表头…）根本不进翻译管线。
                     // 提示词要求"纯英文/数字/符号原样保留"，送过去只会拿回同样的英文 → 白花 API 且悬浮层显示一堆英文。
                     if (!KoreanText.ContainsHangul(line.Text))
                     {
-                        _log.Debug($"[{name}][skip-无韩文] \"{line.Text}\"");
+                        _log.Debug($"[ocr][skip-non][{sceneId}] {roiName} non-korean \"{line.Text}\"");
                         continue;
                     }
-                    bounds.Add(new RectangleF(
-                        line.Bounds.X + px.Left, line.Bounds.Y + px.Top,
-                        line.Bounds.Width, line.Bounds.Height));
+                    bounds.Add(fBounds);
                     lines.Add(line.Text);
                 }
                 if (res.Lines.Count == 0)
-                    _log.Debug($"[{name}] (空)");
+                    _log.Debug($"[ocr][empty][{sceneId}] {roiName} ocr NULL");
                 // 两帧共识：背景噪音一帧就过去，聊天文字持续在屏——只有连续两帧同文本的行才进下游。
                 var (stableLines, stableBounds) = _stabilizer.Stabilize(rois.Count, lines, bounds);
                 if (stableLines.Count != lines.Count)
-                    _log.Debug($"[{name}][stable] OCR={lines.Count} 稳定={stableLines.Count}");
-                rois.Add((name, stableLines, stableBounds, rect.OffsetX, rect.OffsetY));
+                    _log.Debug($"[ocr][stabilized][{sceneId}] {roiName} ocr-lines={lines.Count}, stable-lines={stableLines.Count}");
+                rois.Add((roiName, stableLines, stableBounds, rect.OffsetX, rect.OffsetY));
             }
             // 调试面板逐行显示"被选用"的识别区域：本帧实际进 OCR 的有效列表。
-            _lastEffectiveRoiNames = rois.Select(r => r.name).ToArray();
+            _lastEffectiveRoiNames = rois.Select(r => r.roiName).ToArray();
 
             // ── ROI 集变化（换场景/分辨率/增删）→ 清空 per-ROI 状态与悬浮层，全量重译 ──
             // ShowLines 是全量替换，所以未变化的 ROI 必须靠 _displayedPerRoi 里存的上次显示行来合并，
             // 否则这一帧没翻的 ROI 会从悬浮层上消失。
-            var sig = string.Join("|", rois.Select(r => r.name));
+            var sig = string.Join("|", rois.Select(r => r.roiName));
             if (sig != _roiSetSignature)
             {
                 _roiSetSignature = sig;
@@ -762,17 +784,10 @@ public sealed class TranslationEngine : IDisposable
                 string last = _lastJoinedPerRoi.TryGetValue(r, out var l) ? l : "";
                 if (!TextsSimilar(joined, last)) toTranslate.Add(r);
             }
-            // [diag] 变化检测诊断：每帧打印"被判变化"的 ROI 数与新旧文本。
-            // 若每周期 变化>0 且新旧文本几乎相同 → OCR 抖动每拍被当"真变化"（闪烁+白译根因）；
-            // 若文本稳定却仍被判变 → TextsSimilar/稳定器有 bug。跑一段后把这段日志发我即可定位。
+            // 变化检测：仅在真有变化时记录（稳态 changed=0 不打，避免刷屏）。
+            // rois=ROI 总数，changed=被判变化的数，changed-rois=变化 ROI 的名字列表。
             if (toTranslate.Count > 0)
-                foreach (int r in toTranslate)
-                {
-                    string oldT = _lastJoinedPerRoi.TryGetValue(r, out string o) ? o : "";
-                    string newT = string.Join(" ", rois[r].lines);
-                    _log.Debug($"[diag][change] [{rois[r].name}] 旧=\"{oldT}\" → 新=\"{newT}\"");
-                }
-            _log.Debug($"[diag][change] 变化={toTranslate.Count}/{rois.Count}");
+                _log.Debug($"[capture][changed][{sceneId}] rois={rois.Count}, changed={toTranslate.Count}, changed-rois=[{string.Join(", ", toTranslate.Select(r => rois[r].roiName))}]");
             if (toTranslate.Count == 0) return; // 所有 ROI 都没变 → 整帧跳过（finally 仍会 Dispose/复位 _busy）
 
             // ── 变化的 ROI 先隐藏旧译文（露出原始内容，避免旧译占位挡住观看），译完再显示新译文 ──
@@ -791,7 +806,7 @@ public sealed class TranslationEngine : IDisposable
                 for (int i = 0; i < rois[r].lines.Count; i++)
                 {
                     koLines.Add(rois[r].lines[i]);
-                    metas.Add((rois[r].bounds[i], rois[r].name, r, rois[r].offsetX, rois[r].offsetY));
+                    metas.Add((rois[r].bounds[i], rois[r].roiName, r, rois[r].offsetX, rois[r].offsetY));
                 }
             }
 
@@ -810,10 +825,11 @@ public sealed class TranslationEngine : IDisposable
 
             // ── 上屏：变化的 ROI 重算 items；未变化的 ROI 沿用上次显示的行；合并后整窗摆放 ──
             var itemsPerRoi = new Dictionary<int, List<OverlayItem>>();
+            var provider = _orchestrator.Providers.FirstOrDefault()?.Name ?? "none"; // 池首 provider（内/外单选，池里就它一个）
             for (int k = 0; k < koLines.Count; k++)
             {
                 string zh = outcome.Texts[k];
-                _log.Debug($"[{metas[k].roiName}][{k}] \"{koLines[k]}\" → \"{zh}\" {sw.ElapsedMilliseconds}ms");
+                _log.Debug($"[translate][{sceneId}] {metas[k].roiName} [provider={provider}] {RectStr(metas[k].frameBounds)}, {sw.ElapsedMilliseconds}ms, {koLines[k]}→{zh}");
                 // **原文照抄的行不上屏**：provider 失败/超时时编排会回落原文，
                 // 把它当译文显示出去，用户看到的就是"识别到韩文却没翻译"，比什么都不显示更误导。
                 if (zh == koLines[k]) continue;
@@ -841,16 +857,16 @@ public sealed class TranslationEngine : IDisposable
                 foreach (var m in metas)
                     _cumTranslated.AddOrUpdate(m.roiName, 1L, (_, v) => v + 1);
             }
-            _log.Debug($"[probe] 上屏完成 rois={rois.Count} 变化={toTranslate.Count} lines={koLines.Count} 显示={allItems.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
+            _log.Debug($"[app][probe] 上屏完成 rois={rois.Count} 变化={toTranslate.Count} lines={koLines.Count} 显示={allItems.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
 
             // 翻译失败：同一原因只记一次日志（否则每拍一条），原因变了再记。
             // 编排器 onError 已对"抛异常"的失败即时记 Error；这里补"被跳过/全不可用"这类没有异常、
             // 只回落原文的失败，让日志完整（异常类失败会同时出现在两处，可接受）。
             if (outcome.Error is not null && outcome.Error != _lastTranslateError)
-                _log.Warn($"[probe] 翻译未成：{outcome.Error}。请检查 配置→翻译 的密钥/登录/池顺序/启用项。");
+                _log.Warn($"[app][probe] 翻译未成：{outcome.Error}。请检查 配置→翻译 的密钥/登录/池顺序/启用项。");
             _lastTranslateError = outcome.Error;
         }
-        catch (Exception ex) { _log.Error($"[probe] 处理帧异常: {ex.Message}"); }
+        catch (Exception ex) { _log.Error($"[app][probe] 处理帧异常: {ex.Message}"); }
         finally { Interlocked.Increment(ref _processed); frame.Dispose(); Interlocked.Exchange(ref _busy, 0); }
     }
 

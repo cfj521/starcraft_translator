@@ -225,6 +225,23 @@ public class ProvidersTests
     }
 
     [Fact]
+    public void KoreanOnlyProtector_ParseAndRestore_InstructionEcho_FallsBackToOriginal()
+    {
+        // 房间名含英文+符号：MAP핵+… → 保护成 ⟨0⟩핵⟨1⟩…（MAP→⟨0⟩、+→⟨1⟩）。
+        var original = new[] { "MAP핵+다기능문의는맵이름" };
+        var (protectedLines, tokens) = KoreanOnlyProtector.Protect(original);
+        Assert.Contains("⟨0⟩", protectedLines[0]);
+        Assert.Contains("⟨1⟩", protectedLines[0]);
+        // 模型没翻译韩文，而是把占位符指令（"行内的 ⟨N⟩ 是占位符…请原样保留，不要翻译或修改"）改述一遍当"译文"输出：
+        var echoReply = "[1] 诸如⟨0⟩和⟨1⟩这样的标记是英语单词、数字和标点符号的占位符；请保持它们原样，不要进行翻译或修改。";
+        var echoed = KoreanOnlyProtector.ParseAndRestore(echoReply, original, protectedLines, tokens);
+        // 检出指令回声 → 回退原文的**新字符串**（值相等、引用不等 → 编排器判 Resolved、缓存原文、不再每拍重试），
+        // 而不是回填后的指令回声（"诸如MAP和+…占位符…"）被当译文显示出去。
+        Assert.Equal(original[0], echoed![0]);
+        Assert.NotSame(original[0], echoed![0]);
+    }
+
+    [Fact]
     public void HyMt2_EmptyPath_IsNoCreds()
     {
         var p = new HyMt2Provider(() => "", () => "cpu");

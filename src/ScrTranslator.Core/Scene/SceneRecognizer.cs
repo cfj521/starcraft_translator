@@ -27,8 +27,8 @@ public sealed record SceneRecognition(
     double RunnerUpRatio,
     IReadOnlyList<SceneScore> Scores,
     string? Detail,
-    /// <summary>全部候选的缩放区域（帧像素坐标，Ref→regions）——DEBUG 按当前活动场景画指纹框用；无参考/未识别时为空。</summary>
-    IReadOnlyList<(SceneReference Ref, IReadOnlyList<SceneRefRegion> Regions)> CandidateRegions)
+    /// <summary>命中率最高那条参考的缩放区域（帧像素坐标）——DEBUG 画指纹框用；无参考/未识别时为空。</summary>
+    IReadOnlyList<SceneRefRegion> WinnerRegions)
 {
     public bool IsMatched => Status == SceneMatchStatus.Matched;
     /// <summary>面板/日志用的一行摘要。</summary>
@@ -67,7 +67,7 @@ public sealed class SceneRecognizer
         if (_store.References.Count == 0)
             return new SceneRecognition(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
                 GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), _store.LoadError ?? "无参考",
-                Array.Empty<(SceneReference, IReadOnlyList<SceneRefRegion>)>());
+                Array.Empty<SceneRefRegion>());
 
         // 方案 B：所有参考只存 1080p 一档。把 1080p 基准区域按统一高度因子 H/1080 缩放到当前帧，
         // 块数固定（= 1080p 那套），实时指纹长度恒等于出厂参考，直接比对。
@@ -87,7 +87,7 @@ public sealed class SceneRecognizer
             var have = string.Join(",", _store.References.SelectMany(r => r.AvailableResolutions).Distinct().OrderBy(x => x));
             return new SceneRecognition(SceneMatchStatus.NoReferenceForResolution, GameScene.Unknown, null, null,
                 GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), $"{frame.Width}x{frame.Height}（已收录 {have}）",
-                Array.Empty<(SceneReference, IReadOnlyList<SceneRefRegion>)>());
+                Array.Empty<SceneRefRegion>());
         }
 
         // 区域几何完全相同的候选（如 ingame_t/p/z 共用 race-hud）共用同一份实时指纹，只算一次。
@@ -108,19 +108,20 @@ public sealed class SceneRecognizer
 
         var ranked = scores.OrderByDescending(s => s.HitRatio).ToList();
         double best = ranked[0].HitRatio, second = ranked.Count > 1 ? ranked[1].HitRatio : 0;
-        // 全部候选的缩放区域（帧像素坐标，和指纹计算用同一套 centerCrop+FittingRegions）：
-        // DEBUG 画当前活动场景指纹框用——框坐标天然和裁剪/缩放一致。
-        var candidateRegions = candidates.Select(c => (c.Ref, c.Scaled)).ToList();
+        // 最高命中那条参考的缩放区域（帧像素坐标，和指纹计算用同一套 centerCrop+FittingRegions）：
+        // DEBUG 画指纹框用——框坐标天然和裁剪/缩放一致。
+        var winnerRegions = candidates.FirstOrDefault(c => c.Ref.Id == ranked[0].RefId).Scaled
+            ?? Array.Empty<SceneRefRegion>();
 
         if (best < _store.MinHitRatio)
             return new SceneRecognition(SceneMatchStatus.BelowThreshold, GameScene.Other, ranked[0].RefId,
                 ranked[0].Label, GameRace.Unknown, best, second, ranked,
-                $"阈值 {_store.MinHitRatio:P0}", candidateRegions);
+                $"阈值 {_store.MinHitRatio:P0}", winnerRegions);
 
         var winner = ranked[0];
         var race = _store.Find(winner.RefId)?.Race ?? GameRace.Unknown;
         return new SceneRecognition(SceneMatchStatus.Matched, winner.Scene, winner.RefId, winner.Label,
-            race, best, second, ranked, null, candidateRegions);
+            race, best, second, ranked, null, winnerRegions);
     }
 
     /// <summary>区域几何指纹（用于共享实时指纹）：只看 rect/blockPx/blocks，不看像素内容。</summary>

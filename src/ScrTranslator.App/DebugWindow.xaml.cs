@@ -19,6 +19,7 @@ public partial class DebugWindow : Window
         // 9×7cm：WPF DIP 定义 1/96 英寸，cm/2.54*96 得逻辑尺寸。
         Width = 9.0 / 2.54 * 96;   // ≈340 DIP
         Height = 7.0 / 2.54 * 96;  // ≈265 DIP
+        Top = 0.1 * SystemParameters.PrimaryScreenHeight; // 距屏幕顶 10%（原 Top=0，下移 0.1）
         Visibility = Visibility.Hidden;
         SourceInitialized += OnSourceInitialized;
     }

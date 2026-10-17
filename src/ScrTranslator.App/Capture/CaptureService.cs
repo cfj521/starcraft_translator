@@ -164,11 +164,11 @@ public sealed class CaptureService : IDisposable
         _isRestarting = true;
         try
         {
-            LogDebug?.Invoke($"[capture] 窗口尺寸 {w}x{h} ≠ 捕获基准 {_captureSize.W}x{_captureSize.H}，重建捕获会话以刷新分辨率");
+            LogDebug?.Invoke($"[capture][resize] 窗口尺寸 {w}x{h} ≠ 捕获基准 {_captureSize.W}x{_captureSize.H}，重建捕获会话以刷新分辨率");
             Stop();
             Start(hwnd);
         }
-        catch (Exception ex) { LogError?.Invoke($"[capture] 尺寸变化重建失败: {ex.Message}"); }
+        catch (Exception ex) { LogError?.Invoke($"[capture][resize] 尺寸变化重建失败: {ex.Message}"); }
         finally { _isRestarting = false; }
     }
 
@@ -216,7 +216,7 @@ public sealed class CaptureService : IDisposable
                 frame.Surface, BitmapAlphaMode.Premultiplied);
             var sk = ToSkBitmap(sbmp);
             // 帧流统计（诊断级，每 200 投递帧一条，含尺寸，避免 4K 高频刷屏）。
-            if (n % 200 == 0) LogDebug?.Invoke($"[cap] 已投递 {n} 帧 当前 {sk.Width}x{sk.Height}");
+            if (n % 200 == 0) LogDebug?.Invoke($"[capture][count] 已投递={n}");
             FrameArrived?.Invoke(sk);
         }
         catch (Exception ex)
@@ -224,7 +224,7 @@ public sealed class CaptureService : IDisposable
             // 每 100 次报一条，防 4K 高频刷屏；首条必报——"零帧到达"多半死在这里。
             errNo = (int)Interlocked.Increment(ref _convErrors);
             if (errNo <= 3 || errNo % 100 == 0)
-                LogError?.Invoke($"[capture] 帧转换异常 #{errNo}: {ex.Message}");
+                LogError?.Invoke($"[capture][exception] #{errNo}: {ex.Message}");
         }
     }
     private long _convErrors;

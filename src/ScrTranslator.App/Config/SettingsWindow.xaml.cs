@@ -147,7 +147,7 @@ public partial class SettingsWindow : Window
         _log = log;
         _openCalibration = openCalibration;
         _hyMt2 = hyMt2;
-        _log.Log("[settings] 配置窗口打开");
+        _log.Log("[app][settings] 配置窗口打开");
         _onStateChanged = onStateChanged;
         _onRoisChanged = onRoisChanged;
         _layoutFactoryPath = Path.Combine(AppContext.BaseDirectory, LayoutPresetStore.DefaultFileName);
@@ -189,7 +189,7 @@ public partial class SettingsWindow : Window
     // 这里兜底注销，避免 handler 残留、_recordingFunc 悬空。
     private void OnWindowClosed(object? sender, EventArgs e)
     {
-        _log.Log("[settings] 配置窗口关闭");
+        _log.Log("[app][settings] 配置窗口关闭");
         _log.LogWritten -= OnLogWritten; // 窗口关了不再追加快照，避免 handler 悬空
         _regionTabTimer?.Stop(); // 停区域 tab 可见性同步定时器
         if (_recordingFunc is null) return;
@@ -261,11 +261,11 @@ public partial class SettingsWindow : Window
             foreach (var item in LogListBox.Items)
                 lines.Add(item?.ToString() ?? "");
             File.WriteAllLines(dlg.FileName, lines);
-            _log.Log($"[settings] 日志已导出到 {dlg.FileName}（{lines.Count} 行）");
+            _log.Log($"[app][settings] 日志已导出到 {dlg.FileName}（{lines.Count} 行）");
         }
         catch (Exception ex)
         {
-            _log.Error($"[settings] 导出日志失败: {ex.Message}");
+            _log.Error($"[app][settings] 导出日志失败: {ex.Message}");
             MessageBox.Show(this, $"导出日志失败：{ex.Message}", "导出日志", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -361,7 +361,7 @@ public partial class SettingsWindow : Window
         ExternalGroupRadio.IsChecked = t.SelectedGroup == TranslationGroup.External;
         ApplyGroupSelection(); // 未选中组的列表禁用（置灰、不可交互）
         // 诊断级：池顺序+启用态是"翻译取哪个 provider"的直接依据，只在 DEBUG 模式记（加载/重绑/恢复默认都会触发，业务级会刷屏）
-        _log.Debug($"[settings] 加载 provider 池（选中组＝{(t.SelectedGroup == TranslationGroup.Internal ? "内部" : "外部")}）：{string.Join(" → ", AllRows.Select(r => $"{r.Name}({(r.Enabled ? "启用" : "停用")})"))}");
+        _log.Debug($"[app][settings] 加载 provider 池（选中组＝{(t.SelectedGroup == TranslationGroup.Internal ? "内部" : "外部")}）：{string.Join(" → ", AllRows.Select(r => $"{r.Name}({(r.Enabled ? "启用" : "停用")})"))}");
         RefreshProviderStatuses();
     }
 
@@ -663,10 +663,10 @@ public partial class SettingsWindow : Window
     {
         if (sender is not Button btn || btn.Tag is not string id)
         {
-            _log.Log($"[settings] 配置按钮点击但未识别：sender 类型={sender?.GetType().Name}");
+            _log.Log($"[app][settings] 配置按钮点击但未识别：sender 类型={sender?.GetType().Name}");
             return;
         }
-        _log.Log($"[settings] 点「配置」按钮 provider={id}");
+        _log.Log($"[app][settings] 点「配置」按钮 provider={id}");
         switch (id)
         {
             case TranslationProviderEntry.HyMt2:
@@ -696,7 +696,7 @@ public partial class SettingsWindow : Window
     private void LogKeyDialogResult(string provider, bool? dialogResult)
     {
         string result = dialogResult == true ? "已保存" : dialogResult == false ? "已取消" : "X关闭";
-        _log.Log($"[settings] {provider} 密钥窗关闭：{result}");
+        _log.Log($"[app][settings] {provider} 密钥窗关闭：{result}");
     }
 
     /// <summary>ChatGPT 订阅登录（浏览器 PKCE 授权）。成功则让静止画面立即用登录态重译。
@@ -712,24 +712,24 @@ public partial class SettingsWindow : Window
             var result = await _oauth.LoginAsync(cts.Token);
             if (result == LoginResult.Success)
             {
-                _log.Log("[settings] ChatGPT 登录成功");
+                _log.Log("[app][settings] ChatGPT 登录成功");
                 _onStateChanged?.Invoke(); // 登录成功后让静止画面立即用登录态重译
                 return true;
             }
             if (result == LoginResult.Cancelled)
             {
                 // 等待 1 分钟内未收到浏览器回调（关页/未完成，二者无法区分）。不弹框，只记详细日志指引重试。
-                _log.Log("[settings] ChatGPT 登录未完成：等待 1 分钟内未收到浏览器回调（用户可能关闭了授权页，或未在时限内完成授权）。如需登录，重新点「订阅登录」会再次打开授权页。");
+                _log.Log("[app][settings] ChatGPT 登录未完成：等待 1 分钟内未收到浏览器回调（用户可能关闭了授权页，或未在时限内完成授权）。如需登录，重新点「订阅登录」会再次打开授权页。");
                 return false;
             }
-            _log.Log("[settings] ChatGPT 登录失败（可能：端口 1455 被占用、网络问题，或授权页被拒）");
+            _log.Log("[app][settings] ChatGPT 登录失败（可能：端口 1455 被占用、网络问题，或授权页被拒）");
             MessageBox.Show(this, "ChatGPT 登录失败（可能：端口 1455 被占用、网络问题，或授权页被拒）。请重试；详情见日志。",
                 "登录失败", MessageBoxButton.OK, MessageBoxImage.Warning);
             return false;
         }
         catch (Exception ex)
         {
-            _log.Error($"[settings] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
+            _log.Error($"[app][settings] ChatGPT 登录异常: {ex.GetType().Name}: {ex.Message}");
             MessageBox.Show(this, $"ChatGPT 登录出错：{ex.Message}", "登录失败", MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
@@ -779,7 +779,7 @@ public partial class SettingsWindow : Window
     {
         e.Handled = true;
         // 诊断级：拖拽排序改变 provider 优先级，只在 DEBUG 模式记（拖拽过程会高频触发 DragOver，业务级会刷屏）
-        _log.Debug($"[settings] provider 顺序已调整：{string.Join(" → ", AllRows.Select(r => r.Name))}");
+        _log.Debug($"[app][settings] provider 顺序已调整：{string.Join(" → ", AllRows.Select(r => r.Name))}");
     }
 
     /// <summary>从光标下的最深元素沿视觉树往上找最近的 ListViewItem。</summary>
@@ -802,7 +802,7 @@ public partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            _log.Log($"[settings] 打开术语表失败: {ex.Message}");
+            _log.Log($"[app][settings] 打开术语表失败: {ex.Message}");
             MessageBox.Show(this, $"无法打开术语表文件：{path}\n{ex.Message}", "术语表", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -816,7 +816,7 @@ public partial class SettingsWindow : Window
 
     private void OnEnterCalibrationClick(object sender, RoutedEventArgs e)
     {
-        _log.Log("[settings] 进入区域校准");
+        _log.Log("[app][settings] 进入区域校准");
         _openCalibration(); // 具体能否校准/结果由 App 的 OpenCalibration 记日志
     }
 
@@ -880,7 +880,7 @@ public partial class SettingsWindow : Window
 
         _holder.Current = _holder.Current with { Hotkeys = prospective };
         SaveHotkeys();
-        _log.Log($"[settings] 热键已重绑：{FuncLabel(func)} = {FormatHotkey(binding)}");
+        _log.Log($"[app][settings] 热键已重绑：{FuncLabel(func)} = {FormatHotkey(binding)}");
         StopRecording();
     }
 
@@ -910,7 +910,7 @@ public partial class SettingsWindow : Window
         _holder.Current = _holder.Current with { Hotkeys = HotkeyDefaults.Map };
         SaveHotkeys();
         LoadHotkeyList(_holder.Current.Hotkeys);
-        _log.Log("[settings] 热键已恢复默认");
+        _log.Log("[app][settings] 热键已恢复默认");
     }
 
     private void SaveHotkeys()
@@ -918,7 +918,7 @@ public partial class SettingsWindow : Window
         try { SettingsStore.Save(_holder.Current, _settingsPath); }
         catch (Exception ex)
         {
-            _log.Error($"[settings] 保存热键失败: {ex.Message}");
+            _log.Error($"[app][settings] 保存热键失败: {ex.Message}");
             MessageBox.Show(this, $"保存热键失败：{ex.Message}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -1043,7 +1043,7 @@ public partial class SettingsWindow : Window
     /// 热键即时重绑、区域即时落盘（二者本就不经确定/取消）。</summary>
     private void RestorePageDefaults(string page)
     {
-        _log.Log($"[settings] 恢复「{page}」页默认值");
+        _log.Log($"[app][settings] 恢复「{page}」页默认值");
         var d = new AppSettings(); // 全部默认值
         switch (page)
         {
@@ -1099,11 +1099,11 @@ public partial class SettingsWindow : Window
         try
         {
             SettingsStore.Save(settings, _settingsPath);
-            _log.Log("[settings] 设置已保存（settings.json）");
+            _log.Log("[app][settings] 设置已保存（settings.json）");
         }
         catch (Exception ex)
         {
-            _log.Error($"[settings] 保存 settings.json 失败: {ex.Message}");
+            _log.Error($"[app][settings] 保存 settings.json 失败: {ex.Message}");
             MessageBox.Show(this, $"保存设置失败：{ex.Message}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         // 本地 Hy-MT2 延迟加载/卸载：只在「确定保存」时执行（radio 切换 ApplyGroupSelection 不动模型）。
@@ -1113,18 +1113,18 @@ public partial class SettingsWindow : Window
             if (settings.Translation.SelectedGroup == TranslationGroup.Internal)
             {
                 _hyMt2.Load();
-                _log.Log("[settings] 已选中内部组，Hy-MT2 后台冷加载中");
+                _log.Log("[app][settings] 已选中内部组，Hy-MT2 后台冷加载中");
             }
             else
             {
                 _hyMt2.Unload();
-                _log.Log("[settings] 已选中外部组，Hy-MT2 已卸载");
+                _log.Log("[app][settings] 已选中外部组，Hy-MT2 已卸载");
             }
         }
         // 开机自启接线 HKCU Run 键（5-4）：失败不影响其他设置，单独提示。
         if (!Services.AutoStartService.Apply(settings.General.AutoStart, Environment.ProcessPath, out var autoStartErr))
         {
-            _log.Log($"[settings] 开机自启应用失败: {autoStartErr}");
+            _log.Log($"[app][settings] 开机自启应用失败: {autoStartErr}");
             MessageBox.Show(this, $"开机自启设置应用失败：{autoStartErr}", "配置", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         _onStateChanged?.Invoke(); // 复位变化检测，让静止画面立即按新设置重译
