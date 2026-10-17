@@ -23,21 +23,33 @@ internal static class SceneRefJson
         (string id, string gameScene, string? race, byte[] data)[] scenes,
         int tolerance = 16, double minHit = 0.9, int version = 1, bool withIntegrity = true)
     {
-        var parts = scenes.GroupBy(s => s.id).Select(g =>
+        // 新格式：scenes 以 gameScene 为识别键（browsing/room/ingame）；race 挪进 data 条目。
+        // 按 gameScene 分组，同场景的多种族各占一条 data 条目。
+        var parts = scenes.GroupBy(s => s.gameScene).Select(g =>
         {
-            var first = g.First();
-            var race = first.race is null ? "" : $"\"race\": \"{first.race}\", ";
+            var gameScene = g.Key;
+            var dataEntries = g.Select(s =>
+            {
+                var race = s.race is null ? "" : $"\"race\": \"{s.race}\", ";
+                return $$"""
+                         { "gameScene": "{{gameScene}}", {{race}}"ratio": "{{ResKey}}",
+                           "source_file": "test", "blockPx": 4, "blocks": [2,2],
+                           "data": "{{Convert.ToBase64String(s.data)}}" }
+                         """;
+            });
             return $$"""
-                     "{{g.Key}}": { "label": "{{g.Key}}", {{race}}"gameScene": "{{first.gameScene}}",
-                       "resolutions": { "{{ResKey}}": { "source": "test", "regions": [
-                         { "name": "r", "rect": {{RelRect}}, "blockPx": 4, "blocks": [2,2],
-                           "data": "{{Convert.ToBase64String(first.data)}}" } ] } } }
-                """;
+                     "{{gameScene}}": { "label": "{{gameScene}}", "gameScene": "{{gameScene}}",
+                       "regions": { "name": "r", "rect": {{RelRect}} },
+                       "data": [ {{string.Join(",", dataEntries)}} ] }
+                     """;
         });
         // 出厂层现在强制要求 integrity，所以测试样本也得走同一套哈希实现。
-        var entries = scenes.Select(s => new SceneRefIntegrity.Entry(
-            SceneRefIntegrity.Key(s.id, ResKey, "r"),
-            SceneRefIntegrity.Geometry(0, 0, RelW, RelH, 4, 2, 2), s.data)).ToList();
+        // 口径必须与 ParseReference 一致：未知 gameScene 的条目会被 ParseReference 跳过、不产生 entries，
+        // 哈希里也不该有它——否则 declared 覆盖 2 条、computed 只有 1 条，整份被拒。
+        var entries = scenes.Where(s => GameSceneIds.FromId(s.gameScene) != GameScene.Unknown)
+            .Select(s => new SceneRefIntegrity.Entry(
+                SceneRefIntegrity.Key(s.id, ResKey, "r"),
+                SceneRefIntegrity.Geometry(0, 0, RelW, RelH, 4, 2, 2), s.data)).ToList();
         var integrity = withIntegrity
             ? $$"""
                   "integrity": { "algorithm": "sha256", "bytes": {{SceneRefIntegrity.DataBytes(entries)}},

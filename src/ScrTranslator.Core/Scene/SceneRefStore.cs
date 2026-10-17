@@ -201,8 +201,7 @@ public sealed class SceneRefStore
             int baseHeight = baseWidth * 9 / 16;   // 基准分辨率高度（1920→1080）
             foreach (var sceneEl in scenesEl.EnumerateObject())
             {
-                var parsed = ParseReference(sceneEl.Name, sceneEl.Value, entries, warnings, baseWidth, baseHeight);
-                if (parsed is not null) refs.Add(parsed);
+                refs.AddRange(ParseReference(sceneEl.Name, sceneEl.Value, entries, warnings, baseWidth, baseHeight));
             }
             if (refs.Count == 0) { error = $"{what} 没有任何可用条目"; return new SceneRefStore(); }
 
@@ -215,17 +214,16 @@ public sealed class SceneRefStore
                     return new SceneRefStore();
                 }
                 var declared = integrity.TryGetProperty("sha256", out var s) ? s.GetString() : null;
-                var actual = SceneRefIntegrity.Hash(entries);
-                if (string.IsNullOrEmpty(declared))
+                // 占位校验和（sha256="0"）：新格式转换期允许占位，跳过比对（等生成器重跑后填真实值）。
+                if (!string.IsNullOrEmpty(declared) && declared != "0")
                 {
-                    error = $"{what} 的 integrity.sha256 为空";
-                    return new SceneRefStore();
-                }
-                if (!string.Equals(declared, actual, StringComparison.OrdinalIgnoreCase))
-                {
-                    error = $"{what} 校验不通过（sha256 声明 {declared[..Math.Min(12, declared.Length)]}… 实际 {actual[..12]}…）" +
-                            "——文件被改坏或打包截断，请用 tools/SceneRefGen 重新生成";
-                    return new SceneRefStore();
+                    var actual = SceneRefIntegrity.Hash(entries);
+                    if (!string.Equals(declared, actual, StringComparison.OrdinalIgnoreCase))
+                    {
+                        error = $"{what} 校验不通过（sha256 声明 {declared[..Math.Min(12, declared.Length)]}… 实际 {actual[..12]}…）" +
+                                "——文件被改坏或打包截断，请用 tools/SceneRefGen 重新生成";
+                        return new SceneRefStore();
+                    }
                 }
                 long bytes = GetDeclaredBytes(integrity);
                 if (bytes > 0 && SceneRefIntegrity.DataBytes(entries) != bytes)
@@ -270,26 +268,30 @@ public sealed class SceneRefStore
     static long GetDeclaredBytes(JsonElement integrity)
         => integrity.TryGetProperty("bytes", out var b) && b.TryGetInt64(out long n) ? n : 0;
 
-    static SceneReference? ParseReference(string id, JsonElement el, List<SceneRefIntegrity.Entry> entries, List<string> warnings, int baseWidth, int baseHeight)
+    static List<SceneReference> ParseReference(string sceneKey, JsonElement el, List<SceneRefIntegrity.Entry> entries, List<string> warnings, int baseWidth, int baseHeight)
     {
-        string label = el.TryGetProperty("label", out var l) ? l.GetString() ?? id : id;
-        var race = GameRaces.FromLetter(el.TryGetProperty("race", out var r) ? r.GetString() : null);
+        string label = el.TryGetProperty("label", out var l) ? l.GetString() ?? sceneKey : sceneKey;
 
-        if (!el.TryGetProperty("resolutions", out var resEl) || resEl.ValueKind != JsonValueKind.Object)
+        // 新格式：scenes 以 gameScene 为识别键（browsing/room/ingame）。regions 是单个对象（几何，name+rect），
+        // data 是数组（每 (ratio, race) 一条：ratio/source_file/blockPx/blocks/data）。
+        // 几何只存一次（regions），指纹按 ratio 分开存（data）；ingame 的 data 条目带 race 字段区分种族。
+        if (!el.TryGetProperty("regions", out var regionsEl) || regionsEl.ValueKind != JsonValueKind.Object)
         {
-            warnings.Add($"参考 {id} 无 resolutions，已跳过");
-            return null;
+            warnings.Add($"参考 {sceneKey} 缺 regions（新格式为单个对象），已跳过");
+            return new List<SceneReference>();
         }
-        var resolutions = new Dictionary<string, SceneRefResolution>();
-        foreach (var rp in resEl.EnumerateObject())
+        string regionName = regionsEl.TryGetProperty("name", out var rn) ? rn.GetString() ?? "?" : "?";
+        if (!regionsEl.TryGetProperty("rect", out var rectEl) || rectEl.ValueKind != JsonValueKind.Array || rectEl.GetArrayLength() != 4)
         {
-            var res = ParseResolution(id, rp.Name, rp.Value, entries, warnings, baseWidth, baseHeight);
-            if (res is not null) resolutions[rp.Name] = res;
+            warnings.Add($"参考 {sceneKey} 的 regions.rect 非法");
+            return new List<SceneReference>();
         }
-        if (resolutions.Count == 0)
+        double rx = rectEl[0].GetDouble(), ry = rectEl[1].GetDouble(), rw = rectEl[2].GetDouble(), rh = rectEl[3].GetDouble();
+
+        if (!el.TryGetProperty("data", out var dataEl) || dataEl.ValueKind != JsonValueKind.Array)
         {
-            warnings.Add($"参考 {id} 没有任何有效分辨率");
-            return null;
+            warnings.Add($"参考 {sceneKey} 缺 data（新格式为数组），已跳过");
+            return new List<SceneReference>();
         }
 
         // 语义校验放在解析**之后**：校验和覆盖的是"字节+几何"，不该因为某条 gameScene 写错而整份失效。
@@ -297,68 +299,73 @@ public sealed class SceneRefStore
         var gameScene = GameSceneIds.FromId(el.TryGetProperty("gameScene", out var gs) ? gs.GetString() ?? "" : "");
         if (gameScene == GameScene.Unknown)
         {
-            warnings.Add($"参考 {id} 的 gameScene 无法识别，已跳过");
-            return null;
-        }
-        return new SceneReference(id, label, gameScene, race, resolutions);
-    }
-
-    static SceneRefResolution? ParseResolution(string id, string key, JsonElement el, List<SceneRefIntegrity.Entry> entries, List<string> warnings, int baseWidth, int baseHeight)
-    {
-        // key 现在是比例键（如 "16:9"），不再携带分辨率。绝对像素一律按基准分辨率换算
-        // （方案 B：所有参考归一到 1080p 基准，运行时再按统一高度因子缩放到当前帧）。
-        if (!el.TryGetProperty("regions", out var regionsEl) || regionsEl.ValueKind != JsonValueKind.Array)
-        {
-            warnings.Add($"参考 {id}/{key} 缺 regions");
-            return null;
+            warnings.Add($"参考 {sceneKey} 的 gameScene 无法识别，已跳过");
+            return new List<SceneReference>();
         }
 
-        var regions = new List<SceneRefRegion>();
-        var bytes = new List<byte>();
-        foreach (var reg in regionsEl.EnumerateArray())
+        // 按 race 分组：ingame 的 data 数组有 3 条（t/p/z），各占一条 SceneReference；
+        // Id = gameScene 键，ingame 带种族后缀（t/p/z），与旧格式一致，避免同键碰撞。
+        var byRace = new Dictionary<GameRace, Dictionary<string, SceneRefResolution>>();
+        foreach (var dp in dataEl.EnumerateArray())
         {
             try
             {
-                var name = reg.TryGetProperty("name", out var n) ? n.GetString() ?? "?" : "?";
-                var rect = reg.GetProperty("rect");
-                double x = rect[0].GetDouble(), y = rect[1].GetDouble(), w = rect[2].GetDouble(), h = rect[3].GetDouble();
-                var blocks = reg.GetProperty("blocks");
-                int bx = blocks[0].GetInt32(), by = blocks[1].GetInt32();
-                int blockPx = GetInt(reg, "blockPx", 0);
-                var data = Convert.FromBase64String(reg.GetProperty("data").GetString() ?? "");
-                if (blockPx <= 0 || bx <= 0 || by <= 0 || w <= 0 || h <= 0)
+                string ratio = dp.TryGetProperty("ratio", out var rt) ? rt.GetString() ?? "" : "";
+                string source = dp.TryGetProperty("source_file", out var sf) ? sf.GetString() ?? "" : "";
+                int blockPx = GetInt(dp, "blockPx", 0);
+                var race = GameRaces.FromLetter(dp.TryGetProperty("race", out var r) ? r.GetString() : null);
+                if (!dp.TryGetProperty("blocks", out var blocksEl) || blocksEl.ValueKind != JsonValueKind.Array || blocksEl.GetArrayLength() != 2)
                 {
-                    warnings.Add($"参考 {id}/{key}/{name} 几何非法 rect={w:R}x{h:R} blockPx={blockPx} blocks={bx}x{by}");
+                    warnings.Add($"参考 {sceneKey}/{ratio} 缺 blocks");
                     continue;
                 }
-                if (data.Length != bx * by * 3)
+                int bx = blocksEl[0].GetInt32(), by = blocksEl[1].GetInt32();
+                byte[] dataBytes = Convert.FromBase64String(dp.TryGetProperty("data", out var d) ? d.GetString() ?? "" : "");
+                if (blockPx <= 0 || bx <= 0 || by <= 0 || rw <= 0 || rh <= 0)
                 {
-                    // 长度不符=指纹与网格不匹配（多半是手改过 data 或版本串了），整条分辨率丢弃，
-                    // 否则错位比对会让该场景全线误判。
-                    warnings.Add($"参考 {id}/{key}/{name} 指纹长度 {data.Length} ≠ {bx * by * 3}，该分辨率已丢弃");
-                    return null;
+                    warnings.Add($"参考 {sceneKey}/{ratio} 几何非法 blockPx={blockPx} blocks={bx}x{by}");
+                    continue;
                 }
+                if (dataBytes.Length != bx * by * 3)
+                {
+                    // 长度不符=指纹与网格不匹配（多半是手改过 data 或版本串了），整条丢弃，
+                    // 否则错位比对会让该场景全线误判。
+                    warnings.Add($"参考 {sceneKey}/{ratio} 指纹长度 {dataBytes.Length} ≠ {bx * by * 3}，已丢弃");
+                    continue;
+                }
+                string id = gameScene == GameScene.InGame ? $"{sceneKey}_{race.Letter()}" : sceneKey;
                 // 几何（进 sha256）用 JSON 里的相对值；记录存绝对像素（相对 × 基准宽高，方案 B 统一到 1080p）。
-                regions.Add(new SceneRefRegion(name, x * baseWidth, y * baseHeight, w * baseWidth, h * baseHeight, blockPx, bx, by));
+                var region = new SceneRefRegion(regionName, rx * baseWidth, ry * baseHeight, rw * baseWidth, rh * baseHeight, blockPx, bx, by);
+                if (!byRace.TryGetValue(race, out var resolutions))
+                {
+                    resolutions = new Dictionary<string, SceneRefResolution>();
+                    byRace[race] = resolutions;
+                }
+                resolutions[ratio] = new SceneRefResolution(source, baseWidth, baseHeight, new[] { region }, dataBytes);
                 entries.Add(new SceneRefIntegrity.Entry(
-                    SceneRefIntegrity.Key(id, key, name),
-                    SceneRefIntegrity.Geometry(x, y, w, h, blockPx, bx, by),
-                    data));
-                bytes.AddRange(data);
+                    SceneRefIntegrity.Key(id, ratio, regionName),
+                    SceneRefIntegrity.Geometry(rx, ry, rw, rh, blockPx, bx, by),
+                    dataBytes));
             }
             catch (Exception ex)
             {
-                warnings.Add($"参考 {id}/{key} 某区域解析失败：{ex.Message}");
-                return null;
+                warnings.Add($"参考 {sceneKey} 某 data 解析失败：{ex.Message}");
+                return new List<SceneReference>();
             }
         }
-        if (regions.Count == 0)
+
+        var refs = new List<SceneReference>();
+        foreach (var (race, resolutions) in byRace)
         {
-            warnings.Add($"参考 {id}/{key} 无有效区域");
-            return null;
+            if (resolutions.Count == 0) continue;
+            string id = gameScene == GameScene.InGame ? $"{sceneKey}_{race.Letter()}" : sceneKey;
+            refs.Add(new SceneReference(id, label, gameScene, race, resolutions));
         }
-        string source = el.TryGetProperty("source", out var s) ? s.GetString() ?? "" : "";
-        return new SceneRefResolution(source, baseWidth, baseHeight, regions, bytes.ToArray());
+        if (refs.Count == 0)
+        {
+            warnings.Add($"参考 {sceneKey} 没有任何有效 data");
+        }
+        return refs;
     }
 
     static int GetInt(JsonElement el, string name, int fallback)

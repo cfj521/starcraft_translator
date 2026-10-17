@@ -202,6 +202,7 @@ public sealed class HyMt2Provider : ITranslationProvider
         string text = model.Tokenizer.DecodeVisible(generated).Trim();
         if (text.Length == 0) return null; // 空生成＝真失败 → 原始引用，编排器判未翻成、下一拍重试
         if (text == protectedLine) return new string(line.ToCharArray()); // 回声＝专有名词故意保留 → 原文的新字符串（引用不等），编排器判 Resolved
+        if (KoreanOnlyProtector.IsInstructionEcho(text)) return new string(line.ToCharArray()); // 指令回声（模型把 PlaceholderHint 改述成中文当译文）→ 回退原文
         // 回填占位符；任一占位符丢失（模型改坏）→ 回退原文（返回 null，编排器回落原文）
         string? restored = KoreanOnlyProtector.Restore(text, tokens);
         if (restored is null) return null;

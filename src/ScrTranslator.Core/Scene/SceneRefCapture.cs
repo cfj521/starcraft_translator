@@ -80,30 +80,49 @@ public static class SceneRefCapture
             ? parsed : new JsonObject();
         if (!root.ContainsKey("version")) root["version"] = SceneRefStore.SupportedVersion;
 
+        // 新格式：scenes 以 gameScene 为识别键；race 挪进 data 条目。
         var scenes = GetOrCreate(root, "scenes");
-        var sceneNode = GetOrCreate(scenes, sceneId);
+        var sceneNode = GetOrCreate(scenes, gameScene);
         sceneNode["label"] = label;
         sceneNode["gameScene"] = gameScene;
-        if (race is not null) sceneNode["race"] = race; else sceneNode.Remove("race");
 
-        var resolutions = GetOrCreate(sceneNode, "resolutions");
+        // 几何只存一次（regions 单对象），取第一个区域的 name 与相对坐标。
+        if (!sceneNode.ContainsKey("regions"))
+        {
+            var reg0 = regions[0];
+            sceneNode["regions"] = new JsonObject
+            {
+                ["name"] = reg0.Name,
+                ["rect"] = new JsonArray(reg0.X / width, reg0.Y / height, reg0.Width / width, reg0.Height / height),
+            };
+        }
+
+        // data 是数组（每 (ratio, race) 一条）。同 (ratio, race) 覆盖，不同则追加。
+        var dataArr = sceneNode.ContainsKey("data") && sceneNode["data"] is JsonArray existingArr
+            ? existingArr : new JsonArray();
+        sceneNode["data"] = dataArr;
 
         string resKey = SceneRefStore.RatioKey(width, height);
-        var regionsArr = new JsonArray();
-        for (int i = 0; i < regions.Count; i++)
+        var raceLetter = GameRaces.Letter(GameRaces.FromLetter(race));
+        int existingIdx = -1;
+        for (int i = 0; i < dataArr.Count; i++)
         {
-            var reg = regions[i];
-            // 绝对像素 → 相对本分辨率的 0~1 值（与出厂 scene-refs.json 同一口径）。
-            regionsArr.Add(new JsonObject
-            {
-                ["name"] = reg.Name,
-                ["rect"] = new JsonArray(reg.X / width, reg.Y / height, reg.Width / width, reg.Height / height),
-                ["blockPx"] = reg.BlockPx,
-                ["blocks"] = new JsonArray(reg.BlocksX, reg.BlocksY),
-                ["data"] = Convert.ToBase64String(regionBytes[i]),
-            });
+            var el = dataArr[i];
+            if (el is JsonObject obj && obj["ratio"]?.GetValue<string>() == resKey
+                && (obj["race"]?.GetValue<string>() ?? "") == raceLetter)
+            { existingIdx = i; break; }
         }
-        resolutions[resKey] = new JsonObject { ["source"] = source, ["regions"] = regionsArr };
+        var dataEntry = new JsonObject
+        {
+            ["gameScene"] = gameScene,
+            ["ratio"] = resKey,
+            ["source_file"] = source,
+            ["blockPx"] = regions[0].BlockPx,
+            ["blocks"] = new JsonArray(regions[0].BlocksX, regions[0].BlocksY),
+            ["data"] = Convert.ToBase64String(regionBytes[0]),
+        };
+        if (race is not null) dataEntry["race"] = raceLetter;
+        if (existingIdx >= 0) dataArr[existingIdx] = dataEntry; else dataArr.Add(dataEntry);
 
         var dir = Path.GetDirectoryName(path);
         if (dir is not null) Directory.CreateDirectory(dir);

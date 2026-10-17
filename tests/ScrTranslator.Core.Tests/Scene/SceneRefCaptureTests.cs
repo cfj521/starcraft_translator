@@ -153,7 +153,7 @@ public class SceneRefCaptureTests
         var data = Enumerable.Repeat((byte)5, 4 * 4 * 3).ToArray();
         var entries = new List<SceneRefIntegrity.Entry>
         {
-            new(SceneRefIntegrity.Key("browsing", resKey, "r"), SceneRefIntegrity.Geometry(0, 0, 16, 16, 4, 4, 4), data),
+            new(SceneRefIntegrity.Key("browsing", resKey, "r"), SceneRefIntegrity.Geometry(0, 0, 16.0/1920, 16.0/1080, 4, 4, 4), data),
         };
         string json = $$"""
             { "version": 1,
@@ -161,9 +161,10 @@ public class SceneRefCaptureTests
               "integrity": { "algorithm": "sha256", "bytes": {{SceneRefIntegrity.DataBytes(entries)}},
                              "sha256": "{{SceneRefIntegrity.Hash(entries)}}" },
               "scenes": { "browsing": { "label": "browsing", "gameScene": "browsing",
-                "resolutions": { "{{resKey}}": { "source": "test", "regions": [
-                  { "name": "r", "rect": [0,0,16,16], "blockPx": 4, "blocks": [4,4],
-                    "data": "{{Convert.ToBase64String(data)}}" } ] } } } } }
+                "regions": { "name": "r", "rect": [0, 0, {{16.0/1920:R}}, {{16.0/1080:R}} ] },
+                "data": [ { "gameScene": "browsing", "ratio": "{{resKey}}", "source_file": "test",
+                  "blockPx": 4, "blocks": [4,4],
+                  "data": "{{Convert.ToBase64String(data)}}" } ] } } }
             """;
         var store = SceneRefStore.Load(SceneRefJson.TempPathWith(json));
         var regions = SceneRefCapture.BaseRegions(store, "browsing");

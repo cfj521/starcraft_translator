@@ -108,7 +108,8 @@ public sealed class TranslationEngine : IDisposable
     private int _glossaryCount;
     private string _lastFrameWH = "—";
     private SceneRecognition _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
-        GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别", Array.Empty<SceneRefRegion>());
+        GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别", Array.Empty<SceneRefRegion>(),
+        new Dictionary<string, IReadOnlyList<SceneRefRegion>>());
     private long _lastTranslateMs; private bool _lastAllResolved; private int _lastLineCount;
     // 本批命中数（非池大小）：真正送进引擎翻译的行 / 术语表命中 / 缓存命中。调试面板显示的是这批实际数。
     private int _lastEngineHits; private int _lastCacheHits; private int _lastGlossaryHits;
@@ -328,7 +329,8 @@ public sealed class TranslationEngine : IDisposable
     {
         _scene = new SceneRecognizer(SceneRefStore.Load(_sceneRefsPath, _sceneOverridesPath));
         _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
-            GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "已重载，待识别", Array.Empty<SceneRefRegion>());
+            GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "已重载，待识别", Array.Empty<SceneRefRegion>(),
+            new Dictionary<string, IReadOnlyList<SceneRefRegion>>());
         _log.Log($"[app][probe] 场景参考已重新加载：{_scene.Store.References.Count} 条（覆盖 {_scene.Store.OverrideCount}）" +
                   (_scene.Store.LoadError is null ? "" : $" 错误={_scene.Store.LoadError}"));
     }
@@ -513,12 +515,12 @@ public sealed class TranslationEngine : IDisposable
     {
         var ocr = _settings.Current.Ocr;
         int detectMs = PollInterval.SceneDetect(ocr), translateMs = PollInterval.Translate(ocr);
-        // 识别区域多行：当前帧预设里实际在用的 parts，逐行显示名称 + 累计翻译行数。
+        // 识别区域：当前帧预设里实际在用的 parts，全部合并为一行（名称 + 累计翻译行数）。
         var roiNames = _lastEffectiveRoiNames;
         string roiSection = roiNames.Length == 0
             ? $"ROI[{_activeScene.Label()}]: (无)\n"
-            : $"ROI[{_activeScene.Label()}]:\n" +
-              string.Join("\n", roiNames.Select(n => $"  {n}  累计翻译={_cumTranslated.GetValueOrDefault(n)}行")) + "\n";
+            : $"ROI[{_activeScene.Label()}]: " +
+              string.Join("  ", roiNames.Select(n => $"{n} 累计翻译={_cumTranslated.GetValueOrDefault(n)}行")) + "\n";
         // 翻译引擎：当前池首 provider（内部/外部单选，池里就它一个）。HY-MT2 附带加载状态（未加载/加载中/可用/不可用）。
         var engine = _orchestrator.Providers.FirstOrDefault();
         string engineLine = engine is null
@@ -526,10 +528,27 @@ public sealed class TranslationEngine : IDisposable
             : $"翻译引擎: {engine.Name}{(engine.Name == TranslationProviderEntry.HyMt2 ? $"（{_hyMt2.DescribeLoadState()}）" : "")}\n";
         // OCR 引擎加载状态：模型门期间帧循环不跑，这行是唯一能让你看到"OCR 还没就绪"的地方（就绪=可识别，加载中=后台初始化）。
         string ocrLine = $"OCR: {(_ocr.IsReady ? "就绪" : "加载中")}\n";
-        // 匹配度（末尾）：只显示命中率最高那条（refId + 命中率）；无参考/识别暂停时为空。
+        // 匹配度：只显示命中率最高那条的命中率（不显示 refId，场景名改在下方指纹坐标里看）；无参考/识别暂停时为空。
         string matchSection = _lastRec.Scores.Count == 0
             ? ""
-            : $"匹配度: {_lastRec.RefId} {_lastRec.HitRatio:P1}\n";
+            : $"匹配度: {_lastRec.HitRatio:P1}\n";
+        // 指纹坐标（末尾）：5 个场景实际只有 2 套区域——browsing/room 共用 frame-left，ingame_t/p/z 共用 race-hud。
+        // 每套一行（取组内任一 refId 的区域，组内坐标相同）；只显示坐标、不显示区域名。
+        var fingerprintGroups = new (string Label, string[] RefIds)[]
+        {
+            ("browsing/room", new[] { "browsing", "room" }),
+            ("ingame", new[] { "ingame_t", "ingame_p", "ingame_z" }),
+        };
+        string regionsSection = "";
+        foreach (var (label, refIds) in fingerprintGroups)
+        {
+            IReadOnlyList<SceneRefRegion>? regions = null;
+            foreach (var id in refIds)
+                if (_lastRec.AllRegions.TryGetValue(id, out var rs)) { regions = rs; break; }
+            if (regions is null) continue;
+            var coords = string.Join(" ", regions.Select(r => $"({(int)r.X},{(int)r.Y},{(int)r.Width},{(int)r.Height})"));
+            regionsSection += $"指纹[{label}]: {coords}\n";
+        }
         return
             $"场景: {SceneDisplay(_activeScene, _activeRace)}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
@@ -540,7 +559,8 @@ public sealed class TranslationEngine : IDisposable
             $"翻译: {_lastEngineHits}行(共{_lastLineCount}行) {_lastTranslateMs}ms  resolved={(_lastAllResolved ? "yes" : "no")}" +
             (_lastTranslateError is null ? "\n" : $"  错误: {_lastTranslateError}\n") +
             $"命中缓存: {_lastCacheHits}  命中术语表: {_lastGlossaryHits}\n" +
-            matchSection;
+            matchSection +
+            regionsSection;
     }
 
     /// <summary>帧流健康检查（每看门狗周期调用）：

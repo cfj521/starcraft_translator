@@ -80,4 +80,13 @@ public static class GameRaces
         GameRace.Zerg => "虫族",
         _ => "未知种族",
     };
+
+    /// <summary>种族字母（<see cref="FromLetter"/> 的逆）。未知种族返回空串。</summary>
+    public static string Letter(this GameRace r) => r switch
+    {
+        GameRace.Terran => "t",
+        GameRace.Protoss => "p",
+        GameRace.Zerg => "z",
+        _ => "",
+    };
 }

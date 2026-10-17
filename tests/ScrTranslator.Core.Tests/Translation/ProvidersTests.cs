@@ -242,6 +242,18 @@ public class ProvidersTests
     }
 
     [Fact]
+    public void KoreanOnlyProtector_IsInstructionEcho_DetectsEchoedInstruction()
+    {
+        // 模型把占位符指令（中文版 PromptBuilder / 英文版 Hy-MT2 PlaceholderHint 翻成中文）改述当译文 → 含"占位符"。
+        Assert.True(KoreanOnlyProtector.IsInstructionEcho(
+            "诸如MAP和+这样的标记是英语单词、数字和标点符号的占位符；请保持它们原样，不要进行翻译或修改。"));
+        // 正常译文/原文/专名回声都不含"占位符" → 不是指令回声。
+        Assert.False(KoreanOnlyProtector.IsInstructionEcho("MAP核心+多功能询问的是地图名字"));
+        Assert.False(KoreanOnlyProtector.IsInstructionEcho("MAP핵+다기능문의는맵이름"));
+        Assert.False(KoreanOnlyProtector.IsInstructionEcho("你好世界"));
+    }
+
+    [Fact]
     public void HyMt2_EmptyPath_IsNoCreds()
     {
         var p = new HyMt2Provider(() => "", () => "cpu");

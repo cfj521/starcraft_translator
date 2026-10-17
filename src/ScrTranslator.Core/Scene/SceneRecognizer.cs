@@ -28,7 +28,9 @@ public sealed record SceneRecognition(
     IReadOnlyList<SceneScore> Scores,
     string? Detail,
     /// <summary>命中率最高那条参考的缩放区域（帧像素坐标）——DEBUG 画指纹框用；无参考/未识别时为空。</summary>
-    IReadOnlyList<SceneRefRegion> WinnerRegions)
+    IReadOnlyList<SceneRefRegion> WinnerRegions,
+    /// <summary>全部候选参考的缩放区域（refId → 区域，帧像素坐标）——DEBUG 面板逐场景显示指纹坐标用；无候选时为空。</summary>
+    IReadOnlyDictionary<string, IReadOnlyList<SceneRefRegion>> AllRegions)
 {
     public bool IsMatched => Status == SceneMatchStatus.Matched;
     /// <summary>面板/日志用的一行摘要。</summary>
@@ -67,7 +69,7 @@ public sealed class SceneRecognizer
         if (_store.References.Count == 0)
             return new SceneRecognition(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
                 GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), _store.LoadError ?? "无参考",
-                Array.Empty<SceneRefRegion>());
+                Array.Empty<SceneRefRegion>(), new Dictionary<string, IReadOnlyList<SceneRefRegion>>());
 
         // 方案 B：所有参考只存 1080p 一档。把 1080p 基准区域按统一高度因子 H/1080 缩放到当前帧，
         // 块数固定（= 1080p 那套），实时指纹长度恒等于出厂参考，直接比对。
@@ -77,9 +79,9 @@ public sealed class SceneRecognizer
         foreach (var r in _store.References)
             if (r.Resolutions.TryGetValue(baseKey, out var baseRes))
             {
-                // 只有有黑边（ar 偏离最近标准比例超 0.08）才裁；无黑边帧 frame-left 本就内缩安全区，不裁
-                bool centerCrop = r.Scene != GameScene.InGame
-                    && ResolutionAnalyzer.Analyze(frame.Width, frame.Height).HasBlackBars;
+                // browsing/room 的金属边框位置随宽高比重定位（crop=(1920−1080·ar)/2，16:9 时 crop=0 不裁），
+                // 与"是否有黑边"无关——HasBlackBars 管的是真实黑边区域的裁剪，不挡这里。
+                bool centerCrop = r.Scene != GameScene.InGame;
                 candidates.Add((r, baseRes, SceneRefCapture.FittingRegions(baseRes.Regions, frame.Width, frame.Height, centerCrop)));
             }
         if (candidates.Count == 0)
@@ -87,7 +89,7 @@ public sealed class SceneRecognizer
             var have = string.Join(",", _store.References.SelectMany(r => r.AvailableResolutions).Distinct().OrderBy(x => x));
             return new SceneRecognition(SceneMatchStatus.NoReferenceForResolution, GameScene.Unknown, null, null,
                 GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), $"{frame.Width}x{frame.Height}（已收录 {have}）",
-                Array.Empty<SceneRefRegion>());
+                Array.Empty<SceneRefRegion>(), new Dictionary<string, IReadOnlyList<SceneRefRegion>>());
         }
 
         // 区域几何完全相同的候选（如 ingame_t/p/z 共用 race-hud）共用同一份实时指纹，只算一次。
@@ -112,16 +114,18 @@ public sealed class SceneRecognizer
         // DEBUG 画指纹框用——框坐标天然和裁剪/缩放一致。
         var winnerRegions = candidates.FirstOrDefault(c => c.Ref.Id == ranked[0].RefId).Scaled
             ?? Array.Empty<SceneRefRegion>();
+        // 全部候选的缩放区域（refId → 区域）：DEBUG 面板逐场景显示指纹坐标用。
+        var allRegions = candidates.ToDictionary(c => c.Ref.Id, c => c.Scaled);
 
         if (best < _store.MinHitRatio)
             return new SceneRecognition(SceneMatchStatus.BelowThreshold, GameScene.Other, ranked[0].RefId,
                 ranked[0].Label, GameRace.Unknown, best, second, ranked,
-                $"阈值 {_store.MinHitRatio:P0}", winnerRegions);
+                $"阈值 {_store.MinHitRatio:P0}", winnerRegions, allRegions);
 
         var winner = ranked[0];
         var race = _store.Find(winner.RefId)?.Race ?? GameRace.Unknown;
         return new SceneRecognition(SceneMatchStatus.Matched, winner.Scene, winner.RefId, winner.Label,
-            race, best, second, ranked, null, winnerRegions);
+            race, best, second, ranked, null, winnerRegions, allRegions);
     }
 
     /// <summary>区域几何指纹（用于共享实时指纹）：只看 rect/blockPx/blocks，不看像素内容。</summary>
