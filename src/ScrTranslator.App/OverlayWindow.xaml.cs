@@ -7,6 +7,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using ScrTranslator.App.Interop;
+using ScrTranslator.Core.Scene;
 using ScrTranslator.Core.Translation;
 
 namespace ScrTranslator.App;
@@ -96,6 +97,44 @@ public partial class OverlayWindow : Window
             RootCanvas.Children.Add(visual);
         }
     }
+
+    /// <summary>画指纹区域框（DEBUG）：在独立图层 RegionCanvas 上画带名称标签的橙色矩形。
+    /// 坐标是帧像素（全屏 WGC 下 = 物理屏幕像素），内部换算为 DIP。ShowLines 只清 RootCanvas，本层不受影响。
+    /// 必须在 UI 线程调用。</summary>
+    public void ShowRegions(IReadOnlyList<SceneRefRegion> regions)
+    {
+        RegionCanvas.Children.Clear();
+        if (regions.Count == 0) return;
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var stroke = new SolidColorBrush(Color.FromRgb(255, 90, 0)); // 橙色描边 + 标签
+        var fill = new SolidColorBrush(Color.FromArgb(40, 255, 90, 0)); // 半透明填充，不糊掉游戏画面
+        foreach (var r in regions)
+        {
+            double left = r.X / dpi.DpiScaleX;
+            double top = r.Y / dpi.DpiScaleY;
+            double w = r.Width / dpi.DpiScaleX;
+            double h = r.Height / dpi.DpiScaleY;
+            var rect = new System.Windows.Shapes.Rectangle { Width = w, Height = h, Stroke = stroke, StrokeThickness = 2, Fill = fill };
+            Canvas.SetLeft(rect, left);
+            Canvas.SetTop(rect, top);
+            RegionCanvas.Children.Add(rect);
+            var label = new TextBlock
+            {
+                Text = r.Name,
+                FontFamily = new FontFamily("Microsoft YaHei"),
+                FontSize = 13,
+                FontWeight = FontWeights.Bold,
+                Foreground = stroke,
+                Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 5, ShadowDepth = 0, Opacity = 1 },
+            };
+            Canvas.SetLeft(label, left);
+            Canvas.SetTop(label, top + h); // 标签压在框下沿之下，不盖住框内内容
+            RegionCanvas.Children.Add(label);
+        }
+    }
+
+    /// <summary>清掉指纹区域框（DEBUG）。场景切换/停翻时调用，避免旧场景的框残留（下一拍识别会重画当前场景的框）。</summary>
+    public void ClearRegions() => RegionCanvas.Children.Clear();
 
     /// <summary>内置游戏字体随构建拷贝到输出目录（与 exe 同级）。
     /// 用纯族名选中，实际经文件路径加载——不用 pack URI 内嵌：实测 WPF 对 .g.resources 里的

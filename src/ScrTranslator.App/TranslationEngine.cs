@@ -108,7 +108,8 @@ public sealed class TranslationEngine : IDisposable
     private int _glossaryCount;
     private string _lastFrameWH = "—";
     private SceneRecognition _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
-        GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别");
+        GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "尚未识别",
+        Array.Empty<(SceneReference, IReadOnlyList<SceneRefRegion>)>());
     private long _lastTranslateMs; private bool _lastAllResolved; private int _lastLineCount;
     // 本批命中数（非池大小）：真正送进引擎翻译的行 / 术语表命中 / 缓存命中。调试面板显示的是这批实际数。
     private int _lastEngineHits; private int _lastCacheHits; private int _lastGlossaryHits;
@@ -202,6 +203,12 @@ public sealed class TranslationEngine : IDisposable
     {
         var rec = _scene.Recognize(frame.AsFramePixels());
         _lastRec = rec;
+        // DEBUG：画当前活动场景的指纹区域框——场景指纹取哪个区域就画哪个。
+        // 候选区域是 Recognize 用同一套 centerCrop+FittingRegions 算的，框坐标天然和裁剪/缩放一致。
+        var activeRegions = rec.CandidateRegions
+            .FirstOrDefault(cr => cr.Ref.Scene == _activeScene && cr.Ref.Race == _activeRace)
+            .Regions ?? Array.Empty<SceneRefRegion>();
+        _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowRegions(activeRegions));
         _log.Debug($"[scene] {rec.Summary}  帧={frame.Width}x{frame.Height}  " +
                    $"候选=[{string.Join(" ", rec.Scores.Select(s => $"{s.RefId}:{s.HitRatio:P0}"))}]");
 
@@ -296,7 +303,8 @@ public sealed class TranslationEngine : IDisposable
     {
         _scene = new SceneRecognizer(SceneRefStore.Load(_sceneRefsPath, _sceneOverridesPath));
         _lastRec = new(SceneMatchStatus.NoReferences, GameScene.Unknown, null, null,
-            GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "已重载，待识别");
+            GameRace.Unknown, 0, 0, Array.Empty<SceneScore>(), "已重载，待识别",
+            Array.Empty<(SceneReference, IReadOnlyList<SceneRefRegion>)>());
         _log.Log($"[probe] 场景参考已重新加载：{_scene.Store.References.Count} 条（覆盖 {_scene.Store.OverrideCount}）" +
                   (_scene.Store.LoadError is null ? "" : $" 错误={_scene.Store.LoadError}"));
     }
@@ -445,7 +453,11 @@ public sealed class TranslationEngine : IDisposable
     }
 
     private void ClearOverlay() =>
-        _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+        _ = _overlay.Dispatcher.InvokeAsync(() =>
+        {
+            _overlay.ShowLines(System.Array.Empty<OverlayItem>());
+            _overlay.ClearRegions(); // 场景变化=旧场景的指纹区域框失效，一并清掉（下一拍识别会重画当前场景的框）
+        });
 
     /// <summary>按"游戏是否前台"叠加用户意图，计算悬浮层与调试窗口的可见性（用 Visibility，不 Show/Hide 以免抢焦点）。
     /// 调试窗口显示时顺带刷新文本。</summary>
@@ -491,11 +503,10 @@ public sealed class TranslationEngine : IDisposable
             : $"翻译引擎: {engine.Name}{(engine.Name == TranslationProviderEntry.HyMt2 ? $"（{_hyMt2.DescribeLoadState()}）" : "")}\n";
         // OCR 引擎加载状态：模型门期间帧循环不跑，这行是唯一能让你看到"OCR 还没就绪"的地方（就绪=可识别，加载中=后台初始化）。
         string ocrLine = $"OCR: {(_ocr.IsReady ? "就绪" : "加载中")}\n";
-        // 5 种场景的匹配度（末尾）：逐参考显示命中率，方便看哪个场景擦边/掉下去（room 95.8% / ingame_t 0.0% / …）。
-        // _lastRec.Scores 每个参考一条，含 RefId + HitRatio；无参考/识别暂停时为空。
+        // 匹配度（末尾）：只显示命中率最高那条（refId + 命中率）；无参考/识别暂停时为空。
         string matchSection = _lastRec.Scores.Count == 0
             ? ""
-            : "匹配度: " + string.Join("  ", _lastRec.Scores.Select(s => $"{s.RefId} {s.HitRatio:P1}")) + "\n";
+            : $"匹配度: {_lastRec.RefId} {_lastRec.HitRatio:P1}\n";
         return
             $"场景: {SceneDisplay(_activeScene, _activeRace)}\n" +
             $"帧: {_lastFrameWH}  已处理={_processed}  捕获帧={_capture.FrameCount}\n" +
@@ -566,7 +577,11 @@ public sealed class TranslationEngine : IDisposable
         ResetAllChangeDetection(); // 复位变化检测，下次 Start 后首帧总会重新翻译上屏
         _windowLost = false; _wasIconic = false; _waitingForWindow = false;
         _log.Log("[probe] 已停止");
-        _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+        _ = _overlay.Dispatcher.InvokeAsync(() =>
+        {
+            _overlay.ShowLines(System.Array.Empty<OverlayItem>());
+            _overlay.ClearRegions(); // 停翻=不再有指纹识别，区域框一并清掉
+        });
     }
 
     /// <summary>
@@ -729,7 +744,11 @@ public sealed class TranslationEngine : IDisposable
                 _lastJoinedPerRoi.Clear();
                 _displayedPerRoi.Clear();
                 _stabilizer.ResetAll();
-                _ = _overlay.Dispatcher.InvokeAsync(() => _overlay.ShowLines(System.Array.Empty<OverlayItem>()));
+                _ = _overlay.Dispatcher.InvokeAsync(() =>
+                {
+                    _overlay.ShowLines(System.Array.Empty<OverlayItem>());
+                    _overlay.ClearRegions(); // ROI 集变化（换场景/分辨率）=旧指纹区域框失效，清掉
+                });
             }
 
             // ── 每 ROI 单独做变化检测：该 ROI 韩文与上一帧相同则整块跳过（不重译、不重显）──

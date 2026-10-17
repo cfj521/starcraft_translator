@@ -11,5 +11,9 @@
         ResizeMode="NoResize"
         WindowStartupLocation="Manual"
         Left="0" Top="0">
-    <Canvas x:Name="RootCanvas"/>
+    <Grid>
+        <Canvas x:Name="RootCanvas"/>
+        <!-- 指纹区域框（DEBUG）独立图层：ShowLines 只清 RootCanvas，区域框不受影响 -->
+        <Canvas x:Name="RegionCanvas"/>
+    </Grid>
 </Window>
