@@ -1,0 +1,5 @@
+1 1176x664 分辨率下的room识别不对
+2 更改browsing指纹区域
+
+https://github.com/BobLd/RapidOcrNet 仔细看看这个仓库，我们有必要改用这个库吗？
+
