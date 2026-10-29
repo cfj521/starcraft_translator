@@ -40,7 +40,13 @@ public partial class App : Application
     public void RestartApp()
     {
         var exePath = Environment.ProcessPath;
-        if (exePath is null) return;
+        if (exePath is null)
+        {
+            // 极罕见（单文件/受限环境拿不到自身路径）：不能静默 return——用户点了重启却毫无反应。
+            MessageBox.Show("无法获取自身可执行文件路径，请手动关闭后重新启动程序。", "星际翻译",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         ReleaseInstanceMutex();   // 让新进程能拿到锁（只释放一次；OnExit 不会再释放）
         try
         {
@@ -50,7 +56,14 @@ public partial class App : Application
                 UseShellExecute = true,   // 脱离当前进程树独立启动
             });
         }
-        catch { /* 启动失败不影响当前进程继续退出 */ }
+        catch (Exception ex)
+        {
+            // 启动失败时**不能**继续 Shutdown：用户会以为在重启，实际程序直接没了，
+            // 而且单实例锁已释放——再点一次图标才回来。这里提示并中止退出。
+            MessageBox.Show($"重启失败，程序未关闭：{ex.Message}", "星际翻译",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         Shutdown();   // 走完整 WPF 关闭流程（释放捕获/热键/托盘）
     }
 
@@ -248,16 +261,31 @@ public partial class App : Application
 
         _host = builder.Build();
 
-        var overlay = _host.Services.GetRequiredService<OverlayWindow>();
-        overlay.Show();
+        // 启动装配失败（缺 scene-refs.json / 字体、DI 构造抛异常等）必须**说出来再退**。
+        // DispatcherUnhandledException 会把异常吞成"已处理"，进程带着半套服务继续跑：
+        // 没有悬浮窗/托盘，用户看不到任何提示，只能以为程序坏了。
+        OverlayWindow overlay;
+        try
+        {
+            overlay = _host.Services.GetRequiredService<OverlayWindow>();
+            overlay.Show();
 
-        // 调试窗口：只建句柄、不 Show()，杜绝启动瞬间的闪现。之后由探测定时器按前台+DebugMode 切 Visibility。
-        // Show() 会先让窗口出现在屏幕上再被置 Hidden → 启动闪一下；EnsureHandle() 只建 HWND，窗口始终处于 Hidden。
-        var debug = _host.Services.GetRequiredService<DebugWindow>();
-        new System.Windows.Interop.WindowInteropHelper(debug).EnsureHandle();
+            // 调试窗口：只建句柄、不 Show()，杜绝启动瞬间的闪现。之后由探测定时器按前台+DebugMode 切 Visibility。
+            // Show() 会先让窗口出现在屏幕上再被置 Hidden → 启动闪一下；EnsureHandle() 只建 HWND，窗口始终处于 Hidden。
+            var debug = _host.Services.GetRequiredService<DebugWindow>();
+            new System.Windows.Interop.WindowInteropHelper(debug).EnsureHandle();
 
-        _trayService = _host.Services.GetRequiredService<TrayService>();
-        _trayService.Initialize();
+            _trayService = _host.Services.GetRequiredService<TrayService>();
+            _trayService.Initialize();
+        }
+        catch (Exception ex)
+        {
+            LogCrash("Startup", ex);
+            MessageBox.Show($"启动失败：{ex.Message}\n\n详情见 {Path.Combine(AppContext.BaseDirectory, "logs")}\\ 下的日志。",
+                "星际翻译", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+            return;
+        }
 
         var log = _host.Services.GetRequiredService<FileLogger>();
         var startupSettings = _host.Services.GetRequiredService<SettingsHolder>();

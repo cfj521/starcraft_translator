@@ -47,9 +47,18 @@ public partial class HyMt2Window : Window
     private async Task DetectVulkanAsync()
     {
         bool supported = await Task.Run(() => VulkanBackend.IsSupported());
-        if (!IsLoaded) return; // 窗口已关闭，别再碰控件
+        // 用 Closed 标志判断窗口是否已关闭，不能只看 IsLoaded：探测在构造函数里启动，
+        // 若在 Loaded 之前返回，IsLoaded==false 会让 GPU 选项**永久**灰掉。
+        if (_closed) return;
         if (supported) GpuRadio.IsEnabled = true;
         // 探测不通过 → GPU 项保持禁用（本就是 CPU 模式，无需切换选中项）
+    }
+
+    private bool _closed;
+    protected override void OnClosed(EventArgs e)
+    {
+        _closed = true;
+        base.OnClosed(e);
     }
 
     private void OnBrowse(object sender, RoutedEventArgs e)
@@ -68,7 +77,12 @@ public partial class HyMt2Window : Window
         string backend = GpuRadio.IsChecked == true ? "gpu" : "cpu";
         _holder.Current = _holder.Current with { Translation = _holder.Current.Translation with { HyMt2ModelPath = path, HyMt2Backend = backend } };
         try { SettingsStore.Save(_holder.Current, _settingsPath); }
-        catch { /* 落盘失败不阻断；下次主窗确定会再试 */ }
+        catch (Exception ex)
+        {
+            // 落盘失败不能静默：不动声色关掉窗口会让用户以为已保存，重启后全部回滚。
+            MessageBox.Show(this, $"写入 settings.json 失败，配置无法持久保存：{ex.Message}", "Hy-MT2");
+            return;
+        }
         // backend 变更 → 用新设备重载模型（Unload 释放旧权重，Load 按新 backend 冷加载）。
         if (backend != _prevBackend)
         {

@@ -88,28 +88,35 @@ public partial class CalibrationWindow : Window
         _sceneId = GameSceneIds.Other;
         _scene = scene;
         _layout = layout;
-        Left = 0;
-        Top = 0;
-        Width = SystemParameters.PrimaryScreenWidth;
-        Height = SystemParameters.PrimaryScreenHeight;
+        // 铺满**虚拟桌面**（含副屏与负坐标屏）：游戏常开在副屏，只用 PrimaryScreen* 会让校准框/暗罩
+        // 落不到游戏所在屏，用户看不到也点不到。物理→DIP 换算见 PhysicalToDipRect（会减掉本窗左上角）。
+        Left = SystemParameters.VirtualScreenLeft;
+        Top = SystemParameters.VirtualScreenTop;
+        Width = SystemParameters.VirtualScreenWidth;
+        Height = SystemParameters.VirtualScreenHeight;
         // 场景由窗口创建后自己判定（WGC 窗口捕获，不受遮挡影响）——详见 DetectScene
         FindGameRect();
-        DetectScene();
         Loaded += OnLoaded;
     }
 
-    private void OnLoaded(object? sender, RoutedEventArgs e)
+    private async void OnLoaded(object? sender, RoutedEventArgs e)
     {
         var dpi = VisualTreeHelper.GetDpi(this);
         _dpiX = dpi.DpiScaleX;
         _dpiY = dpi.DpiScaleY;
 
-        // 场景已在构造器里判定完（DetectScene）。这里只画预设框
         DrawGameOutline();
+        string sceneLabel = GameSceneIds.FromId(_sceneId).Label();
+        HintText.Text = $"场景【{sceneLabel}】 · 分辨率 {_frameW}×{_frameH} · 正在判定场景…";
+
+        // 先判定场景再画预设框：抓帧是异步的（最多 3 秒），同步 Wait 会把窗口冻住；
+        // 但顺序不能反——框按 _sceneId 取预设，判定前画的会是"其他界面"的框（通常为空）。
+        await DetectSceneAsync();
+        if (_closed) return;
         DrawPresetBoxes();
         // 顶部常驻显示"正在校准哪个场景"——它决定 Enter 保存后这些框落到哪个场景，
         // 不显示的话用户根本不知道自己其实在调哪个场景的预设。
-        string sceneLabel = GameSceneIds.FromId(_sceneId).Label();
+        sceneLabel = GameSceneIds.FromId(_sceneId).Label();
         HintText.Text = $"场景【{sceneLabel}】 · 分辨率 {_frameW}×{_frameH} · 拖动预设框调整 (Esc 退出 / Enter 保存)";
 
         Focusable = true;
@@ -141,14 +148,17 @@ public partial class CalibrationWindow : Window
     /// 直接拿游戏窗口的 D3D 渲染输出，本窗的暗罩盖住屏幕也无所谓（探测没有屏幕捕获
     /// 兜底，校准窗也不设）。
     /// 这样校准**不依赖 F9 是否开启**——没开翻译也能定准当前场景，框的区域才会落到对的场景桶里。
+    /// 全程 await（抓帧最多等 3 秒），不阻塞 UI 线程；关闭窗口后直接放弃。
     /// </summary>
-    private void DetectScene()
+    private async Task DetectSceneAsync()
     {
-        if (_scene is null) return;
+        var scene = _scene;
+        if (scene is null) return;
         SKBitmap? frame = null;
         try
         {
-            frame = CaptureOneFrameWgc();
+            frame = await CaptureOneFrameWgcAsync();
+            if (IsClosedOrDisposed) return;
             if (frame is null)
             {
                 _log?.Log("[calibration] WGC 捕获不可用，场景未判定，保持其他界面");
@@ -157,7 +167,7 @@ public partial class CalibrationWindow : Window
             // WGC 帧尺寸 = 游戏真实渲染分辨率，覆盖窗口兜底值，作桶键 + 布局匹配基准
             _frameW = frame.Width;
             _frameH = frame.Height;
-            var rec = _scene.Recognize(frame.AsFramePixels()); // 零拷贝视图，只在 Recognize 调用内同步使用
+            var rec = scene.Recognize(frame.AsFramePixels()); // 零拷贝视图，只在 Recognize 调用内同步使用
             _log?.Log($"[calibration] 场景检测（WGC）：{rec.Summary}");
             // 只有匹配才覆盖默认值；未匹配（低于阈值/该分辨率无参考）保持"其他界面"
             if (rec.IsMatched) _sceneId = rec.Scene.ToId();
@@ -169,11 +179,21 @@ public partial class CalibrationWindow : Window
         finally { frame?.Dispose(); }
     }
 
+    /// <summary>关闭后不再碰 UI（异步续体）。</summary>
+    private bool IsClosedOrDisposed => _closed;
+
+    private bool _closed;
+    protected override void OnClosed(EventArgs e)
+    {
+        _closed = true;
+        base.OnClosed(e);
+    }
+
     /// <summary>WGC 窗口捕获：抓一帧游戏窗口的 D3D 渲染输出（复用探测的 CaptureService，抓完即弃）。
     /// 不受遮挡影响——直接拿窗口渲染输出，本窗盖不盖住屏幕都无所谓。
     /// 返回 null 的情况：找不到游戏窗口 / 系统不支持窗口捕获 / 3 秒内没等到帧
     /// （用户首次还没允许捕获时系统会弹同意框，等不到帧；同意过后下次即达）。</summary>
-    private SKBitmap? CaptureOneFrameWgc()
+    private async Task<SKBitmap?> CaptureOneFrameWgcAsync()
     {
         var hwnd = WindowFinder.FindByProcess("StarCraft");
         if (hwnd == IntPtr.Zero) return null;
@@ -183,9 +203,11 @@ public partial class CalibrationWindow : Window
         if (!cap.Start(hwnd)) { cap.Dispose(); return null; }
         try
         {
-            if (!tcs.Task.Wait(TimeSpan.FromSeconds(3))) return null;
-            return tcs.Task.Result;
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(3)));
+            if (done != tcs.Task) return null;
+            return await tcs.Task;
         }
+        catch { return null; }
         finally { cap.Dispose(); }
     }
 
@@ -241,8 +263,10 @@ public partial class CalibrationWindow : Window
 
     // ── 坐标换算（DIP canvas <-> 物理屏幕像素，基准=游戏窗口矩形，与 ScreenMapper/TranslationEngine 一致）──
 
+    /// <summary>物理屏幕矩形 → 画布 DIP 矩形。画布原点在窗口左上角（窗口现铺满虚拟桌面，Left/Top 可能为负），
+    /// 必须减掉窗口原点 DIP，否则副屏/负坐标屏上的游戏框会画到窗口外。</summary>
     private Rect PhysicalToDipRect(System.Drawing.Rectangle r)
-        => new(r.Left / _dpiX, r.Top / _dpiY, r.Width / _dpiX, r.Height / _dpiY);
+        => new(r.Left / _dpiX - Left, r.Top / _dpiY - Top, r.Width / _dpiX, r.Height / _dpiY);
 
     // ── 鼠标：画布级状态机 ───────────────────────────────────────────────
 
@@ -492,9 +516,11 @@ public partial class CalibrationWindow : Window
     // ── 保存 ─────────────────────────────────────────────────────────────
 
     /// <summary>框（画布 DIP 坐标）→ 游戏画面相对矩形（0~1）。gameRect 是游戏窗口物理像素矩形。
-    /// 纯换算（与 Core 测试共享同一逻辑）走 RelRect.FromCanvasDip。</summary>
-    private static RelRect BoxToRelRect(CalibBox box, System.Drawing.Rectangle gameRect, double dpiX, double dpiY)
-        => RelRect.FromCanvasDip(box.CanvasRect.Left, box.CanvasRect.Top, box.CanvasRect.Width, box.CanvasRect.Height,
+    /// 纯换算（与 Core 测试共享同一逻辑）走 RelRect.FromCanvasDip。
+    /// 画布原点是窗口左上角（窗口铺满虚拟桌面，Left/Top 可能为负），先加回窗口原点才是屏幕 DIP。</summary>
+    private RelRect BoxToRelRect(CalibBox box, System.Drawing.Rectangle gameRect, double dpiX, double dpiY)
+        => RelRect.FromCanvasDip(box.CanvasRect.Left + Left, box.CanvasRect.Top + Top,
+            box.CanvasRect.Width, box.CanvasRect.Height,
             dpiX, dpiY, gameRect.Left, gameRect.Top, gameRect.Width, gameRect.Height);
 
     private void SaveAndClose()
@@ -527,7 +553,7 @@ public partial class CalibrationWindow : Window
 
     /// <summary>把一个预设框的编辑（位置/尺寸）写回对应 LayoutPreset 字段，返回新预设（record 不可变）。
     /// 换算同 BoxToRelRect（画布 DIP → 物理像素 → 相对坐标），再夹进 0~1。</summary>
-    private static LayoutPreset ApplyPresetBox(LayoutPreset preset, CalibBox box, System.Drawing.Rectangle gameRect, double dpiX, double dpiY)
+    private LayoutPreset ApplyPresetBox(LayoutPreset preset, CalibBox box, System.Drawing.Rectangle gameRect, double dpiX, double dpiY)
     {
         var r = BoxToRelRect(box, gameRect, dpiX, dpiY);
         var rel = new RelRect(

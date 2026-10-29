@@ -275,7 +275,10 @@ public partial class SettingsWindow : Window
     private void LoadFromSettings(AppSettings s)
     {
         TargetProcessBox.Text = s.General.TargetProcess;
-        AutoStartCheck.IsChecked = s.General.AutoStart;
+        // 回显以**注册表真实状态**为准（且必须指向当前 exe）：注册表被清理/路径变过时
+        // 若仍按 settings 显示"已开启"，用户以为自启有效、实际永不生效且不会重写。
+        AutoStartCheck.IsChecked = s.General.AutoStart
+            && Services.AutoStartService.IsEnabled(Environment.ProcessPath);
         AutoTranslateCheck.IsChecked = s.General.AutoTranslateOnLaunch;
         DebugModeCheck.IsChecked = s.General.DebugMode;
         RefreshStatusText();
@@ -413,11 +416,11 @@ public partial class SettingsWindow : Window
     /// 区域页数据源 = 校准的 ROI ＋ 布局预设（出厂值被覆盖层替换后的合并结果），同表展示、同表核对。
     /// 坐标一律显示相对值（0~1），分辨率无关；两张表都可双击编辑。
     /// </summary>
-    private void LoadRoiList()
+    private async void LoadRoiList()
     {
         try
         {
-            var (curW, curH) = GameRenderResolution();
+            var (curW, curH) = await GameRenderResolutionAsync();
             string curRes = $"{curW}x{curH}";
             var rows = new List<RoiRow>();
 
@@ -446,8 +449,9 @@ public partial class SettingsWindow : Window
 
     /// <summary>游戏真实渲染分辨率 = WGC 抓帧尺寸（同校准窗的取帧逻辑）。
     /// 屏幕物理像素≠渲染分辨率：DPI-unaware 游戏按内部固定分辨率渲染，全屏时屏幕像素是整屏尺寸
-    /// （如 3840×2160），不是渲染分辨率（如 1280×768）。取不到帧时兜底回屏幕物理像素（与旧行为一致）。</summary>
-    private (int W, int H) GameRenderResolution()
+    /// （如 3840×2160），不是渲染分辨率（如 1280×768）。取不到帧时兜底回屏幕物理像素（与旧行为一致）。
+    /// 全程 await，不在 UI 线程同步 Wait（旧实现 Wait(3s) 会把界面冻住最多 3 秒）。</summary>
+    private async Task<(int W, int H)> GameRenderResolutionAsync()
     {
         if (_gameRes is { } cached) return cached;
         (int W, int H) fallback = PrimaryScreenPixels(); // 兜底：屏幕物理像素
@@ -457,17 +461,22 @@ public partial class SettingsWindow : Window
         var tcs = new TaskCompletionSource<SKBitmap>(TaskCreationOptions.RunContinuationsAsynchronously);
         cap.FrameArrived += sk => tcs.TrySetResult(sk);
         if (!cap.Start(hwnd)) { cap.Dispose(); return fallback; }
+        SKBitmap? frame = null;
         try
         {
-            if (!tcs.Task.Wait(TimeSpan.FromSeconds(3))) return fallback;
-            var frame = tcs.Task.Result;
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(3)));
+            if (done != tcs.Task) return fallback;
+            frame = await tcs.Task;
             var res = (frame.Width, frame.Height);
-            frame.Dispose();
             _gameRes = res; // 只缓存成功取到的；失败不缓存，下次调用重试
             return res;
         }
         catch { return fallback; }
-        finally { cap.Dispose(); }
+        finally
+        {
+            frame?.Dispose();
+            cap.Dispose();
+        }
     }
 
     /// <summary>

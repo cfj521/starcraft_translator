@@ -45,13 +45,21 @@ public static class AutoStartService
         }
     }
 
-    /// <summary>读注册表当前状态（用于配置窗口回显；异常按"未启用"处理）。</summary>
-    public static bool IsEnabled()
+    /// <summary>读注册表当前状态（用于配置窗口回显；异常按"未启用"处理）。
+    /// 传入 <paramref name="expectedExePath"/> 时只认**指向当前 exe** 的值——安装目录变过、
+    /// 旧版本残留、或用户用工具清过注册表时，不能把"键存在但指向别处"当作已启用。</summary>
+    public static bool IsEnabled(string? expectedExePath = null)
     {
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath);
-            return key?.GetValue(ValueName) is not null;
+            if (key?.GetValue(ValueName) is not string raw) return false;
+            if (string.IsNullOrEmpty(expectedExePath)) return true;
+            string actual = raw.Trim().Trim('"');
+            return string.Equals(
+                System.IO.Path.GetFullPath(actual),
+                System.IO.Path.GetFullPath(expectedExePath),
+                StringComparison.OrdinalIgnoreCase);
         }
         catch { return false; }
     }

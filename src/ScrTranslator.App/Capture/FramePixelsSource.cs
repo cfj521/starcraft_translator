@@ -1,3 +1,4 @@
+using System;
 using ScrTranslator.Core.Scene;
 using SkiaSharp;
 
@@ -21,8 +22,13 @@ public static class FramePixelsSource
     public static unsafe FramePixels AsFramePixels(this SKBitmap frame)
     {
         var (r, g, b) = ChannelOffsets(frame.ColorType);
+        IntPtr pixels = frame.GetPixels();
+        // GetPixels() 为 IntPtr.Zero 时构造出的 Span 长度非零但指针为空，首次读取即
+        // AccessViolationException（CLR 无法 catch，会直接杀进程）。必须显式拦截。
+        if (pixels == IntPtr.Zero)
+            throw new InvalidOperationException($"位图无像素缓冲（{frame.Width}x{frame.Height}, {frame.ColorType}），可能是空或已释放的 SKBitmap");
         // 用 RowBytes*Height 而非 ByteCount：后者在部分 Skia 版本会按列对齐算，容易少最后一行。
-        var buffer = new Span<byte>((void*)frame.GetPixels(), frame.RowBytes * frame.Height);
+        var buffer = new Span<byte>((void*)pixels, frame.RowBytes * frame.Height);
         return new FramePixels(buffer, frame.Width, frame.Height, frame.RowBytes, frame.BytesPerPixel, r, g, b);
     }
 }

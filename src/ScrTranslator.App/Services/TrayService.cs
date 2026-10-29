@@ -14,6 +14,9 @@ public sealed class TrayService : IDisposable
     private readonly FileLogger _log;
     private TaskbarIcon? _trayIcon;
     private MenuItem? _probeItem;
+    private MenuItem? _calibrateItem;
+    private MenuItem? _settingsItem;
+    private MenuItem? _exitItem;
 
     public TrayService(FileLogger log)
     {
@@ -29,16 +32,19 @@ public sealed class TrayService : IDisposable
     public void Initialize()
     {
         _probeItem = new MenuItem { Header = "开启翻译 F9" };
-        _probeItem.Click += (_, _) => ToggleProbe?.Invoke();
+        _probeItem.Click += OnProbeClick;
 
         var calibrateItem = new MenuItem { Header = "区域校准设置 Ctrl+F9" };
-        calibrateItem.Click += (_, _) => OpenCalibration?.Invoke();
+        calibrateItem.Click += OnCalibrateClick;
+        _calibrateItem = calibrateItem;
 
         var settingsItem = new MenuItem { Header = "设置 F7" };
-        settingsItem.Click += (_, _) => OpenSettings?.Invoke();
+        settingsItem.Click += OnSettingsClick;
+        _settingsItem = settingsItem;
 
         var exitItem = new MenuItem { Header = "退出" };
-        exitItem.Click += (_, _) => Application.Current.Shutdown();
+        exitItem.Click += OnExitClick;
+        _exitItem = exitItem;
 
         var menu = new ContextMenu();
         menu.Items.Add(_probeItem);
@@ -54,9 +60,15 @@ public sealed class TrayService : IDisposable
             IconSource = LoadTrayIcon(),
             ContextMenu = menu,
         };
-        _trayIcon.TrayLeftMouseDoubleClick += (_, _) => OpenSettings?.Invoke(); // 双击托盘图标 = 打开设置窗口
+        _trayIcon.TrayLeftMouseDoubleClick += OnTrayDoubleClick; // 双击托盘图标 = 打开设置窗口
         _trayIcon.ForceCreate();
     }
+
+    private void OnProbeClick(object? sender, RoutedEventArgs e) => ToggleProbe?.Invoke();
+    private void OnCalibrateClick(object? sender, RoutedEventArgs e) => OpenCalibration?.Invoke();
+    private void OnSettingsClick(object? sender, RoutedEventArgs e) => OpenSettings?.Invoke();
+    private void OnExitClick(object? sender, RoutedEventArgs e) => Application.Current.Shutdown();
+    private void OnTrayDoubleClick(object? sender, RoutedEventArgs e) => OpenSettings?.Invoke();
 
     /// <summary>按翻译运行状态刷新菜单项文本：开→"关闭翻译 F9"，关→"开启翻译 F9"。</summary>
     public void SetProbeRunning(bool running)
@@ -93,7 +105,26 @@ public sealed class TrayService : IDisposable
 
     public void Dispose()
     {
-        _trayIcon?.Dispose();
-        _trayIcon = null;
+        // 先解绑所有事件再释放控件：托盘释放后菜单项仍可能被外部引用/异步回调触发，
+        // SetProbeRunning 写到已释放控件会抛 InvalidOperationException。
+        if (_trayIcon is not null)
+        {
+            _trayIcon.TrayLeftMouseDoubleClick -= OnTrayDoubleClick;
+            _trayIcon.ContextMenu = null;
+            _trayIcon.Dispose();
+            _trayIcon = null;
+        }
+        if (_probeItem is not null) _probeItem.Click -= OnProbeClick;
+        if (_calibrateItem is not null) _calibrateItem.Click -= OnCalibrateClick;
+        if (_settingsItem is not null) _settingsItem.Click -= OnSettingsClick;
+        if (_exitItem is not null) _exitItem.Click -= OnExitClick;
+        _probeItem = null;
+        _calibrateItem = null;
+        _settingsItem = null;
+        _exitItem = null;
+        // 清空回调，避免释放后触发上层窗口操作
+        ToggleProbe = null;
+        OpenCalibration = null;
+        OpenSettings = null;
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -25,17 +26,20 @@ public partial class OverlayWindow : Window
     {
         InitializeComponent();
         _settings = settings;
-        Left = 0;
-        Top = 0;
-        Width = SystemParameters.PrimaryScreenWidth;   // DIP
-        Height = SystemParameters.PrimaryScreenHeight; // DIP
+        // 铺满**虚拟桌面**（含副屏与主屏左侧/上方的负坐标屏），不能用 PrimaryScreen*
+        // 否则副屏上的译文坐标落到窗口外（ShowLines 里仍按窗口左上角算 Canvas 坐标）。
+        // SystemParameters.VirtualScreen* 已是 DIP（本进程 System DPI Aware，由系统统一缩放）。
+        Left = SystemParameters.VirtualScreenLeft;     // DIP
+        Top = SystemParameters.VirtualScreenTop;       // DIP
+        Width = SystemParameters.VirtualScreenWidth;   // DIP
+        Height = SystemParameters.VirtualScreenHeight; // DIP
         SourceInitialized += OnSourceInitialized;
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         IntPtr hwnd = new WindowInteropHelper(this).Handle;
-        NativeMethods.EnableClickThrough(hwnd);
+        NativeMethods.EnableClickThrough(hwnd, msg => Debug.WriteLine($"[overlay] {msg}"));
     }
 
     /// <summary>清屏并按物理屏幕坐标（内部换算为 DIP）摆放文本。必须在 UI 线程调用。
@@ -92,8 +96,10 @@ public partial class OverlayWindow : Window
                     Child = visual,
                 };
             visual.Opacity = appearance.Opacity;
-            Canvas.SetLeft(visual, it.ScreenLeft / dpi.DpiScaleX);
-            Canvas.SetTop(visual, it.ScreenTop / dpi.DpiScaleY);
+            // 入参是**物理屏幕像素**；窗口覆盖虚拟桌面，窗口左上角在 DIP 坐标 (Left, Top)。
+            // 先按本窗口 DPI 缩放成 DIP，再减窗口左上角 DIP，得到 Canvas 局部坐标 → 副屏/负坐标屏也正确。
+            Canvas.SetLeft(visual, it.ScreenLeft / dpi.DpiScaleX - Left);
+            Canvas.SetTop(visual, it.ScreenTop / dpi.DpiScaleY - Top);
             RootCanvas.Children.Add(visual);
         }
     }
@@ -110,8 +116,8 @@ public partial class OverlayWindow : Window
         var fill = new SolidColorBrush(Color.FromArgb(40, 255, 90, 0)); // 半透明填充，不糊掉游戏画面
         foreach (var r in regions)
         {
-            double left = r.X / dpi.DpiScaleX;
-            double top = r.Y / dpi.DpiScaleY;
+            double left = r.X / dpi.DpiScaleX - Left;
+            double top = r.Y / dpi.DpiScaleY - Top;
             double w = r.Width / dpi.DpiScaleX;
             double h = r.Height / dpi.DpiScaleY;
             var rect = new System.Windows.Shapes.Rectangle { Width = w, Height = h, Stroke = stroke, StrokeThickness = 2, Fill = fill };

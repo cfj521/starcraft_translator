@@ -17,20 +17,31 @@ internal static class NativeMethods
     private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
     /// <summary>给窗口加上 WS_EX_TRANSPARENT | WS_EX_LAYERED，使鼠标事件穿透到下层。</summary>
-    public static void EnableClickThrough(IntPtr hwnd)
+    /// <param name="onFailure">设置失败时的回调——悬浮层若吞掉全屏鼠标输入会导致游戏无法操作，必须暴露出来。</param>
+    public static void EnableClickThrough(IntPtr hwnd, Action<string>? onFailure = null)
     {
         int exStyle = (int)GetWindowLongPtr(hwnd, GWL_EXSTYLE);
         int newStyle = WindowStyles.ApplyClickThrough(exStyle);
-        SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(newStyle));
+        SetExStyleChecked(hwnd, newStyle, "EnableClickThrough", onFailure);
     }
 
     /// <summary>开/关点击穿透。开=加 TRANSPARENT|LAYERED；关=仅去 TRANSPARENT（保留 LAYERED，WPF 透明窗需要它）。</summary>
-    public static void SetClickThrough(IntPtr hwnd, bool on)
+    public static void SetClickThrough(IntPtr hwnd, bool on, Action<string>? onFailure = null)
     {
         int ex = (int)GetWindowLongPtr(hwnd, GWL_EXSTYLE);
         if (on) ex = WindowStyles.ApplyClickThrough(ex);
         else ex &= ~WindowStyles.WS_EX_TRANSPARENT;
-        SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(ex));
+        SetExStyleChecked(hwnd, ex, $"SetClickThrough({on})", onFailure);
+    }
+
+    /// <summary>写 GWL_EXSTYLE 并检查 Win32 错误。SetWindowLongPtr 返回 0 既可能是失败也可能是旧值本就 0，
+    /// 所以必须先清 LastError 再看 GetLastWin32Error。</summary>
+    private static void SetExStyleChecked(IntPtr hwnd, int newStyle, string what, Action<string>? onFailure)
+    {
+        Marshal.SetLastPInvokeError(0);
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(newStyle));
+        int err = Marshal.GetLastWin32Error();
+        if (err != 0) onFailure?.Invoke($"{what} 失败（Win32 {err}）：悬浮层可能挡住游戏鼠标输入");
     }
 
     public const int WS_EX_NOACTIVATE = unchecked((int)0x08000000);

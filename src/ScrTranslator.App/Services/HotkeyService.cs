@@ -170,7 +170,15 @@ public sealed class HotkeyService : IDisposable
     {
         if (msg == WM_HOTKEY && _idToAction.TryGetValue((int)wParam, out var action))
         {
-            action();
+            // 热键在 UI 线程的消息泵里同步回调：action 里若做重活（校准窗构造、模型加载、
+            // MessageBox）会让整个界面卡住、也不处理后续消息。这里只投递到消息队列，立刻返回。
+            // 用 Dispatcher 而不是 Task.Run：action 大多要碰 UI（开窗口/改托盘），必须在 UI 线程跑。
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Input, new Action(() =>
+                {
+                    try { action(); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[hotkey] action 抛异常: {ex}"); }
+                }));
             handled = true;
         }
         return IntPtr.Zero;

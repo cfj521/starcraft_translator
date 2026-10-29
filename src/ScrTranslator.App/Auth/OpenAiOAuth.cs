@@ -69,9 +69,23 @@ public sealed class OpenAiOAuth : ITokenSource
                 }
                 return (t.AccessToken, t.AccountId);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _log?.Warn($"[app][oauth] token 刷新失败: {ex.GetType().Name}: {ex.Message}");
+                // refresh_token 失效（invalid_grant：已被轮换/撤销/账号改密）时必须清掉本地 token。
+                // 否则 access_token 已过期、每拍都拿同一个废 refresh_token 打 auth 端点：不联网失败，
+                // 但会持续刷日志/占带宽，且用户界面上永远显示"已登录"却翻译不出任何东西。
+                if (ex is HttpRequestException && ex.Message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
+                {
+                    _store.Update(d =>
+                    {
+                        d.OpenAi.AccessToken = "";
+                        d.OpenAi.RefreshToken = "";
+                        d.OpenAi.ExpiresAt = "";
+                    });
+                    _log?.Warn("[app][oauth] refresh_token 已失效，已清空登录态，请在设置页重新登录");
+                    throw new InvalidOperationException("ChatGPT 登录已失效，请到设置页重新登录", ex);
+                }
                 throw;
             }
             finally { _refreshLock.Release(); }
@@ -169,8 +183,19 @@ public sealed class OpenAiOAuth : ITokenSource
     {
         using var stream = client.GetStream();
         var buf = new byte[4096];
-        int n = await stream.ReadAsync(buf, ct);
-        var reqLine = Encoding.ASCII.GetString(buf, 0, n).Split('\n')[0]; // GET /auth/callback?code=..&state=.. HTTP/1.1
+        // 必须读到空行（头部结束）再解析：浏览器可能把请求行与后续头部分段发送，
+        // 只读一次会把 "/auth/callback?code=...&sta" 截断 → 登录明明成功却判失败。
+        int total = 0;
+        while (total < buf.Length)
+        {
+            int n = await stream.ReadAsync(buf.AsMemory(total), ct);
+            if (n == 0) break; // 对端关闭
+            total += n;
+            // 请求行就在最前面：只要已经读到一个完整的换行就可解析。
+            var head = Encoding.ASCII.GetString(buf, 0, total);
+            if (head.Contains('\n')) break;
+        }
+        var reqLine = Encoding.ASCII.GetString(buf, 0, total).Split('\n')[0]; // GET /auth/callback?code=..&state=.. HTTP/1.1
         string? code = null, state = null;
         var qIdx = reqLine.IndexOf('?');
         if (qIdx >= 0)
