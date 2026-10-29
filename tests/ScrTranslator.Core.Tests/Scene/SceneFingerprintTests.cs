@@ -78,13 +78,27 @@ public class SceneFingerprintTests
     [Fact]
     public void Compute_RegionPartlyOutsideFrame_DoesNotThrow()
     {
-        // 参考区域比帧还大（兜底路径）：先 ClampTo 夹进帧内再算块均值，越界部分不采，绝不能越界读崩掉。
+        // 参考区域比帧还大（兜底路径）：原点夹进帧内，但**宽度/高度保持参考原值**，
+        // 否则块宽 = 区域宽/BlocksX 会变、采样网格与出厂参考错位（P3-47）。
+        // 完全落在帧外的块按 n==0 写 0（该块必然不命中），绝不越界读。
         var buf = SceneTestFrames.Solid(8, 8, 40, 40, 40);
-        var regions = new[] { Region(x: 4, y: 4, w: 8, h: 8, blockPx: 4) };
+        var regions = new[] { Region(x: 4, y: 4, w: 8, h: 8, blockPx: 4) }; // 8x8/块4 → 2x2 块
         var fp = new byte[SceneFingerprint.ByteLength(regions)];
         SceneFingerprint.Compute(SceneTestFrames.View(buf, 8, 8), regions, fp);
-        // 夹进帧内后整个区域都在帧里（4x4 区域、2x2 块），均值全 40，没有越界零块
-        Assert.All(fp, b => Assert.Equal((byte)40, b));
+        // 只有帧内的块 (0,0) 拿到均值 40，其余三块完全在帧外 → 0
+        Assert.Equal(new byte[] { 40, 40, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, fp);
+    }
+
+    [Fact]
+    public void ClampTo_KeepsWidthAndHeight_SoBlockGridStaysAligned()
+    {
+        // 区域贴右边：原点夹进帧内，宽度保持 16 → 块宽 16/2=8 不变（旧实现会缩成 4，块宽变 2 与参考错位）。
+        var r = Region(x: 12, y: 0, w: 16, h: 8, blockPx: 8);
+        var (x, y, w, h) = r.ClampTo(16, 8);
+        Assert.Equal(12, x);
+        Assert.Equal(0, y);
+        Assert.Equal(16, w);
+        Assert.Equal(8, h);
     }
 
     [Fact]
@@ -116,4 +130,37 @@ public class SceneFingerprintTests
     [Fact]
     public void HitRatio_Empty_IsZero()
         => Assert.Equal(0.0, SceneFingerprint.HitRatio(Array.Empty<byte>(), Array.Empty<byte>(), 16));
+
+    [Fact]
+    public void Compute_WrongBufferLength_ThrowsArgument()
+    {
+        var buf = SceneTestFrames.Solid(8, 8, 40, 40, 40);
+        var regions = new[] { Region(x: 0, y: 0, w: 8, h: 8, blockPx: 4) }; // 2x2 块 = 12 字节
+        var tooSmall = new byte[11];
+        Assert.Throws<ArgumentException>(() => SceneFingerprint.Compute(SceneTestFrames.View(buf, 8, 8), regions, tooSmall));
+    }
+
+    [Fact]
+    public void Compute_ShortRowStride_ThrowsArgument()
+    {
+        var buf = SceneTestFrames.Solid(8, 8, 40, 40, 40);
+        var regions = new[] { Region(w: 8, h: 8, blockPx: 4) };
+        var fp = new byte[SceneFingerprint.ByteLength(regions)];
+        var bad = new FramePixels(buf, 8, 8, rowBytes: 8, 4, 2, 1, 0); // 行跨距只够 2 像素
+        // FramePixels 是 ref struct，不能进 lambda 捕获，只能就地 try/catch 断言。
+        bool threw = false;
+        try { SceneFingerprint.Compute(bad, regions, fp); }
+        catch (ArgumentException) { threw = true; }
+        Assert.True(threw, "短行跨距应抛 ArgumentException");
+    }
+
+    [Fact]
+    public void Compute_TruncatedBuffer_ThrowsArgument()
+    {
+        var full = SceneTestFrames.Solid(8, 8, 40, 40, 40);
+        var buf = full.Take(full.Length - 8).ToArray();
+        var regions = new[] { Region(w: 8, h: 8, blockPx: 4) };
+        var fp = new byte[SceneFingerprint.ByteLength(regions)];
+        Assert.Throws<ArgumentException>(() => SceneFingerprint.Compute(SceneTestFrames.View(buf, 8, 8), regions, fp));
+    }
 }

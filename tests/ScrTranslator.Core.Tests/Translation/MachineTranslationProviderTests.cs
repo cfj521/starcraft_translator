@@ -74,6 +74,17 @@ public class MachineTranslationProviderTests
     }
 
     [Fact]
+    public async Task Aliyun_TrailingNewline_IsNotCountedAsExtraLine()
+    {
+        // 接口常在末尾补一个换行：旧实现直接 Split('\n') → 3 段 > 2 行 → 整批回落原文，
+        // 症状是"能识别韩文但永远不出中文、每拍重发请求"。尾部空行必须忽略。
+        var stub = new StubHttpMessageHandler("{\"Data\":{\"Translated\":\"甲\\n乙\\n\"},\"RequestId\":\"r\"}");
+        var p = new AliyunMtProvider(new HttpClient(stub), () => ("ak", "sk"));
+        var r = await p.TranslateAsync(new[] { "가", "나" }, Ctx, CancellationToken.None);
+        Assert.Equal(new[] { "甲", "乙" }, r);
+    }
+
+    [Fact]
     public async Task Aliyun_QuotaError_MarksExhausted()
     {
         var stub = new StubHttpMessageHandler(

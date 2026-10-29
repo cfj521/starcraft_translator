@@ -27,6 +27,14 @@ public class SceneIdsTests
     }
 
     [Fact]
+    public void ToId_Unknown_DoesNotPretendToBeBrowsing()
+    {
+        // 旧实现 `_ => Browsing`：未判定(default)时取到"寻找房间"的 ROI，会拿它去翻主菜单/加载画面。
+        // 现在落到 other——下游按 hasScene 找不到预设就不翻，不会误用别的场景的框。
+        Assert.Equal("other", GameScene.Unknown.ToId());
+    }
+
+    [Fact]
     public void Normalize_LegacyBecomesNew_NewStaysOther_UnknownUntouched()
     {
         Assert.Equal("browsing", GameSceneIds.Normalize("custom_games_listing"));

@@ -41,6 +41,32 @@ public class RateLimitCooldownTests
     }
 
     [Fact]
+    public void Enter_SubSecondRetryAfter_ClampsUpTo1s()
+    {
+        var c = new RateLimitCooldown();
+        Assert.Equal(TimeSpan.FromSeconds(1), c.Enter(TimeSpan.FromMilliseconds(200))); // 亚秒值不再被 (int) 截断成 0
+        Assert.Equal(TimeSpan.FromSeconds(1), c.Enter(TimeSpan.FromSeconds(-30)));      // 负值同样夹到 1s
+    }
+
+    [Fact]
+    public void RetryAfterHeader_HttpDateForm_IsConvertedToWait()
+    {
+        // 服务端只给 HTTP-date 形式时，旧实现读 Delta=null → 退化成 5s 指数退避
+        var date = DateTimeOffset.UtcNow.AddSeconds(42);
+        var header = new System.Net.Http.Headers.RetryConditionHeaderValue(date);
+        var wait = RateLimitException.FromHeader(header);
+        Assert.NotNull(wait);
+        Assert.InRange(wait!.Value.TotalSeconds, 40, 43);
+
+        // 已过期 → 视作没给（走退避），不能算出负等待
+        Assert.Null(RateLimitException.FromHeader(new System.Net.Http.Headers.RetryConditionHeaderValue(DateTimeOffset.UtcNow.AddMinutes(-1))));
+        // 秒数形式仍按秒数
+        Assert.Equal(TimeSpan.FromSeconds(7),
+            RateLimitException.FromHeader(new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(7))));
+        Assert.Null(RateLimitException.FromHeader(null));
+    }
+
+    [Fact]
     public void Until_ReflectsTheEnteredDelay()
     {
         var c = new RateLimitCooldown();
