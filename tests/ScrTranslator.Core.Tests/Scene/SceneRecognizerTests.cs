@@ -88,6 +88,38 @@ public class SceneRecognizerTests
     }
 
     [Fact]
+    public void Recognize_UsesFrameRatioOverride_NotOnlyBaseRatio()
+    {
+        // 现场采集按"采集时的比例"作键（16:10 / 4:3 …）。旧实现识别器只查基准键 "16:9"，
+        // 于是这些覆盖参考永远读不到——采集提示成功、识别毫无变化（功能假成功）。
+        var data = SceneRefJson.Flat(10);
+        // 键就是 RatioKey 的归约结果（16:10 归约成 8:5），故直接调它，不手写字符串。
+        string resKey = SceneRefStore.RatioKey(1680, 1050);
+        Assert.NotEqual("16:9", resKey);
+        var entries = new List<SceneRefIntegrity.Entry>
+        {
+            new(SceneRefIntegrity.Key("browsing", resKey, "r"),
+                SceneRefIntegrity.Geometry(0, 0, SceneRefJson.RelW, SceneRefJson.RelH, 4, 2, 2), data),
+        };
+        string json = $$"""
+            { "version": 1,
+              "fingerprint": { "baseResolution": "1920x1080", "blockSize": 4, "channelTolerance": 16, "minHitRatio": 0.9 },
+              "integrity": { "algorithm": "sha256", "bytes": {{SceneRefIntegrity.DataBytes(entries)}},
+                             "sha256": "{{SceneRefIntegrity.Hash(entries)}}" },
+              "scenes": { "browsing": { "label": "browsing", "gameScene": "browsing",
+                "regions": { "name": "r", "rect": [0,0,{{SceneRefJson.RelW:R}},{{SceneRefJson.RelH:R}}] },
+                "data": [ { "gameScene": "browsing", "ratio": "{{resKey}}", "source_file": "test",
+                  "blockPx": 4, "blocks": [2,2],
+                  "data": "{{Convert.ToBase64String(data)}}" } ] } } }
+            """;
+        var rec = new SceneRecognizer(SceneRefStore.Load(SceneRefJson.TempPathWith(json)))
+            .Recognize(SceneTestFrames.View(SceneTestFrames.Solid(1680, 1050, 10, 10, 10), 1680, 1050));
+
+        Assert.Equal(SceneMatchStatus.Matched, rec.Status);
+        Assert.Equal(GameScene.Browsing, rec.Scene);
+    }
+
+    [Fact]
     public void Recognize_StoreFailedToLoad_ReportsNoReferencesWithReason()
     {
         var rec = new SceneRecognizer(SceneRefStore.Load(Path.GetTempPath() + "/absent-" + Guid.NewGuid() + ".json"))

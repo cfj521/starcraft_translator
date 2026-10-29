@@ -20,9 +20,18 @@ public partial class OpenAiApiKeyWindow : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        var data = _store.Load();
-        data.OpenAiApiKey = KeyBox.Password;
-        _store.Save(data);
+        try
+        {
+            // Lock 内读改写：避免与其它密钥窗口/后台 token 刷新并发时后写覆盖先写。
+            // Trim：密钥首尾空格进 Authorization 头会 401。
+            _store.Update(d => d.OpenAiApiKey = KeyBox.Password.Trim());
+        }
+        catch (Exception ex)
+        {
+            // 旧实现不捕获：异常被 DispatcherUnhandledException 静默吞掉，窗口停在原地无任何提示。
+            MessageBox.Show(this, $"保存失败：{ex.Message}", "OpenAI API Key");
+            return;
+        }
         DialogResult = true;
         Close();
     }

@@ -31,23 +31,26 @@ public sealed class OpenAiOAuth : ITokenSource
     public bool IsLoggedIn() => Status().loggedIn;
     public void Logout()
     {
-        var d = _store.Load(); d.OpenAi = new OpenAiTokens(); _store.Save(d);
+        // Update 在 store 锁内读改写：避免与后台 token 刷新/其它密钥窗口并发时互相覆盖。
+        _store.Update(d => d.OpenAi = new OpenAiTokens());
         _log?.Info("[app][oauth] 已登出 ChatGPT（清空本地 token）");
     }
 
     public async Task<(string, string)> GetAsync(CancellationToken ct)
     {
-        var data = _store.Load();
-        var t = data.OpenAi;
-        if (string.IsNullOrEmpty(t.AccessToken)) throw new InvalidOperationException("未登录 ChatGPT 订阅");
-        long? exp = DateTimeOffset.TryParse(t.ExpiresAt, out var dt) ? dt.ToUnixTimeSeconds() : null;
+        // 只在锁内取"是否需要刷新"的快照，真正刷新时再在 store 锁内读改写（见下）。
+        var snapshot = _store.Load().OpenAi;
+        if (string.IsNullOrEmpty(snapshot.AccessToken)) throw new InvalidOperationException("未登录 ChatGPT 订阅");
+        long? exp = DateTimeOffset.TryParse(snapshot.ExpiresAt, out var dt) ? dt.ToUnixTimeSeconds() : null;
         if (JwtClaims.NeedsRefresh(exp, DateTimeOffset.UtcNow))
         {
             _log?.Debug("[app][oauth] access_token 需刷新，走 refresh_token 流程");
             await _refreshLock.WaitAsync(ct);
             try
             {
-                data = _store.Load(); t = data.OpenAi;
+                // 复检：持锁期间别的调用可能已刷好，别重复刷（refresh_token 会被轮换，重复用旧的直接掉登录态）。
+                var data = _store.Load();
+                var t = data.OpenAi;
                 exp = DateTimeOffset.TryParse(t.ExpiresAt, out var dt2) ? dt2.ToUnixTimeSeconds() : null;
                 if (JwtClaims.NeedsRefresh(exp, DateTimeOffset.UtcNow))
                 {
@@ -59,9 +62,12 @@ public sealed class OpenAiOAuth : ITokenSource
                         ["refresh_token"] = t.RefreshToken,
                         ["scope"] = OAuthPkce.Scope,
                     }, ct);
-                    ApplyTokens(data, tok); _store.Save(data); t = data.OpenAi;
+                    // 只回写 OpenAi 这一段：不拿整个旧快照覆盖别的线程刚写进去的密钥。
+                    _store.Update(d => ApplyTokens(d, tok));
+                    t = _store.Load().OpenAi;
                     _log?.Info("[app][oauth] refresh_token 刷新成功");
                 }
+                return (t.AccessToken, t.AccountId);
             }
             catch (Exception ex)
             {
@@ -70,24 +76,49 @@ public sealed class OpenAiOAuth : ITokenSource
             }
             finally { _refreshLock.Release(); }
         }
-        return (t.AccessToken, t.AccountId);
+        return (snapshot.AccessToken, snapshot.AccountId);
     }
 
     public async Task<LoginResult> LoginAsync(CancellationToken ct)
     {
         var (verifier, challenge) = OAuthPkce.GenPkce();
         var state = Guid.NewGuid().ToString("N");
-        // 双栈：TcpListener.Create 绑 IPv6Any 且 DualMode，同时收 IPv4/IPv6。
-        // 必须双栈——RedirectUri 用 localhost，Windows 上常解析为 ::1，单绑 127.0.0.1 会被拒。
-        using var listener = TcpListener.Create(1455);
-        try { listener.Start(); }
-        catch (Exception ex) { _log?.Error($"[app][oauth] 本地回调端口 1455 启动失败（可能被占用）: {ex.Message}"); return LoginResult.Failed; }
-        _log?.Debug($"[app][oauth] 已打开授权页 state={state}，等待浏览器回调 localhost:1455");
-        Process.Start(new ProcessStartInfo(OAuthPkce.BuildAuthorizeUrl(challenge, state)) { UseShellExecute = true });
+        // 只绑回环地址（127.0.0.1 与 ::1 各一个）：RedirectUri 是 localhost，Windows 上可能解析为任一。
+        // 旧实现 TcpListener.Create(1455) 实际绑的是 IPv6Any + DualMode = **所有网卡**：
+        // 同网段任意主机可抢先连上回调端口占掉唯一的那次 Accept → 用户登录必然失败（且防火墙会弹允许框）。
+        // 双 listener 也是为了不改 RedirectUri（改地址要同步改 OAuth 客户端注册）。
+        var v4 = new TcpListener(IPAddress.Loopback, 1455);
+        TcpListener? v6 = null;
         try
         {
-            using var reg = ct.Register(listener.Stop);
-            using var accept = await listener.AcceptTcpClientAsync(ct);
+            v4.Start();
+            try { v6 = new TcpListener(IPAddress.IPv6Loopback, 1455); v6.Start(); } catch { v6 = null; } // 无 IPv6 栈时只留 v4
+        }
+        catch (Exception ex)
+        {
+            v4.Stop(); v6?.Stop();
+            _log?.Error($"[app][oauth] 本地回调端口 1455 启动失败（可能被占用）: {ex.Message}");
+            return LoginResult.Failed;
+        }
+        using var stopV4 = v4; // 用 using 保证退出时释放监听端口
+        using var stopV6 = v6; // 可能为 null（无 IPv6 栈），using 对 null 是安全的
+        _log?.Debug($"[app][oauth] 已打开授权页 state={state}，等待浏览器回调 localhost:1455");
+        try
+        {
+            Process.Start(new ProcessStartInfo(OAuthPkce.BuildAuthorizeUrl(challenge, state)) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            // 无默认浏览器等情况：按"登录失败"处理，别让异常逃出 LoginAsync 破坏返回契约。
+            _log?.Error($"[app][oauth] 打开授权页失败: {ex.GetType().Name}: {ex.Message}");
+            return LoginResult.Failed;
+        }
+        try
+        {
+            using var reg = ct.Register(() => { v4.Stop(); v6?.Stop(); });
+            var acceptTasks = new List<Task<TcpClient>> { v4.AcceptTcpClientAsync(ct).AsTask() };
+            if (v6 is not null) acceptTasks.Add(v6.AcceptTcpClientAsync(ct).AsTask());
+            using var accept = await await Task.WhenAny(acceptTasks); // 两个回环地址谁先连上都行
             _log?.Debug("[app][oauth] 收到浏览器回调");
             var (code, gotState) = await ReadCallback(accept, ct);
             if (code is null || gotState != state)
@@ -103,13 +134,14 @@ public sealed class OpenAiOAuth : ITokenSource
                 ["redirect_uri"] = OAuthPkce.RedirectUri,
                 ["code_verifier"] = verifier,
             }, ct);
-            var data = _store.Load(); ApplyTokens(data, tok); _store.Save(data);
-            _log?.Debug($"[app][oauth] token 交换成功，邮箱={data.OpenAi.Email}");
+            // Update 在 store 锁内只改 OpenAi 段：不拿整个旧快照覆盖并发写入的其它密钥。
+            _store.Update(d => ApplyTokens(d, tok));
+            _log?.Debug($"[app][oauth] token 交换成功，邮箱={_store.Load().OpenAi.Email}");
             return LoginResult.Success;
         }
         catch (OperationCanceledException) { return LoginResult.Cancelled; } // 用户直接关了授权页（无回调）或等待超时，非硬错误
         catch (Exception ex) { _log?.Error($"[app][oauth] 登录失败（回调读取/token 交换异常）: {ex.GetType().Name}: {ex.Message}"); return LoginResult.Failed; }
-        finally { listener.Stop(); }
+        finally { v4.Stop(); v6?.Stop(); }
     }
 
     private async Task<JsonElement> PostToken(Dictionary<string, string> form, CancellationToken ct)

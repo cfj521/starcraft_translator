@@ -21,9 +21,21 @@ public partial class AliyunKeyWindow : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        var data = _store.Load();
-        data.Aliyun = new AliyunSecrets { AccessKeyId = AccessKeyIdBox.Text.Trim(), AccessKeySecret = AccessKeySecretBox.Password };
-        _store.Save(data);
+        try
+        {
+            // Trim 两端空白：密钥里带一个前导空格会 401，且提示"未配置/鉴权失败"极难定位。
+            // Lock 内读改写：避免与其它密钥窗口/后台 token 刷新并发时后写覆盖先写。
+            _store.Update(d => d.Aliyun = new AliyunSecrets
+            {
+                AccessKeyId = AccessKeyIdBox.Text.Trim(),
+                AccessKeySecret = AccessKeySecretBox.Password.Trim(),
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"保存失败：{ex.Message}", "阿里云密钥");
+            return;
+        }
         DialogResult = true;
         Close();
     }

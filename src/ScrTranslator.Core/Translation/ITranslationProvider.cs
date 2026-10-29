@@ -53,7 +53,8 @@ public interface ITranslationProvider
     /// 返回非 <see cref="ProviderState.Available"/> 时编排器直接跳过、不发请求。</summary>
     ProviderStatus GetStatus();
 
-    /// <summary>翻译一批韩文行。实现约定：翻不出的行**原样返回**（引用相等），编排器据此判未翻成。
+    /// <summary>翻译一批韩文行。实现约定：翻不出的行**原样返回**（内容相同即可，不一定同一引用），
+    /// 编排器按**字符串内容**判未翻成、不写缓存、不当译文上屏。
     /// 网络/鉴权失败直接抛异常，由编排器捕获后回退下一个 provider。</summary>
     Task<IReadOnlyList<string>> TranslateAsync(
         IReadOnlyList<string> koreanLines, TranslationContext ctx, CancellationToken ct);

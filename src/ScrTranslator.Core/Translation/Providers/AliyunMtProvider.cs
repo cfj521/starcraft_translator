@@ -10,6 +10,7 @@ public sealed class AliyunMtProvider : ITranslationProvider
     private readonly HttpClient _http;
     private readonly Func<(string AccessKeyId, string AccessKeySecret)> _creds;
     private DateTime _quotaExhaustedUntil;
+    private DateTime _throttledUntil;   // QPS/并发限流（秒级~分钟级），与"月度免费额度耗尽"完全两回事
     private readonly object _gate = new();
 
     public AliyunMtProvider(HttpClient http, Func<(string, string)> creds) { _http = http; _creds = creds; }
@@ -22,8 +23,13 @@ public sealed class AliyunMtProvider : ITranslationProvider
         var (id, key) = _creds();
         if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(key))
             return ProviderStatus.NoCreds("未配置阿里云 AccessKeyId/AccessKeySecret");
-        lock (_gate) if (_quotaExhaustedUntil > DateTime.UtcNow)
-            return ProviderStatus.Exhausted($"阿里云免费额度已用尽，冷却至 {_quotaExhaustedUntil:MM-dd HH:mm}");
+        lock (_gate)
+        {
+            if (_quotaExhaustedUntil > DateTime.UtcNow)
+                return ProviderStatus.Exhausted($"阿里云免费额度已用尽，冷却至 {_quotaExhaustedUntil.ToLocalTime():MM-dd HH:mm}");
+            if (_throttledUntil > DateTime.UtcNow)
+                return ProviderStatus.RateLimited($"阿里云限流中，{Math.Ceiling((_throttledUntil - DateTime.UtcNow).TotalSeconds):0} 秒后重试");
+        }
         return ProviderStatus.Ok();
     }
 
@@ -52,6 +58,7 @@ public sealed class AliyunMtProvider : ITranslationProvider
         var body = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
         {
+            if (LooksLikeThrottled(body)) { MarkThrottled(); throw new HttpRequestException($"阿里云限流: {Trunc(body)}"); }
             if (LooksLikeQuotaExhausted(body)) { MarkExhausted(); throw new ProviderQuotaExhaustedException("阿里云免费额度已用尽"); }
             throw new HttpRequestException($"阿里云 Translate {(int)resp.StatusCode}: {Trunc(body)}");
         }
@@ -72,16 +79,44 @@ public sealed class AliyunMtProvider : ITranslationProvider
         catch (Exception) { return null; }
     }
 
-    /// <summary>阿里云额度耗尽的典型返回：Code 含 QuotaExhausted / LimitExceeded / 消息含"免费额度"。</summary>
-    internal static bool LooksLikeQuotaExhausted(string body)
+    /// <summary>阿里云额度耗尽的典型返回：Code 含 QuotaExhausted / 消息含"免费额度"。
+    /// **不含** LimitExceeded / Throttling——那是 QPS 限流（见 <see cref="LooksLikeThrottled"/>），
+    /// 把它当"月度额度耗尽"会让 1 秒的限流换来十几小时的停机。</summary>
+    public static bool LooksLikeQuotaExhausted(string body)
     {
         string b = body.ToLowerInvariant();
-        return b.Contains("quotaexhausted") || b.Contains("limitexceeded") || body.Contains("免费额度");
+        return b.Contains("quotaexhausted") || body.Contains("免费额度");
+    }
+
+    /// <summary>QPS/并发限流：秒级~分钟级可恢复，冷却几十秒即可，不消耗月度额度语义。</summary>
+    public static bool LooksLikeThrottled(string body)
+    {
+        string b = body.ToLowerInvariant();
+        return b.Contains("limitexceeded") || b.Contains("throttling") || b.Contains("toomanyrequests")
+            || b.Contains("flowcontrol") || b.Contains("限流");
     }
 
     private void MarkExhausted()
     {
-        lock (_gate) _quotaExhaustedUntil = DateTime.UtcNow.Date.AddDays(1).AddHours(8);
+        // 阿里云免费额度按**北京时间 00:00** 重置。旧实现用 `UtcNow.Date.AddDays(1).AddHours(8)`
+        // （= 次日 08:00 UTC = 次日 16:00 北京时间），比真实重置时刻晚 16 小时，
+        // 最坏情况（北京时间下午耗尽）会多停摆近 32 小时。
+        lock (_gate) _quotaExhaustedUntil = NextBeijingResetUtc(DateTime.UtcNow);
+    }
+
+    /// <summary>下一次阿里云免费额度重置时刻（北京时间 00:00）对应的 UTC 时刻。
+    /// 独立出来便于单测：纯函数，无状态。</summary>
+    public static DateTime NextBeijingResetUtc(DateTime nowUtc)
+    {
+        DateTime beijingNow = nowUtc.AddHours(8);   // 已平移，只用于取"北京日期"
+        DateTime nextBeijingMidnight = beijingNow.Date.AddDays(1);
+        // 平移回 UTC：SpecifyKind 保证不受本机时区影响（DateTime 的 Kind 不参与算术）
+        return DateTime.SpecifyKind(nextBeijingMidnight, DateTimeKind.Utc).AddHours(-8);
+    }
+
+    private void MarkThrottled()
+    {
+        lock (_gate) _throttledUntil = DateTime.UtcNow.AddSeconds(30);
     }
     private static string Trunc(string s) => s.Length > 300 ? s[..300] + "…" : s;
 }

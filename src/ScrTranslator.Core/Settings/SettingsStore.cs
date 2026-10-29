@@ -32,7 +32,15 @@ public static class SettingsStore
     }
 
     public static void Save(AppSettings settings, string path)
-        => File.WriteAllText(path, JsonSerializer.Serialize(settings, Opts));
+    {
+        // 原子写：直接 WriteAllText 若在写入中途被中断（崩溃/断电/杀进程）会留下半截 JSON，
+        // 下次 Load 反序列化失败 → catch 返回全默认 → 用户所有设置静默丢失。
+        string dir = Path.GetDirectoryName(path) ?? "";
+        if (dir.Length > 0) Directory.CreateDirectory(dir);
+        string tmp = path + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(settings, Opts));
+        File.Move(tmp, path, overwrite: true);
+    }
 
     public static AppSettings Load(string path)
     {
@@ -41,13 +49,25 @@ public static class SettingsStore
             if (!File.Exists(path)) return new AppSettings();
             var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Opts);
             if (s is null) return new AppSettings();
+            // STJ 会把显式写出的 "Hotkeys": null / "Translation": null 赋成 null（init 默认值失效），
+            // 下面的 foreach 立刻 NRE → 被 catch 吞成"默认设置"→ 用户全部自定义配置静默丢失。
+            // 这里补回默认实例：只有那一段回默认，其余段仍按用户配置加载。
+            s = s with
+            {
+                General = s.General ?? new GeneralSettings(),
+                Ocr = s.Ocr ?? new OcrSettings(),
+                Appearance = s.Appearance ?? new AppearanceSettings(),
+                Hotkeys = s.Hotkeys ?? HotkeyDefaults.Map,
+                Translation = s.Translation ?? TranslationSettings.Default,
+            };
             // 合并热键：以默认全集为底，用户已存的覆盖之。这样后续新增功能对老配置自动补上默认绑定，
             // 而用户自定义的绑定不被冲掉；再做一次迁移（删退役功能、旧默认升新默认）。
             var merged = new Dictionary<string, HotkeyBinding>(HotkeyDefaults.Map);
             foreach (var kv in s.Hotkeys) merged[kv.Key] = kv.Value;
             MigrateHotkeys(merged);
             // provider 迁移：先滤掉已退役的腾讯云机翻（免费额度已下线、QPS 将归零），老配置池里若还有这一行就清掉。
-            var providers = s.Translation.Providers.Where(p => p.Id != "tencent").ToList();
+            // Providers 也可能被写成 null（同上的 STJ 行为），同样补回默认池再迁移。
+            var providers = (s.Translation.Providers ?? TranslationSettings.DefaultProviders).Where(p => p.Id != "tencent").ToList();
             // 老配置池里没有新加的 OpenAI API 模式则补上，让既有用户也能看到/启用这一行。
             if (providers.All(p => p.Id != TranslationProviderEntry.OpenAiApi))
                 providers.Add(new TranslationProviderEntry(TranslationProviderEntry.OpenAiApi, true));

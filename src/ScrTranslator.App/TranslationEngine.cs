@@ -77,6 +77,12 @@ public sealed class TranslationEngine : IDisposable
     /// 每拍刷一次池请求）。真文字白底黑边 conf≈0.98，0.75 留足余量。"真行被遮挡/读乱"由两帧共识兜住。</summary>
     private const double MinLineConfidence = 0.75;
     private readonly Dictionary<int, List<OverlayItem>> _displayedPerRoi = new();
+    /// <summary>翻译失败后的重试闸门（键=ROI 下标）：未翻成的 ROI 内容不变时不再每拍（200ms）重发，
+    /// 退避到该时刻再试。否则格式漂移/占位符被改坏的行会每秒 5 次重复付 LLM 请求（含 token 费用），
+    /// 可持续数分钟到数小时，而用户只看到"没翻译"。</summary>
+    private readonly Dictionary<int, DateTime> _retryAtPerRoi = new();
+    /// <summary>失败重试间隔：3 秒（相对 200ms 的轮询节拍是 15 倍退避，又不会让用户等太久）。</summary>
+    private static readonly TimeSpan RetryAfterFailure = TimeSpan.FromSeconds(3);
     private string _roiSetSignature = "";
     private bool _roiAvailable; // 当前活动场景是否有预设区域；活动场景/重载预设变化时重算
     private bool _anySceneCalibrated; // 至少一个场景有预设——F9 的启动前置条件（与"当前场景"无关）
@@ -606,10 +612,20 @@ public sealed class TranslationEngine : IDisposable
     {
         _lastJoinedPerRoi.Clear();
         _displayedPerRoi.Clear();
+        _retryAtPerRoi.Clear();
         _roiSetSignature = "";
         _stabilizer.ResetAll();
     }
     public void ResetChangeDetection() => ResetAllChangeDetection();
+
+    /// <summary>翻译设置变更（换 provider/模型/密钥/登录态）后调用：清空翻译缓存 + 复位变化检测。
+    /// 缓存键不含 provider/模型，不清就会一直显示旧引擎的译文，直到进程重启。</summary>
+    public void OnTranslationSettingsChanged()
+    {
+        _orchestrator.ClearCache();
+        ResetAllChangeDetection();
+        _log.Log("[app][probe] 翻译设置已变更：缓存已清空、变化检测已复位");
+    }
 
     public void Stop()
     {
@@ -785,6 +801,7 @@ public sealed class TranslationEngine : IDisposable
                 _roiSetSignature = sig;
                 _lastJoinedPerRoi.Clear();
                 _displayedPerRoi.Clear();
+                _retryAtPerRoi.Clear();
                 _stabilizer.ResetAll();
                 _ = _overlay.Dispatcher.InvokeAsync(() =>
                 {
@@ -798,11 +815,17 @@ public sealed class TranslationEngine : IDisposable
             // 精确比对会把这种抖动当成"变化"→ 每拍重译 + 先隐藏再重显 → 周期性闪烁且白烧 CPU。
             // 差异 ≤10% 视为同一行（跳过）；真实新消息/列表刷新差异大，照常重译。
             var toTranslate = new List<int>(); // 变化的 ROI 下标
+            var nowForRetry = DateTime.UtcNow;
             for (int r = 0; r < rois.Count; r++)
             {
                 var joined = string.Join("\n", rois[r].lines);
                 string last = _lastJoinedPerRoi.TryGetValue(r, out var l) ? l : "";
-                if (!TextsSimilar(joined, last)) toTranslate.Add(r);
+                if (!TextsSimilar(joined, last))
+                {
+                    // 上批整批未翻成（格式漂移/占位符坏）时内容不变也会被判"变化"重发：退避期内跳过。
+                    if (_retryAtPerRoi.TryGetValue(r, out var at) && nowForRetry < at) continue;
+                    toTranslate.Add(r);
+                }
             }
             // 变化检测：仅在真有变化时记录（稳态 changed=0 不打，避免刷屏）。
             // rois=ROI 总数，changed=被判变化的数，changed-rois=变化 ROI 的名字列表。
@@ -872,10 +895,19 @@ public sealed class TranslationEngine : IDisposable
             if (outcome.AllResolved)
             {
                 foreach (int r in toTranslate)
+                {
                     _lastJoinedPerRoi[r] = string.Join("\n", rois[r].lines);
+                    _retryAtPerRoi.Remove(r);
+                }
                 // 累计翻译行数：整批 AllResolved 时，本批每行都算成功翻译，按行归属的 ROI 累加。
                 foreach (var m in metas)
                     _cumTranslated.AddOrUpdate(m.roiName, 1L, (_, v) => v + 1);
+            }
+            else
+            {
+                // 未翻成：不退避的话下一拍（200ms）会带着同样的文本再付一次请求，持续到用户移开画面。
+                var retryAt = DateTime.UtcNow + RetryAfterFailure;
+                foreach (int r in toTranslate) _retryAtPerRoi[r] = retryAt;
             }
             _log.Debug($"[app][probe] 上屏完成 rois={rois.Count} 变化={toTranslate.Count} lines={koLines.Count} 显示={allItems.Count} {sw.ElapsedMilliseconds}ms AllResolved={outcome.AllResolved}");
 

@@ -33,6 +33,9 @@ public sealed class TranslationOrchestrator
         _glossary = glossary; _cache = cache; _pool = pool; _onError = onError;
     }
 
+    /// <summary>清空翻译缓存。测试/设置变更后使用（缓存键带场景，见 <see cref="TranslationCache.Key"/>）。</summary>
+    public void ClearCache() => _cache.Clear();
+
     /// <summary>当前缓存条目数（调试面板用）。</summary>
     public int CacheCount => _cache.Count;
 
@@ -56,13 +59,14 @@ public sealed class TranslationOrchestrator
         var text = new string[n];
         var missIdx = new List<int>();
         var missText = new List<string>();
+        var missKeys = new List<string>();   // 缓存键带场景：同句在 browsing/room/ingame 各自一份
         int glossaryHits = 0, cacheHits = 0;
         for (int i = 0; i < n; i++)
         {
             var ko = koreanLines[i];
             if (_glossary.TryGet(ko, out var g)) { text[i] = g; glossaryHits++; }        // 术语表：本地直出，零请求
-            else if (_cache.TryGet(ko, out var c)) { text[i] = c; cacheHits++; }          // 缓存：同上
-            else { text[i] = ko; missIdx.Add(i); missText.Add(ko); }                      // 先占位原文，翻成后覆盖
+            else if (_cache.TryGet(TranslationCache.Key(ctx.Scene, ko), out var c)) { text[i] = c; cacheHits++; } // 缓存：同上
+            else { text[i] = ko; missIdx.Add(i); missText.Add(ko); missKeys.Add(TranslationCache.Key(ctx.Scene, ko)); } // 先占位原文，翻成后覆盖
         }
 
         if (missText.Count == 0) return new TranslateOutcome(text, true, null, glossaryHits, cacheHits, 0);
@@ -100,9 +104,11 @@ public sealed class TranslationOrchestrator
         for (int j = 0; j < missIdx.Count; j++)
         {
             // provider 违约返回了不完整的批次：当作未翻成，别越界读。
-            if (j >= zh.Count || ReferenceEquals(zh[j], missText[j])) { allResolved = false; continue; }
+            // 用**值比较**而非引用比较：provider 常把"未翻动的行"原样返回，但通常是拼装/裁剪出的新字符串，
+            // 引用不同 → 会被误判成"已翻译"并永久写进缓存（阿里云路径尤其如此：Split 出来的都是新串）。
+            if (j >= zh.Count || string.Equals(zh[j], missText[j], StringComparison.Ordinal)) { allResolved = false; continue; }
             text[missIdx[j]] = zh[j];
-            _cache.Set(missText[j], zh[j]);   // 只缓存真翻出来的
+            _cache.Set(missKeys[j], zh[j]);   // 只缓存真翻出来的
         }
         return new TranslateOutcome(text, allResolved, error, glossaryHits, cacheHits, missText.Count);
     }

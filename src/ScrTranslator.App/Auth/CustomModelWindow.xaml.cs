@@ -35,10 +35,22 @@ public partial class CustomModelWindow : Window
         cur = cur with { Translation = cur.Translation with { CustomModelUrl = url, CustomModelId = model } };
         _holder.Current = cur;
         try { SettingsStore.Save(cur, _settingsPath); }
-        catch { /* 落盘失败不阻断 KEY 保存；下次主窗确定会再试 */ }
-        var data = _store.Load();
-        data.CustomModelApiKey = KeyBox.Password;
-        _store.Save(data);
+        catch (Exception ex)
+        {
+            // 旧实现空 catch：URL/模型只改内存、磁盘仍是旧值，重启后静默回滚且日志一行都没有。
+            MessageBox.Show(this, $"配置已生效但写入 settings.json 失败（重启后会回到旧值）：{ex.Message}", "自定义模型");
+        }
+        try
+        {
+            // Trim：密钥首尾空格直接进 Authorization 头会 401。
+            _store.Update(d => d.CustomModelApiKey = KeyBox.Password.Trim());
+        }
+        catch (Exception ex)
+        {
+            // 旧实现不捕获：密钥没存成功，窗口却照常关闭，用户以为已配置。
+            MessageBox.Show(this, $"API Key 保存失败：{ex.Message}", "自定义模型");
+            return;
+        }
         DialogResult = true;
         Close();
     }

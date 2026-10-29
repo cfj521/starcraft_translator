@@ -76,8 +76,21 @@ public static class SceneRefCapture
     public static void SaveOverride(string path, string sceneId, string label, string gameScene, string? race,
         int width, int height, string source, IReadOnlyList<SceneRefRegion> regions, byte[][] regionBytes)
     {
-        JsonObject root = File.Exists(path) && JsonNode.Parse(File.ReadAllText(path)) is JsonObject parsed
-            ? parsed : new JsonObject();
+        // 损坏文件不设防：旧实现直接 JsonNode.Parse，坏 JSON 抛异常，用户再也无法采集（每次都抛同一异常）。
+        // 这里把坏文件挪到 .corrupt-*（保留原字节供抢救）后从空对象重建。
+        JsonObject root = new();
+        if (File.Exists(path))
+        {
+            try
+            {
+                if (JsonNode.Parse(File.ReadAllText(path)) is JsonObject parsed) root = parsed;
+            }
+            catch
+            {
+                string bak = $"{path}.corrupt-{DateTime.Now:yyyyMMdd-HHmmss}";
+                try { File.Move(path, bak, overwrite: true); } catch { /* 挪不走就照旧覆盖，至少这次采集能成 */ }
+            }
+        }
         if (!root.ContainsKey("version")) root["version"] = SceneRefStore.SupportedVersion;
 
         // 新格式：scenes 以 gameScene 为识别键；race 挪进 data 条目。
@@ -126,11 +139,15 @@ public static class SceneRefCapture
 
         var dir = Path.GetDirectoryName(path);
         if (dir is not null) Directory.CreateDirectory(dir);
-        File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions
+        // 原子写：先写 .tmp 再 File.Move 替换。直接 WriteAllText 会在写入中途被中断时把覆盖层截成坏 JSON，
+        // 而坏文件会让下次 Load 整层被弃用（用户所有现场采集一次性失效）。
+        string tmp = path + ".tmp";
+        File.WriteAllText(tmp, root.ToJsonString(new JsonSerializerOptions
         {
             WriteIndented = true,
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         }), new UTF8Encoding(false));
+        File.Move(tmp, path, overwrite: true);
     }
 
     /// <summary>取子对象；不存在或不是对象则新建并挂上（避免把已有数据覆盖掉）。</summary>

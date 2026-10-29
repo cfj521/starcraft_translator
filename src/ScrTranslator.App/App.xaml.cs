@@ -24,18 +24,24 @@ public partial class App : Application
     private HotkeyService? _hotkeys;
     private Action? _openSettingsAction;
     private System.Threading.Mutex? _instanceMutex; // 单实例守护：托盘应用重复启动会多悬浮层/抢热键
+    private readonly object crashLogGate = new();   // crash.log 并发写保护（UI 线程 + 线程池同时崩溃时会撞文件锁）
 
     /// <summary>公开给外部（M4：Ctrl+F9 全局热键接线）打开配置窗口。</summary>
     public void OpenSettingsWindow() => _openSettingsAction?.Invoke();
 
+    // 单实例锁：必须用 WaitOne 判"是否拿到所有权"，不能用 new Mutex(initiallyOwned:true,...,createdNew:out ...)。
+    // createdNew 只表示"内核对象是不是新建的"：重启时旧进程 ReleaseMutex 只放所有权、句柄仍在，
+    // 新进程拿到的 createdNew=false（却确实持有锁）→ 被误判成"已在运行"→ 弹窗 + Exit(0)，
+    // 而旧进程已 Shutdown → 两个进程都没了，应用直接消失。
+    private bool _ownsMutex;
+
     /// <summary>重启 App：释放单实例锁 → 启动新进程 → 关闭当前进程。
-    /// 用于"改 CPU/GPU 设备需重启生效"——引擎是单例、构造时定死执行器，只有重启才能换。
-    /// 必须先 ReleaseMutex，否则新实例拿到锁前会判"已在运行"直接 Environment.Exit。</summary>
+    /// 用于"改 CPU/GPU 设备需重启生效"——引擎是单例、构造时定死执行器，只有重启才能换。</summary>
     public void RestartApp()
     {
         var exePath = Environment.ProcessPath;
         if (exePath is null) return;
-        _instanceMutex?.ReleaseMutex();   // 让新进程能拿到锁
+        ReleaseInstanceMutex();   // 让新进程能拿到锁（只释放一次；OnExit 不会再释放）
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -48,14 +54,31 @@ public partial class App : Application
         Shutdown();   // 走完整 WPF 关闭流程（释放捕获/热键/托盘）
     }
 
+    /// <summary>释放单实例锁（幂等）：ReleaseMutex 对未持有者会抛 ApplicationException，
+    /// 旧实现在 RestartApp 与 OnExit 各释放一次 → OnExit 抛异常，Dispose/base.OnExit 都不再执行。</summary>
+    private void ReleaseInstanceMutex()
+    {
+        if (_instanceMutex is null || !_ownsMutex) return;
+        _ownsMutex = false;
+        try { _instanceMutex.ReleaseMutex(); } catch { /* 已释放/所有权丢失：忽略 */ }
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
         // 单实例：命名 Mutex 持有整个进程生命周期。第二个实例提示后强制退出，避免重复悬浮窗/热键/捕获。
         // 进程崩溃时 OS 自动释放(abandoned mutex)，不会留死锁。
-        _instanceMutex = new System.Threading.Mutex(initiallyOwned: true, name: "ScrTranslator_SingleInstance", createdNew: out bool isFirst);
-        if (!isFirst)
+        _instanceMutex = new System.Threading.Mutex(initiallyOwned: false, name: "ScrTranslator_SingleInstance");
+        try
+        {
+            _ownsMutex = _instanceMutex.WaitOne(0, exitContext: false);
+        }
+        catch (AbandonedMutexException)
+        {
+            _ownsMutex = true; // 前一个进程崩溃留下的 abandoned mutex：所有权照样拿到
+        }
+        if (!_ownsMutex)
         {
             MessageBox.Show("SC:R 翻译器已在运行（请查看系统托盘图标）。", "已在运行",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -68,8 +91,16 @@ public partial class App : Application
         Directory.CreateDirectory(Path.GetDirectoryName(crashLog)!);
         // UTF-8 带 BOM：与 FileLogger 一致，Get-Content/记事本自动识别（新文件写 BOM，追加时 position>0 自动跳过）。
         var crashEnc = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
-        void LogCrash(string src, object? ex) =>
-            File.AppendAllText(crashLog, $"{DateTime.Now:HH:mm:ss.fff} [{src}] {ex}\n", crashEnc);
+        void LogCrash(string src, object? ex)
+        {
+            // 加锁 + 失败静默：File.AppendAllText 无锁，UI 线程与线程池同时崩溃时会互相抢文件锁 →
+            // 异常从 DispatcherUnhandledException 处理器里再抛 → 原始异常丢失、进程直接终止。
+            lock (crashLogGate)
+            {
+                try { File.AppendAllText(crashLog, $"{DateTime.Now:HH:mm:ss.fff} [{src}] {ex}\n", crashEnc); }
+                catch { /* 写不进去也不能在异常处理器里再抛 */ }
+            }
+        }
 
         DispatcherUnhandledException += (_, args) =>
         {
@@ -247,7 +278,9 @@ public partial class App : Application
                 return;
             }
             var info = probe.Start();
-            running = info.Status == ProbeStart.Ok;
+            // WaitingForWindow / WaitingForModels 时引擎已经在跑（看门狗守窗口、后台加载模型），
+            // 旧实现只认 Ok → 这两态下托盘显示"开启翻译"，再按 F9 走的是 Start 而不是 Stop，关不掉。
+            running = info.Status is ProbeStart.Ok or ProbeStart.WaitingForWindow or ProbeStart.WaitingForModels;
 
             // 凭据体检：OCR 认得出韩文、但 provider 池里没有任何可用 provider 时，症状是"字出来了却没翻"，
             // 而且失败发生在网络层、离配置页很远——必须在开翻译这一刻就说破（只进日志，不弹气泡）。
@@ -369,7 +402,7 @@ public partial class App : Application
                 oauthForSettings,
                 log,
                 OpenCalibration,
-                probe.ResetChangeDetection,
+                probe.OnTranslationSettingsChanged,
                 _hotkeys!, // 此时尚未 new，但 OpenSettings 只会在其后被调用（字段，非局部变量捕获）
                 () => probe.CurrentSceneId,
                 // 区域页保存后重载预设（直写出厂 layout-presets.json）；DI 里的 store 是单例，不重读盘就是旧值。
@@ -465,7 +498,7 @@ public partial class App : Application
         _hotkeys?.Dispose();
         _trayService?.Dispose();
         _host?.Dispose(); // OCR 引擎的重活销毁已甩后台线程（PaddleOcrEngine.Dispose 幂等、后台执行），不再卡 UI 线程
-        _instanceMutex?.ReleaseMutex();
+        ReleaseInstanceMutex(); // 幂等：RestartApp 里若已释放过，这里不再重复（重复 ReleaseMutex 会抛 ApplicationException）
         _instanceMutex?.Dispose();
         base.OnExit(e);
     }

@@ -13,9 +13,11 @@ namespace ScrTranslator.Tools.SceneRefGen;
 /// </summary>
 internal static class Program
 {
-    // ===== 指纹参数（1080p 基准）=====
+    // ===== 指纹参数（16:9 / 1080p 基准）=====
     const int BaseWidth = 1920;      // 基准坐标所在分辨率宽度
-    const int BlockSize = 4;         // 块宽（1080p 像素），其它分辨率按等比放大
+    const int BaseHeight = 1080;     // 基准坐标所在分辨率高度（= BaseWidth * 9 / 16）
+    const string BaseRatio = "16:9"; // 运行时只认这一档基准区域（任意分辨率按 H/1080 缩放后比对）
+    const int BlockSize = 4;         // 块宽（1080p 像素），决定 blocks；运行时块宽由区域宽/blocks 推导
     const int Tolerance = 16;        // 单块 RGB 最大通道差容差
     const double MinHitRatio = 0.90; // 命中率阈值，低于此判"其他界面"
 
@@ -38,8 +40,9 @@ internal static class Program
     };
 
     // ===== 场景 → 区域 + 参考截图 =====
-    // 只存 1080p 一档：同比例截图等比归一到 1080p 后指纹完全相同（跨比例靠安全区/纯等比区成立），
-    // 运行时把任意分辨率截图归一到 1920×1080 再比对，无需为每个分辨率各存一份。
+    // 每个 gameScene 只存 16:9 一档参考：运行时把基准区域按 H/1080 缩放（(browsing/room 另加居中裁剪)）
+    // 后与任意分辨率帧比对，无需为每个分辨率各存一份。
+    // 同一 gameScene 下的多条 SceneDef 必须共用同一套区域（文件里 regions 只存一份）。
     static readonly SceneDef[] SceneDefs =
     {
         new("browsing", "寻找房间", "browsing", null, FrameRegions,
@@ -67,10 +70,11 @@ internal static class Program
             ["version"] = 1,
             ["generatedAt"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
             ["generator"] = "tools/SceneRefGen",
-            ["note"] = "场景识别像素参考。regions 为 1080p 基准坐标；resolutions 下每分辨率独立存块均值 RGB 指纹（base64, rgb24 行优先）。",
+            ["note"] = "场景识别像素参考。scenes 以 gameScene 为键（browsing/room/ingame）；regions 为该场景的 16:9 基准几何（name+rect，相对值）；data 为按比例（ratio）存的块均值 RGB 指纹（base64, rgb24 行优先），ingame 的 data 条目用 race 字段区分种族。",
             ["fingerprint"] = new JsonObject
             {
-                ["baseResolution"] = $"{BaseWidth}x{BaseWidth * 9 / 16}",
+                ["baseRatio"] = BaseRatio,
+                ["baseResolution"] = $"{BaseWidth}x{BaseHeight}",
                 ["blockSize"] = BlockSize,
                 ["channelTolerance"] = Tolerance,
                 ["minHitRatio"] = MinHitRatio,
@@ -84,62 +88,83 @@ internal static class Program
         // 手改 data、打包截断、甚至只挪了一个 rect 坐标都会让校验失败，
         // 加载阶段直接报"参考不可用"，而不是拿着错位指纹在场上一路误判（那才是最难查的 bug）。
         var integrityEntries = new List<SceneRefIntegrity.Entry>();
-        // 缓存：分辨率宽度 → (场景 → 指纹)，供验证用
-        var refCache = new Dictionary<int, Dictionary<string, Fingerprint>>();
+        // 参考缓存：scene id → 指纹（每个 id 只有 16:9 一档；方案 B 下任意分辨率都拿这一份比）
+        var refs = new Dictionary<string, Fingerprint>();
 
-        foreach (var scene in SceneDefs)
+        // 新格式：scenes 以 gameScene 为键，种族不再是键的一部分（ingame 一个键装 t/p/z 三条 data）。
+        foreach (var group in SceneDefs.GroupBy(s => s.GameScene))
         {
+            var defs = group.ToList();
+            var primary = defs[0];
+            // 同 gameScene 下各 SceneDef 必须共用同一套区域：regions 在文件里只存一份。
+            foreach (var d in defs.Skip(1))
+            {
+                if (d.Regions.Length != primary.Regions.Length ||
+                    !d.Regions.Zip(primary.Regions).All(p => p.First == p.Second))
+                    Console.Error.WriteLine($"!! {primary.GameScene} 下 {d.Id} 的区域与 {primary.Id} 不同，" +
+                                            "而新格式每个 gameScene 只存一份 regions —— 请合并为同一套区域");
+            }
+
             var sceneNode = new JsonObject
             {
-                ["label"] = scene.Label,
-                ["gameScene"] = scene.GameScene,
-                // 相对 1080p 基准的 0~1 值（= 绝对 ÷ 1920 / ÷ 1080）。
-                ["regions"] = new JsonArray(scene.Regions.Select(r => (JsonNode)new JsonObject
-                { ["name"] = r.Name, ["rect"] = new JsonArray(
-                    r.X / (double)BaseWidth, r.Y / (double)(BaseWidth * 9 / 16),
-                    r.W / (double)BaseWidth, r.H / (double)(BaseWidth * 9 / 16)) }).ToArray()),
-                ["resolutions"] = new JsonObject(),
-            };
-            if (scene.Race != null) sceneNode["race"] = scene.Race;
-            var resNode = (JsonObject)sceneNode["resolutions"]!;
-
-            foreach (var (ratio, file) in scene.SourcesByRatio.OrderBy(k => k.Key))
-            {
-                var path = Path.Combine(imgDir, file);
-                if (!File.Exists(path)) { Console.Error.WriteLine($"!! 缺参考图 {scene.Id} {ratio}: {file}（跳过该比例）"); continue; }
-                using var bm = Decode(path);
-                int width = bm.Width;   // 比例键不携带分辨率，宽高从图读
-                double scale = (double)width / BaseWidth;
-                string resKey = ratio;
-                var regs = new JsonArray();
-                var byScene = refCache.TryGetValue(width, out var d) ? d : new Dictionary<string, Fingerprint>();
-                foreach (var region in scene.Regions)
+                ["label"] = string.Join("/", defs.Select(d => d.Label)),
+                ["gameScene"] = group.Key,
+                // 相对 16:9 基准的 0~1 值（= 绝对 ÷ 1920 / ÷ 1080）。
+                ["regions"] = new JsonObject
                 {
-                    var rect = ScaledRect(region, scale);
-                    var fp = BuildFingerprint(bm, rect, scale);
-                    // 相对本分辨率的 0~1 值（= 绝对 ÷ 分辨率宽高，与 1080p ÷ 1920/÷1080 等比相同）。
-                    double relX = region.X / (double)BaseWidth, relY = region.Y / (double)(BaseWidth * 9 / 16),
-                           relW = region.W / (double)BaseWidth, relH = region.H / (double)(BaseWidth * 9 / 16);
-                    integrityEntries.Add(new SceneRefIntegrity.Entry(
-                        SceneRefIntegrity.Key(scene.Id, resKey, region.Name),
-                        SceneRefIntegrity.Geometry(relX, relY, relW, relH, BlockPx(scale), fp.BlocksX, fp.BlocksY),
-                        fp.Bytes));
-                    byScene[scene.Id] = MergeFp(byScene.TryGetValue(scene.Id, out var old) ? old : null, fp);
-                    regs.Add((JsonNode)new JsonObject
+                    ["name"] = primary.Regions[0].Name,
+                    ["rect"] = RegionRectJson(primary.Regions[0]),
+                },
+                ["data"] = new JsonArray(),
+            };
+            var dataNode = (JsonArray)sceneNode["data"]!;
+
+            foreach (var scene in defs)
+            {
+                foreach (var (ratio, file) in scene.SourcesByRatio.OrderBy(k => k.Key))
+                {
+                    // 运行时只存/只认 16:9 一档：任意分辨率都是把 16:9 基准区域按 H/1080 缩放后比对
+                    // （方案 B）。其它比例的条目永远不会被选中，生成出来只会是死数据，故直接拒绝。
+                    if (ratio != BaseRatio)
                     {
-                        ["name"] = region.Name,
-                        ["rect"] = new JsonArray(relX, relY, relW, relH),
-                        // blockPx 必须一起写死：运行时要用与生成时完全相同的块宽做均值，
-                        // 否则 (rect.W / blocks) 的整除误差会让网格错位、指纹全不命中。
-                        ["blockPx"] = BlockPx(scale),
-                        ["blocks"] = new JsonArray(fp.BlocksX, fp.BlocksY),
-                        ["data"] = Convert.ToBase64String(fp.Bytes),
-                    });
+                        Console.Error.WriteLine($"!! {scene.Id} 的 {ratio} 参考（{file}）已跳过：" +
+                                                $"运行时只使用 {BaseRatio} 基准区域按高度缩放，不消费其它比例条目");
+                        continue;
+                    }
+                    var path = Path.Combine(imgDir, file);
+                    if (!File.Exists(path)) { Console.Error.WriteLine($"!! 缺参考图 {scene.Id} {ratio}: {file}（跳过该比例）"); continue; }
+                    using var bm = Decode(path);
+                    int width = bm.Width, height = bm.Height;
+                    // 换算式与运行时完全一致（SceneRefCapture.FittingRegions）：
+                    // 统一高度因子 H/1080，browsing/room 叠加居中水平裁剪，ingame 贴左边缘不裁。
+                    var rects = scene.Regions.Select(r => ScaledRect(r, width, height, CenterCropFor(scene.GameScene))).ToArray();
+                    var parts = new List<Fingerprint>();
+                    foreach (var (region, rect) in scene.Regions.Zip(rects))
+                    {
+                        var fp = BuildFingerprint(bm, rect);
+                        parts.Add(fp);
+                        double relX = region.X / (double)BaseWidth, relY = region.Y / (double)BaseHeight,
+                               relW = region.W / (double)BaseWidth, relH = region.H / (double)BaseHeight;
+                        integrityEntries.Add(new SceneRefIntegrity.Entry(
+                            SceneRefIntegrity.Key(scene.Id, ratio, region.Name),
+                            SceneRefIntegrity.Geometry(relX, relY, relW, relH, BlockPx(height), fp.BlocksX, fp.BlocksY),
+                            fp.Bytes));
+                        dataNode.Add(new JsonObject
+                        {
+                            ["ratio"] = ratio,
+                            ["source_file"] = file,
+                            // blockPx 仅作显示/诊断：运行时块宽 = 缩放后区域宽 / blocks（见 SceneFingerprint.Compute），
+                            // 真正决定网格的是 blocks，务必与生成时一致。
+                            ["blockPx"] = BlockPx(height),
+                            ["blocks"] = new JsonArray(fp.BlocksX, fp.BlocksY),
+                            ["data"] = Convert.ToBase64String(fp.Bytes),
+                            ["race"] = scene.GameScene == "ingame" ? scene.Race : null,
+                        });
+                    }
+                    refs[scene.Id] = parts.Count == 1 ? parts[0] : MergeFp(parts);
                 }
-                refCache[width] = byScene;
-                resNode[resKey] = new JsonObject { ["source"] = file, ["regions"] = regs };
             }
-            scenesNode[scene.Id] = sceneNode;
+            scenesNode[group.Key] = sceneNode;
         }
 
         root["integrity"] = new JsonObject
@@ -159,34 +184,44 @@ internal static class Program
         }), new UTF8Encoding(false));
         Console.WriteLine($"✓ 写入 {Path.GetRelativePath(repoRoot, outPath)}  指纹数据 {totalBytes / 1024.0:F0} KB  文件 {new FileInfo(outPath).Length / 1024.0:F0} KB");
 
-        return Validate(repoRoot, imgDir, refCache) ? 0 : 2;
+        return Validate(imgDir, refs) ? 0 : 2;
     }
 
-    // ===== 验证：每张同分辨率截图对全部场景参考的命中率，判对应否 =====
-    static bool Validate(string repoRoot, string imgDir, Dictionary<int, Dictionary<string, Fingerprint>> refCache)
+    // ===== 验证：每张截图对全部场景参考的命中率，判对应否 =====
+    // 几何换算必须与运行时（SceneRefCapture.FittingRegions + SceneRecognizer 的 centerCrop 规则）一致，
+    // 否则矩阵会"自洽地报 100%"，而实机因为 crop 差几像素整片不命中。
+    static bool Validate(string imgDir, Dictionary<string, Fingerprint> refs)
     {
         bool allOk = true;
         double threshold = MinHitRatio * 100;
-        foreach (var width in new[] { 1920, 2560, 3840 })
+        var shots = Directory.GetFiles(imgDir, "*.png")
+            .Select(p => (Path: p, Name: Path.GetFileNameWithoutExtension(p)))
+            .Where(x => !x.Name.StartsWith("ingame-w") && !x.Name.StartsWith("ingame-h"))   // 量聊天区用的，不参与
+            .Select(x =>
+            {
+                // 先用编解码器读尺寸分组，避免一次性解码整批 4K 位图；真正比时再逐张解码。
+                using var codec = SKCodec.Create(x.Path) ?? throw new InvalidOperationException($"解码失败 {x.Path}");
+                return (x.Path, x.Name, codec.Info.Width, codec.Info.Height);
+            })
+            .GroupBy(x => (x.Width, x.Height))
+            .OrderBy(g => g.Key.Width);
+
+        foreach (var group in shots)
         {
-            if (!refCache.TryGetValue(width, out var refs)) continue;
-            double scale = (double)width / BaseWidth;
-            Console.WriteLine($"\n===== 验证 {width}x{width * 9 / 16}（阈值 {threshold:F0}%）=====");
+            var (width, height) = group.Key;
+            Console.WriteLine($"\n===== 验证 {width}x{height}（阈值 {threshold:F0}%）=====");
             Console.Write($"{"待判图",-16}{string.Concat(SceneDefs.Select(s => $"{s.Id,11}"))}  判定 → 期望");
             Console.WriteLine();
-            foreach (var path in Directory.GetFiles(imgDir, "*.png").OrderBy(p => p))
+            foreach (var shot in group.OrderBy(x => x.Name))
             {
-                var name = Path.GetFileNameWithoutExtension(path);
-                if (name.StartsWith("ingame-w") || name.StartsWith("ingame-h")) continue;   // 量聊天区用的，不参与
-                using var bm = Decode(path);
-                if (bm.Width != width) continue;
-                var expected = ExpectedScene(name);
-                Console.Write($"{name,-16}");
+                using var bm = Decode(shot.Path);
+                var expected = ExpectedScene(shot.Name);
+                Console.Write($"{shot.Name,-16}");
                 double best = -1; string bestId = "?";
                 foreach (var scene in SceneDefs)
                 {
                     if (!refs.TryGetValue(scene.Id, out var rf)) { Console.Write($"{"-",11}"); continue; }
-                    var live = LiveFingerprint(bm, scene.Regions, scale);
+                    var live = LiveFingerprint(bm, scene.Regions, width, height, CenterCropFor(scene.GameScene), rf);
                     double v = HitRatio(live, rf);
                     Console.Write($"{v,11:F1}");
                     if (v > best) { best = v; bestId = scene.Id; }
@@ -216,34 +251,53 @@ internal static class Program
     record Region(string Name, int X, int Y, int W, int H);
     record SceneDef(string Id, string Label, string GameScene, string? Race, Region[] Regions, Dictionary<string, string> SourcesByRatio);
 
-    static Rect ScaledRect(Region r, double scale) => new(
-        (int)Math.Round(r.X * scale), (int)Math.Round(r.Y * scale),
-        (int)Math.Round(r.W * scale), (int)Math.Round(r.H * scale));
+    /// <summary>与运行时同为"游戏内不裁剪、其它场景居中水平裁剪"（见 SceneRecognizer.Recognize）。</summary>
+    static bool CenterCropFor(string gameScene) => gameScene != "ingame";
 
-    /// <summary>该分辨率下的实际块宽（像素）。生成与运行时共用同一公式，保证网格对齐。</summary>
-    static int BlockPx(double scale) => Math.Max(2, (int)Math.Round(BlockSize * scale));
+    static JsonArray RegionRectJson(Region r) => new(
+        r.X / (double)BaseWidth, r.Y / (double)BaseHeight,
+        r.W / (double)BaseWidth, r.H / (double)BaseHeight);
 
-    static Fingerprint BuildFingerprint(SKBitmap bm, Rect rect, double scale)
+    /// <summary>基准（1920×1080）区域 → 目标分辨率像素矩形。**与 SceneRefCapture.FittingRegions 同一公式**：
+    /// 统一高度因子 H/1080（x/y/w/h 同因子），<paramref name="centerCrop"/> 时再叠加居中水平裁剪
+    /// crop=(1920−1080·ar)/2，x=(基准x−crop)·H/1080。绝不在这里另立一套缩放口径。</summary>
+    static Rect ScaledRect(Region r, int width, int height, bool centerCrop)
     {
-        // 块数仍按名义块宽推导（保持与旧参考相同的网格密度，如 race-hud=47x2），
-        // 但块边界改用**均分**（块宽 = 区域宽/块数，浮点），与运行时 SceneFingerprint.Compute 完全一致。
-        // 旧实现用固定 bs 像素切块，区域高度不能整除 bs 时会漏采底部像素，导致生成端与运行端指纹对不上。
-        int bs = BlockPx(scale);
-        int bx = Math.Max(1, rect.W / bs), by = Math.Max(1, rect.H / bs);
-        var bytes = new byte[bx * by * 3];
+        double sy = height / (double)BaseHeight;
+        double crop = centerCrop ? (BaseWidth - BaseHeight * (width / (double)height)) / 2.0 : 0.0;
+        return new Rect(
+            (int)Math.Round((r.X - crop) * sy), (int)Math.Round(r.Y * sy),
+            (int)Math.Round(r.W * sy), (int)Math.Round(r.H * sy));
+    }
+
+    /// <summary>名义块宽（像素，仅用于推导块数 / 写 blockPx 供诊断）。运行时实际块宽 = 区域宽/blocks。</summary>
+    static int BlockPx(int height) => Math.Max(2, (int)Math.Round(BlockSize * (height / (double)BaseHeight)));
+
+    static Fingerprint BuildFingerprint(SKBitmap bm, Rect rect, int blocksX = 0, int blocksY = 0)
+    {
+        // 块数**必须沿用出厂参考的 BlocksX/BlocksY**（1080p 那套网格），与运行时 SceneFingerprint.Compute 一致。
+        // 若按目标分辨率的块宽重算块数，非整数缩放下块数会变（1024 时 45→43），
+        // 指纹长度就与出厂参考不等，比对必然掉成"随机"——这正是验证矩阵此前自欺的根源。
+        if (blocksX <= 0 || blocksY <= 0)
+        {
+            int bs = Math.Max(2, (int)Math.Round(BlockSize * (bm.Height / (double)BaseHeight)));
+            blocksX = Math.Max(1, rect.W / bs);
+            blocksY = Math.Max(1, rect.H / bs);
+        }
+        var bytes = new byte[blocksX * blocksY * 3];
         var (ro, go, bo) = ChannelOffsets(bm);
-        double bsx = rect.W / (double)bx;   // 均分块宽（浮点），与 Compute 同
-        double bsy = rect.H / (double)by;
+        double bsx = rect.W / (double)blocksX;   // 均分块宽（浮点），与 Compute 同
+        double bsy = rect.H / (double)blocksY;
         unsafe
         {
             byte* p = (byte*)bm.GetPixels();
-            for (int gy = 0; gy < by; gy++)
-                for (int gx = 0; gx < bx; gx++)
+            for (int gy = 0; gy < blocksY; gy++)
+                for (int gx = 0; gx < blocksX; gx++)
                 {
-                    int x0 = (int)Math.Round(rect.X + gx * bsx);
-                    int x1 = (int)Math.Round(rect.X + (gx + 1) * bsx);
-                    int y0 = (int)Math.Round(rect.Y + gy * bsy);
-                    int y1 = (int)Math.Round(rect.Y + (gy + 1) * bsy);
+                    int x0 = Math.Max(0, (int)Math.Round(rect.X + gx * bsx));
+                    int x1 = Math.Min(bm.Width, (int)Math.Round(rect.X + (gx + 1) * bsx));
+                    int y0 = Math.Max(0, (int)Math.Round(rect.Y + gy * bsy));
+                    int y1 = Math.Min(bm.Height, (int)Math.Round(rect.Y + (gy + 1) * bsy));
                     long sr = 0, sg = 0, sb = 0; int n = 0;
                     for (int yy = y0; yy < y1; yy++)
                         for (int xx = x0; xx < x1; xx++)
@@ -251,30 +305,37 @@ internal static class Program
                             byte* q = p + (long)yy * bm.RowBytes + (long)xx * 4;
                             sr += q[ro]; sg += q[go]; sb += q[bo]; n++;
                         }
-                    int o = (gy * bx + gx) * 3;
+                    int o = (gy * blocksX + gx) * 3;
                     bytes[o] = (byte)(n == 0 ? 0 : sr / n);
                     bytes[o + 1] = (byte)(n == 0 ? 0 : sg / n);
                     bytes[o + 2] = (byte)(n == 0 ? 0 : sb / n);
                 }
         }
-        return new Fingerprint(bx, by, bytes);
+        return new Fingerprint(blocksX, blocksY, bytes);
     }
 
-    /// <summary>把某场景所有区域的指纹拼成一维（运行时同样顺序拼接即可直接比）。</summary>
-    static Fingerprint LiveFingerprint(SKBitmap bm, Region[] regions, double scale)
+    /// <summary>把某场景所有区域的指纹拼成一维（运行时同样顺序拼接后直接比）。
+    /// 块网格取自参考指纹（<paramref name="rf"/>），与运行时"块数由参考决定"同口径。</summary>
+    static Fingerprint LiveFingerprint(SKBitmap bm, Region[] regions, int width, int height, bool centerCrop,
+        Fingerprint rf)
     {
-        var parts = regions.Select(r => BuildFingerprint(bm, ScaledRect(r, scale), scale)).ToArray();
-        int total = parts.Sum(p => p.Bytes.Length);
-        var buf = new byte[total];
+        var rects = regions.Select(r => ScaledRect(r, width, height, centerCrop)).ToArray();
+        if (regions.Length == 1)
+            return BuildFingerprint(bm, rects[0], rf.BlocksX, rf.BlocksY);
+        // 多区域：按参考块的纵向分布拆分（当前每个场景只有一个区域，此分支仅防御）
+        return MergeFp(regions.Zip(rects).Select(p => BuildFingerprint(bm, p.Second)).ToArray());
+    }
+
+    static Fingerprint MergeFp(IReadOnlyList<Fingerprint> parts)
+    {
+        if (parts.Count == 1) return parts[0];
+        var buf = new byte[parts.Sum(p => p.Bytes.Length)];
         int off = 0;
         foreach (var p in parts) { Buffer.BlockCopy(p.Bytes, 0, buf, off, p.Bytes.Length); off += p.Bytes.Length; }
         return new Fingerprint(parts[0].BlocksX, parts.Sum(p => p.BlocksY), buf);
     }
 
-    static Fingerprint MergeFp(Fingerprint? old, Fingerprint add)
-        => old == null ? add : new Fingerprint(old.Value.BlocksX, old.Value.BlocksY + add.BlocksY, [.. old.Value.Bytes, .. add.Bytes]);
-
-    static double HitRatio(Fingerprint live, Fingerprint rf)
+    static double HitRatio(Fingerprint live, Fingerprint rf, int? tolerance = null)
     {
         int n = Math.Min(live.Bytes.Length, rf.Bytes.Length) / 3;
         if (n == 0) return 0;
@@ -284,7 +345,7 @@ internal static class Program
             int o = k * 3;
             int d = Math.Max(Math.Abs(live.Bytes[o] - rf.Bytes[o]),
                     Math.Max(Math.Abs(live.Bytes[o + 1] - rf.Bytes[o + 1]), Math.Abs(live.Bytes[o + 2] - rf.Bytes[o + 2])));
-            if (d <= Tolerance) hit++;
+            if (d <= (tolerance ?? Tolerance)) hit++;
         }
         return 100.0 * hit / n;
     }

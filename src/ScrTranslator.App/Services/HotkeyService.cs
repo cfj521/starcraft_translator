@@ -157,7 +157,10 @@ public sealed class HotkeyService : IDisposable
     {
         if (_funcToId.TryGetValue(func, out var id))
         {
-            NativeMethods.UnregisterHotKey(_hwnd, id);
+            // 注销失败（句柄已失效/该热键由其它线程注册）时 OS 侧仍然占着这个组合键：
+            // 若照旧删掉映射，按下后 WM_HOTKEY 到达但查不到 action → 按键被吞、什么也不做，
+            // 而且其它程序也注册不了。这里失败就保留映射，让原组合键仍然可用。
+            if (!NativeMethods.UnregisterHotKey(_hwnd, id)) return;
             _idToAction.Remove(id);
             _funcToId.Remove(func);
         }

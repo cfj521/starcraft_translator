@@ -76,7 +76,7 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, out MONITORINFO lpmi);
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
     /// <summary>窗口所在显示器的物理像素尺寸 (宽,高)。取不到（窗口无效/无显示器）时返回 (0,0)。</summary>
     public static (int W, int H) GetMonitorSize(IntPtr hwnd)
@@ -84,7 +84,10 @@ internal static class NativeMethods
         const uint MONITOR_DEFAULTTONEAREST = 2;
         IntPtr mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         if (mon == IntPtr.Zero) return (0, 0);
-        if (!GetMonitorInfo(mon, out MONITORINFO mi)) return (0, 0);
+        // cbSize 必须先赋值：GetMonitorInfo 用它校验结构体大小，为 0 时直接返回失败(err=87)。
+        // 漏了这一步 → 本方法恒返回 (0,0) → 帧池上限退回 item.Size → "切分辨率不刷新"的修复形同虚设。
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(mon, ref mi)) return (0, 0);
         return (mi.rcMonitor.Right - mi.rcMonitor.Left, mi.rcMonitor.Bottom - mi.rcMonitor.Top);
     }
 

@@ -36,6 +36,8 @@ public sealed class HyMt2Provider : ITranslationProvider
     private HunyuanDenseModel? _model; // 延迟加载单例（首次翻译或配置页冷加载才加载权重）
     private Task? _pendingUnload;      // 上一次 Unload 的后台卸载任务；EnsureModelAsync 等它完成再建新模型，避免双模型并存
     private int _inFlight;             // 正在使用模型实例做翻译的并发数；Unload 等它归零再真正 Dispose，避免销毁被翻译中的模型
+    private DateTime _retryAfter = DateTime.MinValue; // Failed 后的重试闸门：避免每拍（200ms）都重试加载 1.8B 权重
+    private const int FailureCooldownSeconds = 30;
 
     public HyMt2Provider(Func<string> modelPathGetter, Func<string> backendGetter, Action<string>? onError = null, Action<string>? onInfo = null)
     { _modelPath = modelPathGetter; _backend = backendGetter; _onError = onError; _onInfo = onInfo; }
@@ -67,6 +69,18 @@ public sealed class HyMt2Provider : ITranslationProvider
         string path = _modelPath();
         if (string.IsNullOrWhiteSpace(path)) return ProviderStatus.NoCreds("本地 Hy-MT2 未配置（模型路径为空）");
         if (!System.IO.File.Exists(path)) return ProviderStatus.NoCreds($"本地 Hy-MT2 模型文件不存在：{path}");
+        // Failed 必须在这里拦住：否则编排器每拍（默认 200ms）都选它 → EnsureModelLocked 再 new 一次 1.8B 权重
+        // → 再失败刷日志，CPU/IO 打满而翻译永久不可用。冷却期报 NoCredentials（不联网、不发请求，与"加载不了"语义一致）。
+        lock (_gate)
+        {
+            if (_state == HyMt2LoadState.Failed)
+            {
+                var left = _retryAfter - DateTime.UtcNow;
+                if (left > TimeSpan.Zero)
+                    return ProviderStatus.NoCreds(
+                        $"本地 Hy-MT2 加载失败，{Math.Ceiling(left.TotalSeconds):0} 秒后重试（换模型或检查内存/后端）");
+            }
+        }
         return ProviderStatus.Ok();
     }
 
@@ -75,8 +89,7 @@ public sealed class HyMt2Provider : ITranslationProvider
         if (lines.Count == 0) return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
         return Task.Run(async () =>
         {
-            var model = await EnsureModelAsync(); // 延迟加载：启动后台预加载或首次翻译才加载权重（并等旧模型卸载完）
-            Interlocked.Increment(ref _inFlight); // 宣告"正在用这个模型"，Unload 会等它归零再销毁
+            var model = await AcquireModelAsync(); // 延迟加载 + 原子宣告"正在用"（同一把锁内完成，防 Unload 抢占销毁）
             try
             {
                 lock (_gate)
@@ -107,7 +120,11 @@ public sealed class HyMt2Provider : ITranslationProvider
             try { await EnsureModelAsync(); }
             catch (Exception ex)
             {
-                lock (_gate) _state = HyMt2LoadState.Failed;
+                lock (_gate)
+                {
+                    _state = HyMt2LoadState.Failed;
+                    _retryAfter = DateTime.UtcNow.AddSeconds(FailureCooldownSeconds);
+                }
                 _onError?.Invoke($"本地 Hy-MT2 加载失败: {ex.Message}");
             }
         });
@@ -123,27 +140,49 @@ public sealed class HyMt2Provider : ITranslationProvider
         lock (_gate) return EnsureModelLocked();
     }
 
+    /// <summary>给翻译用：加载（必要时）+ 在**同一把锁内**把 _inFlight 加一。
+    /// 关键：加载完成与"宣告在用"不能分成两步——旧实现先 await 返回、再 Increment，中间那段窗口里
+    /// Unload 读到 _inFlight==0 就会立刻 Dispose，翻译随即在已释放的原生模型上推理 → AccessViolation 杀进程。</summary>
+    private async Task<HunyuanDenseModel> AcquireModelAsync()
+    {
+        Task? pending;
+        lock (_gate) pending = _pendingUnload;
+        if (pending is not null) { try { await pending; } catch { } }
+        lock (_gate)
+        {
+            var model = EnsureModelLocked();
+            Interlocked.Increment(ref _inFlight); // 与加载同锁：Unload 拿不到锁就不会误判为"没人用"
+            return model;
+        }
+    }
+
     /// <summary>卸载：销毁模型、释放权重内存（~1GB）。后台线程执行（不阻塞调用线程/UI），
     /// 且等待正在使用该模型的翻译（_inFlight）全部结束才真正 Dispose，避免销毁被翻译中的模型。
     /// 配置页选中外部组并保存时调用。未加载则无操作。</summary>
     public void Unload()
     {
-        HunyuanDenseModel? m = null;
+        HunyuanDenseModel? m;
         lock (_gate)
         {
             m = _model;
             _model = null;
             _state = HyMt2LoadState.NotLoaded;
-        }
-        if (m is not null)
-        {
-            var task = Task.Run(() =>
+            if (m is null) return; // 未加载：无操作
+            // 先登记"卸载中"再启动任务：旧实现 Task.Run 之后才写 _pendingUnload，中间窗口里并发的
+            // EnsureModelAsync 读到 null → 立刻再 new 一份 1.8B 权重，两份同时驻留（~2GB）且 native 资源打架。
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pendingUnload = done.Task;
+            var victim = m;
+            Task.Run(() =>
             {
-                while (Interlocked.CompareExchange(ref _inFlight, 0, 0) > 0) Thread.Sleep(10); // 等在用翻译结束
-                try { m.Dispose(); }
+                try
+                {
+                    while (Interlocked.CompareExchange(ref _inFlight, 0, 0) > 0) Thread.Sleep(10); // 等在用翻译结束
+                    victim.Dispose();
+                }
                 catch (Exception ex) { _onError?.Invoke($"本地 Hy-MT2 卸载失败: {ex.Message}"); }
+                finally { done.TrySetResult(); }
             });
-            lock (_gate) _pendingUnload = task;
         }
     }
 
@@ -171,6 +210,7 @@ public sealed class HyMt2Provider : ITranslationProvider
             catch
             {
                 _state = HyMt2LoadState.Failed;
+                _retryAfter = DateTime.UtcNow.AddSeconds(FailureCooldownSeconds);
                 throw;
             }
         }

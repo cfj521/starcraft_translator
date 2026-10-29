@@ -11,9 +11,9 @@ public class TranslationOrchestratorTests
 
     private sealed class FakeProvider : ITranslationProvider
     {
-        public enum Mode { Real, Throw, Degrade, Short }
+        public enum Mode { Real, Throw, Degrade, Short, Echo }
         // Real=正常加前缀；Throw=抛异常；Degrade=原样返回传入引用(引用相等==静默降级)；
-        // Short=违约只回 1 行（但回的那行是真译文），测"缺行不越界崩掉"。
+        // Echo=回**内容相同但不同引用**的串（阿里云 Split 出来的就是这种）；Short=违约只回 1 行。
         public Mode Behavior = Mode.Real;
         public string Prefix = "T:";
         public int Calls;
@@ -30,6 +30,7 @@ public class TranslationOrchestratorTests
             Calls++;
             if (Behavior == Mode.Throw) throw new InvalidOperationException("boom");
             if (Behavior == Mode.Degrade) return Task.FromResult(lines);           // 引用相等 == 没翻
+            if (Behavior == Mode.Echo) return Task.FromResult<IReadOnlyList<string>>(lines.Select(l => new string(l.ToCharArray())).ToArray()); // 内容同、引用不同
             if (Behavior == Mode.Short) return Task.FromResult<IReadOnlyList<string>>(lines.Take(1).Select(l => Prefix + l).ToArray());
             return Task.FromResult<IReadOnlyList<string>>(lines.Select(l => Prefix + l).ToArray());
         }
@@ -75,7 +76,7 @@ public class TranslationOrchestratorTests
         Assert.Equal(1, p.Calls);                       // 一批一次，不是每行一次
         Assert.True(r.AllResolved);
         Assert.Null(r.Error);
-        Assert.True(cache.TryGet("가", out var c) && c == "T:가");
+        Assert.True(cache.TryGet(TranslationCache.Key(Ctx.Scene, "가"), out var c) && c == "T:가");
 
         // 同批再来一次：全部走缓存，provider 不再被调用
         await o.TranslateAsync(new[] { "가", "나" }, Ctx, CancellationToken.None);
@@ -86,7 +87,7 @@ public class TranslationOrchestratorTests
     public async Task GlossaryAndCache_ShortCircuit_ProviderOnlySeesTheRest()
     {
         var glo = Glossary.FromEntries(new[] { ("저그", "虫族") });
-        var cache = new TranslationCache(); cache.Set("나", "缓存中");
+        var cache = new TranslationCache(); cache.Set(TranslationCache.Key(Ctx.Scene, "나"), "缓存中");
         var p = new FakeProvider();
         var (o, _, _) = Make(p, glo, cache);
         var r = await o.TranslateAsync(new[] { "저그", "나", "다" }, Ctx, CancellationToken.None);
@@ -118,7 +119,7 @@ public class TranslationOrchestratorTests
 
         Assert.Equal("가", r.Texts[0]);                 // 回落原文（调用方须自行过滤，别当译文显示）
         Assert.False(r.AllResolved);
-        Assert.False(cache.TryGet("가", out _));        // 失败结果绝不进缓存
+        Assert.False(cache.TryGet(TranslationCache.Key(Ctx.Scene, "가"), out _));        // 失败结果绝不进缓存
         Assert.Contains("fake 翻译失败", r.Error);
         Assert.Single(errors);                          // 且上报过一次，不会静默
     }
@@ -131,7 +132,20 @@ public class TranslationOrchestratorTests
 
         Assert.Equal("가", r.Texts[0]);
         Assert.False(r.AllResolved);
-        Assert.False(cache.TryGet("가", out _));
+        Assert.False(cache.TryGet(TranslationCache.Key(Ctx.Scene, "가"), out _));
+    }
+
+    [Fact]
+    public async Task ProviderEchoesNewString_CountsAsUnresolved_NotCached()
+    {
+        // 阿里云路径：Split 出来的行都是新字符串，即使内容与原文逐字相同，引用也不同。
+        // 旧实现用 ReferenceEquals 判"没翻"→ 原文被当译文永久缓存并上屏。
+        var (o, cache, _) = Make(new FakeProvider { Behavior = FakeProvider.Mode.Echo });
+        var r = await o.TranslateAsync(new[] { "가" }, Ctx, CancellationToken.None);
+
+        Assert.Equal("가", r.Texts[0]);
+        Assert.False(r.AllResolved);
+        Assert.False(cache.TryGet(TranslationCache.Key(Ctx.Scene, "가"), out _));
     }
 
     [Fact]
@@ -145,7 +159,7 @@ public class TranslationOrchestratorTests
         Assert.Equal("T:가", r.Texts[0]);
         Assert.Equal("나", r.Texts[1]);                 // 没翻成的仍是原文
         Assert.Equal("다", r.Texts[2]);
-        Assert.False(cache.TryGet("나", out _));
+        Assert.False(cache.TryGet(TranslationCache.Key(Ctx.Scene, "나"), out _));
     }
 
     [Fact]
@@ -177,7 +191,7 @@ public class TranslationOrchestratorTests
         Assert.True(r.AllResolved);
         Assert.Null(r.Error);
         Assert.Empty(errors);              // 跳过不算失败，不上报
-        Assert.True(cache.TryGet("가", out var c) && c == "T:가");
+        Assert.True(cache.TryGet(TranslationCache.Key(Ctx.Scene, "가"), out var c) && c == "T:가");
     }
 
     [Fact]
@@ -243,7 +257,7 @@ public class TranslationOrchestratorTests
         Assert.False(r.AllResolved);
         Assert.Equal(0, d1.Calls);
         Assert.Equal(0, d2.Calls);
-        Assert.False(cache.TryGet("가", out _));
+        Assert.False(cache.TryGet(TranslationCache.Key(Ctx.Scene, "가"), out _));
         Assert.NotNull(r.Error);
     }
 

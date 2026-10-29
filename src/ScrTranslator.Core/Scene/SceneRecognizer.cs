@@ -75,15 +75,20 @@ public sealed class SceneRecognizer
         // 块数固定（= 1080p 那套），实时指纹长度恒等于出厂参考，直接比对。
         // browsing/room 的金属边框叠加居中水平裁剪（只裁宽度）；ingame 的种族装饰区贴左边缘、无裁剪。
         string baseKey = SceneRefStore.RatioKey(_store.BaseWidth, _store.BaseWidth * 9 / 16);
+        // 现场采集按"采集时的比例"作键：16:10 / 4:3 的覆盖参考键是"16:10"/"4:3"，只查"16:9"会永远读不到
+        // （采集提示成功、识别毫无变化）。所以先按当前帧比例取，取不到再回落到 1080p 基准键。
+        string frameKey = SceneRefStore.RatioKey(frame.Width, frame.Height);
         var candidates = new List<(SceneReference Ref, SceneRefResolution Res, IReadOnlyList<SceneRefRegion> Scaled)>();
         foreach (var r in _store.References)
-            if (r.Resolutions.TryGetValue(baseKey, out var baseRes))
-            {
-                // browsing/room 的金属边框位置随宽高比重定位（crop=(1920−1080·ar)/2，16:9 时 crop=0 不裁），
-                // 与"是否有黑边"无关——HasBlackBars 管的是真实黑边区域的裁剪，不挡这里。
-                bool centerCrop = r.Scene != GameScene.InGame;
-                candidates.Add((r, baseRes, SceneRefCapture.FittingRegions(baseRes.Regions, frame.Width, frame.Height, centerCrop)));
-            }
+        {
+            SceneRefResolution? res = null;
+            bool found = frameKey != baseKey && r.Resolutions.TryGetValue(frameKey, out res);
+            if (!found && !r.Resolutions.TryGetValue(baseKey, out res)) continue;
+            // browsing/room 的金属边框位置随宽高比重定位（crop=(1920−1080·ar)/2，16:9 时 crop=0 不裁），
+            // 与"是否有黑边"无关——HasBlackBars 管的是真实黑边区域的裁剪，不挡这里。
+            bool centerCrop = r.Scene != GameScene.InGame;
+            candidates.Add((r, res!, SceneRefCapture.FittingRegions(res!.Regions, frame.Width, frame.Height, centerCrop)));
+        }
         if (candidates.Count == 0)
         {
             var have = string.Join(",", _store.References.SelectMany(r => r.AvailableResolutions).Distinct().OrderBy(x => x));

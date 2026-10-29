@@ -39,7 +39,8 @@ public sealed class FileLogger : IDisposable
 
     private void Open()
     {
-        var fs = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+        // FileShare.Delete：允许轮转时把文件改名（否则外部 tail/查看器一持有文件，File.Move 必失败）。
+        var fs = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
         _w = new StreamWriter(fs, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true)) { AutoFlush = true };
         try { _bytes = new FileInfo(_path).Length; } catch { _bytes = 0; }
     }
@@ -57,7 +58,9 @@ public sealed class FileLogger : IDisposable
         lock (_lock)
         {
             if (_bytes > MaxBytes) Rotate();
-            _w!.WriteLine(line);
+            if (_w is null) return; // 轮转后重开也失败：丢掉这一行，但绝不把异常抛给调用方
+            try { _w.WriteLine(line); }
+            catch { try { _w = null; Open(); } catch { _w = null; } return; } // 写失败（设备满/流被关）：重开一次，失败则丢行
             _bytes += Encoding.UTF8.GetByteCount(line) + 2;
             _recent.Add(line);
             while (_recent.Count > MaxRecent) _recent.RemoveAt(0);
@@ -68,20 +71,25 @@ public sealed class FileLogger : IDisposable
     /// <summary>把当前日志改名为 .1（覆盖旧的），重开新文件。查看器占用导致 Move 失败时静默跳过，继续追加不崩。</summary>
     private void Rotate()
     {
+        var old = _w;
+        _w = null; // 先置空：失败路径必须能重新 Open，否则下文 _w.WriteLine 会打在已 Dispose 的 writer 上
         try
         {
-            _w?.Flush(); _w?.Dispose();
+            old?.Flush(); old?.Dispose();
             string bak = _path + ".1";
             if (File.Exists(bak)) File.Delete(bak);
             File.Move(_path, bak);
-            Open();
         }
         catch
         {
-            // 轮转失败：确保仍有可用 writer，重置计数避免每行都重试轮转。
-            if (_w is null) try { Open(); } catch { }
-            _bytes = 0;
+            // 轮转失败（文件被外部打开且未共享删除）：丢掉旧的 writer 引用，重新打开原文件继续追加。
+            // 旧实现只 `if (_w is null) Open()`；但 _w 是"已 Dispose 但非 null"→ 不重开 →
+            // 之后每行都 ObjectDisposedException，而且异常是从 Info/Warn/Error 抛给业务代码的
+            // （大量调用点在 catch 里，二次抛出会击杀该线程/中断 Stop 流程）。
         }
+        try { Open(); }
+        catch { _w = null; } // 连重开都失败：本行丢弃，但不再抛异常
+        _bytes = 0;
     }
 
     public void Dispose()

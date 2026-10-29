@@ -19,9 +19,18 @@ public partial class DashScopeKeyWindow : Window
 
     private void OnOk(object sender, RoutedEventArgs e)
     {
-        var data = _store.Load();
-        data.DashScopeApiKey = KeyBox.Password;
-        _store.Save(data);
+        try
+        {
+            // 在 store 的锁内"读→改→写"：避免与别的窗口/后台 token 刷新并发时互相覆盖整份 secrets。
+            // Trim：密钥首尾空格进 Authorization 头会 401，症状是"明明配了却鉴权失败"，极难定位。
+            _store.Update(d => d.DashScopeApiKey = KeyBox.Password.Trim());
+        }
+        catch (Exception ex)
+        {
+            // 旧实现不捕获：异常冒到 DispatcherUnhandledException 被静默吞掉 → 窗口停在原地、用户以为"按钮坏了"。
+            MessageBox.Show(this, $"保存失败：{ex.Message}", "DashScope Key");
+            return;
+        }
         DialogResult = true;
         Close();
     }

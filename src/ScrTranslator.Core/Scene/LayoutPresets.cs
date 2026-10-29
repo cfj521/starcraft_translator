@@ -106,12 +106,20 @@ public sealed class LayoutPresetStore
     }
 
     /// <summary>把一条预设直写出厂文件（同 (场景,分辨率) 整条替换）。
-    /// 原子写纪律：先写临时文件再 File.Move 替换，避免写到一半被中断导致截断损坏。</summary>
+    /// 原子写纪律：先写临时文件再 File.Move 替换，避免写到一半被中断导致截断损坏。
+    /// **读旧文件失败时拒绝保存**：宁可这次保存失败，也不能拿空列表覆盖掉全部出厂预设
+    /// （旧实现用 `out _` 丢掉错误 → 空列表 → Upsert → 文件里只剩 1 条，用户所有场景布局一次性丢失）。</summary>
     public static void Save(LayoutPreset preset, string path)
     {
-        var existing = File.Exists(path)
-            ? ReadFile(path, "布局预设", new List<string>(), out _)
-            : Array.Empty<LayoutPreset>();
+        IReadOnlyList<LayoutPreset> existing = Array.Empty<LayoutPreset>();
+        // 空文件（刚新建尚未写入）视为"没有历史预设"，没有数据可丢；非空但读不出来才是危险情况。
+        if (File.Exists(path) && new FileInfo(path).Length > 0)
+        {
+            existing = ReadFile(path, "布局预设", new List<string>(), out var error);
+            if (error is not null)
+                throw new InvalidOperationException(
+                    $"读取布局预设失败，已放弃保存以免覆盖全部预设（本次要写 {preset.Scene}/{preset.Resolution}）：{error}");
+        }
         var next = Upsert(existing, preset);
         string? dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);

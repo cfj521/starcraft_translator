@@ -93,12 +93,12 @@ public partial class SettingsWindow : Window
         public string ConfigButtonText { get; set; } = "配置";
         private bool _enabled = true;
         private string _status = "";
-        private string _statusTooltip = "";
+        private string? _statusTooltip;
         private string _model = "";
         public bool Enabled { get => _enabled; set { _enabled = value; OnChanged(nameof(Enabled)); } }
         public string Status { get => _status; set { _status = value; OnChanged(nameof(Status)); } }
         /// <summary>「订阅登录」按钮的悬浮提示（ChatGPT 行已登录时显示登录账号，未登录为空=不显示）。</summary>
-        public string StatusTooltip { get => _statusTooltip; set { _statusTooltip = value; OnChanged(nameof(StatusTooltip)); } }
+        public string? StatusTooltip { get => _statusTooltip; set { _statusTooltip = value; OnChanged(nameof(StatusTooltip)); } }
         /// <summary>该行使用的模型名（ChatGPT/DashScope 行可编辑）。</summary>
         public string Model { get => _model; set { _model = value; OnChanged(nameof(Model)); } }
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
@@ -405,7 +405,7 @@ public partial class SettingsWindow : Window
             // 绑 null 不弹框，绑空串会弹一个空 tooltip 框。
             row.StatusTooltip = row.Id == TranslationProviderEntry.ChatGpt && loggedIn
                 ? $"{email}（{plan}）"
-                : null;
+                : null;   // null=不弹框（空串会弹一个空 tooltip 框）
         }
     }
 

@@ -45,7 +45,10 @@ public static class AliyunMtSigner
         return Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(stringToSign)));
     }
 
-    /// <summary>阿里云的百分号编码：RFC3986 基础上，`+`→%20（标准库给 %2B）、`%7E`→~ 两处特殊处理。</summary>
+    /// <summary>阿里云的百分号编码：RFC3986 基础上把 `%7E` 还原成 `~`（唯一特殊处理）。
+    /// **不要**照抄阿里云 Java 文档里的 `.replace("+", "%20")`：那是给 Java `URLEncoder` 用的补丁，
+    /// .NET 的 <see cref="Uri.EscapeDataString(string)"/> 本来就把空格编成 %20、把字面 + 编成 %2B；
+    /// 再做 `%2B`→`%20` 会把待译文本里每一个真实加号（如房间名 "1v1 + obs"）悄悄变成空格，签名自洽但正文被改坏。</summary>
     public static string PercentEncode(string s) =>
-        Uri.EscapeDataString(s).Replace("%2B", "%20").Replace("%7E", "~");
+        Uri.EscapeDataString(s).Replace("%7E", "~");
 }

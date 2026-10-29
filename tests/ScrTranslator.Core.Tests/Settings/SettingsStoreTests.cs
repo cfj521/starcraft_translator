@@ -39,6 +39,32 @@ public class SettingsStoreTests
         Assert.Equal(HotkeyKeys.MOD_NONE, back.Hotkeys["OpenConfig"].Modifiers);
     }
 
+    [Fact] public void Load_ExplicitNullSections_KeepsOtherSectionsAndDefaults()
+    {
+        // STJ 会把显式 null 赋成 null（init 默认值失效）。旧实现在 foreach/Where 处 NRE →
+        // 被 catch 吞成"全默认设置" → 用户其余自定义配置静默丢失。
+        var path = Path.GetTempFileName();
+        File.WriteAllText(path, "{\"General\":{\"TargetProcess\":\"MySC\"},\"Hotkeys\":null,\"Translation\":null}");
+        var s = SettingsStore.Load(path);
+
+        Assert.Equal("MySC", s.General.TargetProcess);      // 好的一段照常保留
+        Assert.Equal(6, s.Hotkeys.Count);                    // null 段回默认热键
+        Assert.Equal(6, s.Translation.Providers.Count);      // null 段回默认 provider 池
+    }
+
+    [Fact] public void Save_IsAtomic_LeavesNoTempFileAndKeepsContent()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "st-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "settings.json");
+        SettingsStore.Save(new AppSettings { Ocr = new OcrSettings { TranslatePollMs = 321 } }, path);
+
+        Assert.True(File.Exists(path));
+        Assert.False(File.Exists(path + ".tmp"));            // 临时文件必须已被 Move 掉
+        Assert.Equal(321, SettingsStore.Load(path).Ocr.TranslatePollMs);
+        Directory.Delete(dir, recursive: true);
+    }
+
     [Fact] public void Load_MissingFile_ReturnsDefault()
         => Assert.Equal("StarCraft", SettingsStore.Load("nope_no_file.json").General.TargetProcess);
 
