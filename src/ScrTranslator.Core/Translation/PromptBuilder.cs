@@ -39,11 +39,11 @@ public static class PromptBuilder
     /// 场景键 → 提示词里的场景说明。统一场景名 <see cref="GameSceneIds"/>（寻找房间/房间内/游戏内）
     /// 打头，括号里给模型补充"这块画面通常是什么文本"。先归一历史键，老校准/老上下文也能拿到正确提示。
     /// </summary>
-    private static string SceneText(string scene) => GameSceneIds.Normalize(scene) switch
+    private static string SceneText(string? scene) => GameSceneIds.Normalize(scene ?? "") switch
     {
         GameSceneIds.Browsing => "寻找房间（自定义游戏列表，每行是 房间名/地图名，多为对战设置与黑话）",
         GameSceneIds.Room => "房间内（等待大厅：玩家列表/队伍/种族/地图设置）",
         GameSceneIds.InGame => "游戏内（对局聊天/系统消息，玩家即时口语）",
-        _ => scene,
+        _ => scene ?? "未知场景",
     };
 }

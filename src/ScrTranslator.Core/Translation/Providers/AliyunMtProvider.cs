@@ -64,8 +64,12 @@ public sealed class AliyunMtProvider : ITranslationProvider
         }
         var translated = ParseResponse(body);
         if (translated is null) return lines;
-        var split = translated.Split('\n');
-        return split.Length == lines.Count ? split : lines; // 行数对不上 → 整批回落原文
+        // 尾部的空行只是排版噪声（多数接口末尾会补一个换行）：先去掉再分行，
+        // 否则 split.Length 比行数多 1 → 整批回落原文（表现为"永远不出中文、每拍重发请求"）。
+        var split = translated.TrimEnd('\r', '\n').Split('\n');
+        return split.Length == lines.Count
+            ? split.Select(s => s.TrimEnd('\r')).ToArray()
+            : lines; // 行数对不上 → 整批回落原文
     }
 
     /// <summary>解析成功响应的 Data.Translated 字段（RPC TranslateGeneral 返回）。异常/缺失返回 null。</summary>

@@ -13,12 +13,14 @@ public sealed record SceneRefRegion(string Name, double X, double Y, double Widt
     /// <summary>该区域的指纹字节数（RGB24，行优先）。</summary>
     public int ByteLength => BlocksX * BlocksY * 3;
 
-    /// <summary>把区域矩形夹进帧内，防止参考分辨率与实际帧不符时越界。</summary>
+    /// <summary>把区域矩形的**原点**夹进帧内。宽度/高度保持参考里的原值：块宽 = 区域宽 / BlocksX，
+    /// 一旦在这里缩短宽度，块宽就变了、采样网格与出厂参考错位（贴边区域跨分辨率时整体降分）。
+    /// 越界部分由 <see cref="SceneFingerprint.Compute"/> 的逐块循环按实际可用像素自然截断。</summary>
     public (int X, int Y, int Width, int Height) ClampTo(int frameWidth, int frameHeight)
     {
         int x = Math.Clamp((int)Math.Round(X), 0, Math.Max(0, frameWidth - 1));
         int y = Math.Clamp((int)Math.Round(Y), 0, Math.Max(0, frameHeight - 1));
-        return (x, y, Math.Min((int)Math.Round(Width), frameWidth - x), Math.Min((int)Math.Round(Height), frameHeight - y));
+        return (x, y, Math.Max(0, (int)Math.Round(Width)), Math.Max(0, (int)Math.Round(Height)));
     }
 }
 
@@ -169,10 +171,19 @@ public sealed class SceneRefStore
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
 
-            if (root.TryGetProperty("version", out var ver) && ver.TryGetInt32(out int v) && v != SupportedVersion)
+            if (root.TryGetProperty("version", out var ver))
             {
-                error = $"{what} version={v}，本程序只支持 v{SupportedVersion}（请用 tools/SceneRefGen 重新生成）";
-                return new SceneRefStore();
+                // 字符串 "1" 会 TryGetInt32 失败→被当成"没有版本字段"放行；这里显式拒绝非整数版本。
+                if (!ver.TryGetInt32(out int v))
+                {
+                    error = $"{what} version 字段不是整数（{ver.ValueKind}），无法确认格式，已拒绝。请用 tools/SceneRefGen 重新生成";
+                    return new SceneRefStore();
+                }
+                if (v != SupportedVersion)
+                {
+                    error = $"{what} version={v}，本程序只支持 v{SupportedVersion}（请用 tools/SceneRefGen 重新生成）";
+                    return new SceneRefStore();
+                }
             }
 
             int baseWidth = 1920, blockSize = 4, tol = 16;

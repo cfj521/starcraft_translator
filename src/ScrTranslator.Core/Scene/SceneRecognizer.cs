@@ -120,7 +120,7 @@ public sealed class SceneRecognizer
         var winnerRegions = candidates.FirstOrDefault(c => c.Ref.Id == ranked[0].RefId).Scaled
             ?? Array.Empty<SceneRefRegion>();
         // 全部候选的缩放区域（refId → 区域）：DEBUG 面板逐场景显示指纹坐标用。
-        var allRegions = candidates.ToDictionary(c => c.Ref.Id, c => c.Scaled);
+        var allRegions = candidates.GroupBy(c => c.Ref.Id).ToDictionary(g => g.Key, g => g.First().Scaled);
 
         if (best < _store.MinHitRatio)
             return new SceneRecognition(SceneMatchStatus.BelowThreshold, GameScene.Other, ranked[0].RefId,

@@ -36,8 +36,13 @@ public sealed class HyMt2Provider : ITranslationProvider
     private HunyuanDenseModel? _model; // 延迟加载单例（首次翻译或配置页冷加载才加载权重）
     private Task? _pendingUnload;      // 上一次 Unload 的后台卸载任务；EnsureModelAsync 等它完成再建新模型，避免双模型并存
     private int _inFlight;             // 正在使用模型实例做翻译的并发数；Unload 等它归零再真正 Dispose，避免销毁被翻译中的模型
+    private readonly SemaphoreSlim _loadLock = new(1, 1); // 权重构造串行化（构造重活不持 _gate，见 GetOrBuildModel）
+    private readonly object _inferLock = new();          // 模型推理串行化：HunyuanDenseModel 有 KV 缓存，非线程安全
+    private bool _loadInProgress;      // 正在构造权重（_gate 保护）：Unload 据此登记"构造完就丢弃"
+    private bool _disposeRequested;    // 构造期间收到 Unload → 构造完成后直接 Dispose，不挂上 _model
     private DateTime _retryAfter = DateTime.MinValue; // Failed 后的重试闸门：避免每拍（200ms）都重试加载 1.8B 权重
     private const int FailureCooldownSeconds = 30;
+    private const int UnloadWaitSeconds = 30; // Unload 等在用翻译结束的上限；超时则放弃 Dispose（宁可漏内存也不崩进程）
 
     public HyMt2Provider(Func<string> modelPathGetter, Func<string> backendGetter, Action<string>? onError = null, Action<string>? onInfo = null)
     { _modelPath = modelPathGetter; _backend = backendGetter; _onError = onError; _onInfo = onInfo; }
@@ -89,12 +94,14 @@ public sealed class HyMt2Provider : ITranslationProvider
         if (lines.Count == 0) return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
         return Task.Run(async () =>
         {
-            var model = await AcquireModelAsync(); // 延迟加载 + 原子宣告"正在用"（同一把锁内完成，防 Unload 抢占销毁）
+            var model = await AcquireModelAsync(ct); // 延迟加载 + 原子宣告"正在用"（_inFlight 加一后才可能 Unload）
             try
             {
-                lock (_gate)
+                // 不持 _gate 推理：模型不会被 Dispose（_inFlight > 0），而持锁会让 UI 线程读 LoadState、
+                // Unload、并发翻译全部排队等一整轮生成长达数秒甚至更久。
+                var results = new string[lines.Count];
+                lock (_inferLock) // 模型有 KV 缓存，推理必须串行（其余线程只等推理，不等加载）
                 {
-                    var results = new string[lines.Count];
                     for (int i = 0; i < lines.Count; i++)
                     {
                         ct.ThrowIfCancellationRequested();
@@ -103,61 +110,115 @@ public sealed class HyMt2Provider : ITranslationProvider
                         // 非 null＝真翻出，或回声保留的原文新字符串（引用不等）→ 编排器判 Resolved
                         results[i] = zh ?? lines[i];
                     }
-                    return (IReadOnlyList<string>)results;
                 }
+                return (IReadOnlyList<string>)results;
             }
             finally { Interlocked.Decrement(ref _inFlight); }
         }, ct);
     }
 
-    /// <summary>冷加载：立即在后台加载 GGUF 权重（不阻塞调用线程）。EnsureModelAsync 幂等，已加载则直接返回。
+    /// <summary>冷加载：立即在后台加载 GGUF 权重（不阻塞调用线程）。幂等，已加载则直接返回。
     /// app 启动完成后（选中内部组时）与配置页选中内部组并保存时调用。</summary>
     public void Load()
     {
-        lock (_gate) { _state = HyMt2LoadState.Loading; }
         Task.Run(async () =>
         {
-            try { await EnsureModelAsync(); }
-            catch (Exception ex)
-            {
-                lock (_gate)
-                {
-                    _state = HyMt2LoadState.Failed;
-                    _retryAfter = DateTime.UtcNow.AddSeconds(FailureCooldownSeconds);
-                }
-                _onError?.Invoke($"本地 Hy-MT2 加载失败: {ex.Message}");
-            }
+            try { await GetOrBuildModelAsync(CancellationToken.None); }
+            catch (Exception ex) { _onError?.Invoke($"本地 Hy-MT2 加载失败: {ex.Message}"); }
         });
     }
 
-    /// <summary>异步延迟加载入口：先等上一次后台卸载完成（避免双模型并存），再在 _gate 锁内确保模型就绪。
-    /// 等待（await）发生在锁外，不会阻塞其它持锁线程。</summary>
-    private async Task<HunyuanDenseModel> EnsureModelAsync()
+    /// <summary>给翻译用：确保模型就绪 + 把 _inFlight 加一（同一把 _gate 内校验仍是同一个实例）。
+    /// 关键：加载完成与"宣告在用"不能分开——否则中间窗口里 Unload 读到 _inFlight==0 就 Dispose，
+    /// 翻译随即在已释放的原生模型上推理 → AccessViolation 杀进程。</summary>
+    private async Task<HunyuanDenseModel> AcquireModelAsync(CancellationToken ct)
     {
-        Task? pending;
-        lock (_gate) pending = _pendingUnload;
-        if (pending is not null) { try { await pending; } catch { } } // 等旧模型卸载完，再建新的
-        lock (_gate) return EnsureModelLocked();
+        while (true)
+        {
+            var model = await GetOrBuildModelAsync(ct);
+            lock (_gate)
+            {
+                if (ReferenceEquals(_model, model))
+                {
+                    Interlocked.Increment(ref _inFlight); // 与校验同锁：Unload 拿不到锁就不会误判"没人用"
+                    return model;
+                }
+            }
+            // 刚刚被 Unload 换掉：重来一轮（会先等卸载任务完成再建新模型）。
+            ct.ThrowIfCancellationRequested();
+        }
     }
 
-    /// <summary>给翻译用：加载（必要时）+ 在**同一把锁内**把 _inFlight 加一。
-    /// 关键：加载完成与"宣告在用"不能分成两步——旧实现先 await 返回、再 Increment，中间那段窗口里
-    /// Unload 读到 _inFlight==0 就会立刻 Dispose，翻译随即在已释放的原生模型上推理 → AccessViolation 杀进程。</summary>
-    private async Task<HunyuanDenseModel> AcquireModelAsync()
+    /// <summary>取模型，没有就在**锁外**构造权重。构造 1.8B 权重耗时数秒到数十秒，
+    /// 必须在 _gate 外做——旧实现在 lock(_gate) 里 new，期间 UI 线程读 LoadState（调试面板每拍刷新）、
+    /// Unload、其它翻译线程全部阻塞，界面卡死。
+    /// _loadLock 保证同一时刻只有一个线程构造，避免并发 new 出两份权重（~2GB 与 native 资源打架）。</summary>
+    private async Task<HunyuanDenseModel> GetOrBuildModelAsync(CancellationToken ct)
     {
-        Task? pending;
-        lock (_gate) pending = _pendingUnload;
-        if (pending is not null) { try { await pending; } catch { } }
-        lock (_gate)
+        while (true)
         {
-            var model = EnsureModelLocked();
-            Interlocked.Increment(ref _inFlight); // 与加载同锁：Unload 拿不到锁就不会误判为"没人用"
-            return model;
+            lock (_gate) { if (_model is not null) return _model; }
+
+            await _loadLock.WaitAsync(ct);
+            try
+            {
+                lock (_gate) { if (_model is not null) return _model; } // 等锁期间别人已建好
+
+                Task? pending;
+                lock (_gate) pending = _pendingUnload;
+                if (pending is not null) { try { await pending; } catch { } } // 等旧模型卸载完，再建新的
+
+                bool gpuWanted = _backend() == "gpu";
+                // Vulkan 探测可能较慢，放在 _gate 外：探测期间 UI 线程读 LoadState 不能被拖住。
+                string backendName = gpuWanted && VulkanBackend.IsSupported() ? "vulkan" : "cpu";
+                if (gpuWanted && backendName != "vulkan")
+                    _onError?.Invoke("本地 Hy-MT2 选中 GPU 但无可用 Vulkan 设备，已回落 CPU");
+                lock (_gate)
+                {
+                    if (_model is not null) return _model; // 探测期间别人已建好
+                    _loadInProgress = true;
+                    _state = HyMt2LoadState.Loading;
+                }
+
+                _onInfo?.Invoke($"本地 Hy-MT2 以 {backendName} 后端加载模型（权重路径：{_modelPath()}）");
+                HunyuanDenseModel built;
+                try
+                {
+                    built = new HunyuanDenseModel(_modelPath(), backend: BackendFactory.Create(backendName));
+                }
+                catch (Exception)
+                {
+                    lock (_gate)
+                    {
+                        _loadInProgress = false;
+                        _disposeRequested = false;
+                        _state = HyMt2LoadState.Failed;
+                        _retryAfter = DateTime.UtcNow.AddSeconds(FailureCooldownSeconds);
+                    }
+                    throw;
+                }
+
+                bool discard;
+                lock (_gate)
+                {
+                    _loadInProgress = false;
+                    discard = _disposeRequested; // 构造期间有 Unload：这份白建了，直接销毁
+                    _disposeRequested = false;
+                    if (!discard) { _model = built; _state = HyMt2LoadState.Ready; }
+                }
+                if (!discard) return built;
+
+                try { built.Dispose(); } catch { /* 丢弃路径，忽略 */ }
+            }
+            finally { _loadLock.Release(); }
+
+            // 构造期间被 Unload 了：释放锁后重来一轮（不能持锁递归，SemaphoreSlim 不可重入）。
+            ct.ThrowIfCancellationRequested();
         }
     }
 
     /// <summary>卸载：销毁模型、释放权重内存（~1GB）。后台线程执行（不阻塞调用线程/UI），
-    /// 且等待正在使用该模型的翻译（_inFlight）全部结束才真正 Dispose，避免销毁被翻译中的模型。
+    /// 且等正在使用该模型的翻译（_inFlight）结束才真正 Dispose，避免销毁被翻译中的模型。
     /// 配置页选中外部组并保存时调用。未加载则无操作。</summary>
     public void Unload()
     {
@@ -166,10 +227,11 @@ public sealed class HyMt2Provider : ITranslationProvider
         {
             m = _model;
             _model = null;
+            if (_loadInProgress) _disposeRequested = true; // 正在构造：构造完就地销毁，别挂上来
             _state = HyMt2LoadState.NotLoaded;
-            if (m is null) return; // 未加载：无操作
-            // 先登记"卸载中"再启动任务：旧实现 Task.Run 之后才写 _pendingUnload，中间窗口里并发的
-            // EnsureModelAsync 读到 null → 立刻再 new 一份 1.8B 权重，两份同时驻留（~2GB）且 native 资源打架。
+            if (m is null) return; // 未加载且没在构造：无操作
+            // 先登记"卸载中"再启动任务：否则中间窗口里并发的 GetOrBuildModelAsync 会再 new 一份
+            // 1.8B 权重，两份同时驻留（~2GB）且 native 资源打架。
             var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _pendingUnload = done.Task;
             var victim = m;
@@ -177,44 +239,24 @@ public sealed class HyMt2Provider : ITranslationProvider
             {
                 try
                 {
-                    while (Interlocked.CompareExchange(ref _inFlight, 0, 0) > 0) Thread.Sleep(10); // 等在用翻译结束
+                    // 等在用翻译结束，但有上限：无限等会让 done 永不完成、后续加载永久等待。
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    while (Volatile.Read(ref _inFlight) > 0)
+                    {
+                        if (sw.Elapsed > TimeSpan.FromSeconds(UnloadWaitSeconds))
+                        {
+                            // 宁可漏一份权重内存（进程退出即回收），也不能 Dispose 正在推理的模型（会 AccessViolation 杀进程）。
+                            _onError?.Invoke($"本地 Hy-MT2 卸载超时（仍有翻译在用），已跳过释放以免崩溃");
+                            return;
+                        }
+                        Thread.Sleep(10);
+                    }
                     victim.Dispose();
                 }
                 catch (Exception ex) { _onError?.Invoke($"本地 Hy-MT2 卸载失败: {ex.Message}"); }
                 finally { done.TrySetResult(); }
             });
         }
-    }
-
-    /// <summary>延迟加载入口：首次调用才加载权重。须在 _gate 锁内调用。</summary>
-    private HunyuanDenseModel EnsureModelLocked()
-    {
-        if (_model is null)
-        {
-            // "gpu" → Vulkan 后端（需系统有可用 Vulkan 设备，IsSupported() 为假则回落 CPU 并上报）；"cpu" → 纯 CPU SIMD。
-            string backendName = "cpu";
-            if (_backend() == "gpu")
-            {
-                if (VulkanBackend.IsSupported())
-                    backendName = "vulkan";
-                else
-                    _onError?.Invoke("本地 Hy-MT2 选中 GPU 但无可用 Vulkan 设备，已回落 CPU");
-            }
-            _onInfo?.Invoke($"本地 Hy-MT2 以 {backendName} 后端加载模型（权重路径：{_modelPath()}）");
-            _state = HyMt2LoadState.Loading;
-            try
-            {
-                _model = new HunyuanDenseModel(_modelPath(), backend: BackendFactory.Create(backendName));
-                _state = HyMt2LoadState.Ready;
-            }
-            catch
-            {
-                _state = HyMt2LoadState.Failed;
-                _retryAfter = DateTime.UtcNow.AddSeconds(FailureCooldownSeconds);
-                throw;
-            }
-        }
-        return _model;
     }
 
     private static string? TranslateLine(HunyuanDenseModel model, string line, CancellationToken ct)

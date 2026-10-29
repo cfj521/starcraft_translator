@@ -76,17 +76,17 @@ public static class HotkeyKeys
 public static class HotkeyDefaults
 {
     /// <summary>全部热键：F9 开/关翻译、Ctrl+F9 区域校准设置、F7 设置、F8 切 DEBUG 面板、Ctrl+F8 复制诊断、
-    /// F6 截图保存。用户可重绑到 F6–F9（可加 Ctrl/Alt/Shift）。悬浮层显隐 / 翻译玩家ID / 暂停 已改为纯配置项，不再占热键。</summary>
-    public static IReadOnlyDictionary<string, HotkeyBinding> Map { get; } =
-        new Dictionary<string, HotkeyBinding>
-        {
-            ["ToggleTranslate"] = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9),
-            ["Calibrate"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F9),
-            ["OpenConfig"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F7),
-            ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8),
-            ["CopyDebug"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F8),
-            ["Screenshot"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F6),
-        };
+    /// F6 截图保存。用户可重绑到 F6–F9（可加 Ctrl/Alt/Shift）。悬浮层显隐 / 翻译玩家ID / 暂停 已改为纯配置项，不再占热键。
+    /// **始终返回新字典**：共享同一可变字典会让任何调用方的 Clear/改写污染全部默认实例。</summary>
+    public static IReadOnlyDictionary<string, HotkeyBinding> Map => new Dictionary<string, HotkeyBinding>
+    {
+        ["ToggleTranslate"] = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F9),
+        ["Calibrate"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F9),
+        ["OpenConfig"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F7),
+        ["ToggleDebug"]     = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F8),
+        ["CopyDebug"]       = new(HotkeyKeys.MOD_CONTROL, HotkeyKeys.VK_F8),
+        ["Screenshot"]      = new(HotkeyKeys.MOD_NONE, HotkeyKeys.VK_F6),
+    };
 }
 
 public sealed record AppSettings

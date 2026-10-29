@@ -15,7 +15,9 @@ public static class BatchProtocol
         return sb.ToString().TrimEnd();
     }
 
-    private static readonly Regex Row = new(@"^\s*\[(\d+)\]\s?(.*)$", RegexOptions.Compiled);
+    // 容忍模型给序号加 Markdown 修饰（`**[1]**`、``` `[1]` ```、`- [1]`、`### [1]`）：
+    // 严格只认行首 "[n]" 时，整块输出会被判"行数不符"→ 整批回落原文并每拍重发。
+    private static readonly Regex Row = new(@"^\s*(?:[*_`#>\-]+\s*)*\[(\d+)\]\s*[*_`]*\s?(.*)$", RegexOptions.Compiled);
 
     public static IReadOnlyList<string>? Parse(string reply, int expected)
     {
@@ -27,12 +29,18 @@ public static class BatchProtocol
             if (int.TryParse(m.Groups[1].Value, out var idx))
             {
                 if (found.ContainsKey(idx)) return null; // 序号重复 → 整批降级回原文
-                found[idx] = m.Groups[2].Value.Trim();
+                // 去掉行尾的 Markdown 修饰（模型常写成 "**[1]** 译文 **"）
+                found[idx] = m.Groups[2].Value.Trim().Trim('*', '`').Trim();
             }
         }
         if (found.Count != expected) return null;
         var res = new string[expected];
-        for (int i = 1; i <= expected; i++) { if (!found.TryGetValue(i, out var v)) return null; res[i - 1] = v; }
+        for (int i = 1; i <= expected; i++)
+        {
+            if (!found.TryGetValue(i, out var v)) return null;
+            if (v.Length == 0) return null; // 空译文：不能当"已翻成"缓存空串（悬浮层出现空白行且永久缓存）
+            res[i - 1] = v;
+        }
         return res;
     }
 }

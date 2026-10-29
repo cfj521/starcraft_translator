@@ -86,9 +86,14 @@ public sealed class TranslationOrchestrator
                 RecordProvider(p); // 记最近 3 次引擎（调试面板）
                 break; // 成功，用这个 provider 的结果
             }
+            // OperationCanceledException 不吞：用户在翻译中关掉翻译/换场景时必须立刻停，
+            // 若被当作"provider 失败"继续试下一个，会每拍把所有 provider 都试一遍（还带付费请求）。
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                error = $"{p.Name} 翻译失败: {ex.Message}";
+                // 错误体会回显掩码后的密钥片段（OpenAI 系是 sk-...***，阿里云可能带 AccessKeyId），
+                // 这条消息会直通日志页/调试面板并被用户截图上报：先擦一遍再往外抛。
+                error = $"{p.Name} 翻译失败: {SecretRedactor.Redact(ex.Message)}";
                 _onError?.Invoke(error);
                 zh = null; // 继续下一个
             }

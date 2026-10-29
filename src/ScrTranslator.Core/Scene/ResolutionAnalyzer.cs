@@ -131,15 +131,24 @@ public static class ResolutionAnalyzer
     {
         int bestW = 0, bestH = 0;
         double bestDist = double.MaxValue;
+        int tierW = 0, tierH = 0; // 该档最小的标准分辨率（回落用）
         foreach (var (t, w, h) in StandardResolutions)
         {
             if (t != tier) continue;
+            if (tierW == 0 || (long)w * h < (long)tierW * tierH) { tierW = w; tierH = h; }
             if (w > maxW || h > maxH) continue; // 必须能装进整窗
             double dx = w - targetW, dy = h - targetH;
             double dist = dx * dx + dy * dy;
             if (dist < bestDist) { bestDist = dist; bestW = w; bestH = h; }
         }
-        if (bestW == 0) throw new InvalidOperationException($"标准分辨率列表里找不到能装进 {maxW}x{maxH} 的 '{tier}' 档");
-        return (bestW, bestH);
+        if (bestW != 0) return (bestW, bestH);
+
+        // 整窗比该档最小的标准分辨率还小（小窗口/异常比例）：不再抛异常（调用方据此整拍失败），
+        // 按该档比例缩到能装进整窗的尺寸，至少 1px。
+        if (tierW == 0 || maxW <= 0 || maxH <= 0) return (Math.Max(1, Math.Min(targetW, Math.Max(1, maxW))), Math.Max(1, Math.Min(targetH, Math.Max(1, maxH))));
+        double scale = Math.Min((double)maxW / tierW, (double)maxH / tierH);
+        int fw = Math.Max(1, (int)Math.Round(tierW * scale));
+        int fh = Math.Max(1, (int)Math.Round(tierH * scale));
+        return (Math.Min(fw, maxW), Math.Min(fh, maxH));
     }
 }

@@ -31,7 +31,7 @@ public sealed class CodexResponsesClient
         {
             var err = await resp.Content.ReadAsStringAsync(ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-                throw new RateLimitException($"codex/responses 429: {err}", resp.Headers.RetryAfter?.Delta);
+                throw new RateLimitException($"codex/responses 429: {err}", RateLimitException.FromHeader(resp.Headers.RetryAfter));
             throw new HttpRequestException($"codex/responses {(int)resp.StatusCode}: {err}");
         }
         var sb = new StringBuilder();

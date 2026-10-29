@@ -14,6 +14,9 @@ public record RelRect(double X, double Y, double W, double H, double OffsetX = 0
     public static RelRect FromCanvasDip(double canvasLeft, double canvasTop, double canvasWidth, double canvasHeight,
         double dpiX, double dpiY, int gameLeft, int gameTop, int gameWidth, int gameHeight)
     {
+        // 游戏窗尺寸为 0（最小化/尚未取到窗口矩形）时会除出 Infinity/NaN，下游 ToPixels 再饱和成
+        // int.MinValue/MaxValue → 整屏或零尺寸区域。这里直接兜底成空矩形。
+        if (gameWidth <= 0 || gameHeight <= 0) return new RelRect(0, 0, 0, 0);
         double physLeft = canvasLeft * dpiX;
         double physTop = canvasTop * dpiY;
         double physW = canvasWidth * dpiX;

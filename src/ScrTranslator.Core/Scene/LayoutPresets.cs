@@ -191,10 +191,19 @@ public sealed class LayoutPresetStore
             }
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
-            if (root.TryGetProperty("version", out var v) && v.TryGetInt32(out int ver) && ver != SupportedVersion)
+            if (root.TryGetProperty("version", out var v))
             {
-                error = $"{what} version={ver}，本程序只支持 v{SupportedVersion}";
-                return Array.Empty<LayoutPreset>();
+                // 字符串 "1" 会 TryGetInt32 失败→被当成"没有版本字段"放行，格式不对也照用；这里显式拒绝。
+                if (!v.TryGetInt32(out int ver))
+                {
+                    error = $"{what} version 字段不是整数（{v.ValueKind}），无法确认格式，已拒绝";
+                    return Array.Empty<LayoutPreset>();
+                }
+                if (ver != SupportedVersion)
+                {
+                    error = $"{what} version={ver}，本程序只支持 v{SupportedVersion}";
+                    return Array.Empty<LayoutPreset>();
+                }
             }
             if (!root.TryGetProperty("presets", out var presets) || presets.ValueKind != JsonValueKind.Object)
             {

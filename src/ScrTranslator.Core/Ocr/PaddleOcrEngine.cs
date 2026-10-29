@@ -60,21 +60,37 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
             {
                 // 官方推荐创建 SessionOptions 的方式：GetDefaultSessionOptions 自带 ORT_ENABLE_EXTENDED 等合理默认，
                 // 并把 Inter/Intra-op 线程钉在 numThreads（≤0 兜底 1，避免 onnxruntime 把 0 解释成"全核"拉满 CPU）。
-                var so = RapidOcr.GetDefaultSessionOptions(Math.Max(1, _numThreads));
+                var ocr = new RapidOcr();
                 try
                 {
-                    if (_device == OcrDevice.Gpu)
-                        so.AppendExecutionProvider_DML(0);            // GPU：DirectML（设备 0），免装 CUDA
-                    // CPU：不挂 DML provider → onnxruntime 默认走 CPU
-                    var ocr = new RapidOcr();
-                    ocr.InitModels(det, cls, rec, keys, so);         // 第 5 参为 SessionOptions（挂 DML 与否由此定）
-                    _ocr = ocr;
-                    _ready = true;
+                    InitModels(ocr, det, cls, rec, keys, gpu: _device == OcrDevice.Gpu);
                 }
-                finally
+                catch (Exception ex) when (_device == OcrDevice.Gpu)
                 {
-                    so.Dispose();                                     // SessionOptions 由调用方持有，InitModels 返回后即释放
+                    // GPU（DirectML）不可用（驱动/显卡/DirectML.dll 缺失）：回落 CPU 重来一次，
+                    // 否则 _ready 永远 false、OCR 静默返回空结果，等于整个功能失效。
+                    try { ocr.Dispose(); } catch { }
+                    ocr = new RapidOcr();
+                    try
+                    {
+                        InitModels(ocr, det, cls, rec, keys, gpu: false);
+                        _onError?.Invoke($"OCR GPU（DirectML）初始化失败，已回落 CPU：{ex.Message}");
+                    }
+                    catch
+                    {
+                        try { ocr.Dispose(); } catch { }
+                        throw;
+                    }
                 }
+
+                // 初始化窗口内被 Dispose：不能把已销毁实例写回字段（否则 3 个 onnx session 永不释放）。
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    try { ocr.Dispose(); } catch { }
+                    return;
+                }
+                _ocr = ocr;
+                _ready = true;
             }
             catch (Exception ex)
             {
@@ -87,11 +103,37 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
         });
     }
 
+    /// <summary>建 SessionOptions → 挂（或不挂）DML → InitModels，异常时确保 SessionOptions 释放。</summary>
+    private void InitModels(RapidOcr ocr, string det, string cls, string rec, string keys, bool gpu)
+    {
+        var so = RapidOcr.GetDefaultSessionOptions(Math.Max(1, _numThreads));
+        try
+        {
+            if (gpu) so.AppendExecutionProvider_DML(0); // GPU：DirectML（设备 0），免装 CUDA
+            // CPU：不挂 DML provider → onnxruntime 默认走 CPU
+            ocr.InitModels(det, cls, rec, keys, so);   // 第 5 参为 SessionOptions（挂 DML 与否由此定）
+        }
+        finally
+        {
+            so.Dispose();                             // SessionOptions 由调用方持有，InitModels 返回后即释放
+        }
+    }
+
     public Task<OcrResult> RecognizeAsync(SKBitmap image, CancellationToken ct = default)
     {
+        // 先判取消：Task.Run 预取消的 token 会直接返回已取消任务、不执行委托，但仍占着下面那个 +1，
+        // _detects 永久多 1 → Dispose 白等 2s，且计数越积越多。
+        if (ct.IsCancellationRequested) return Task.FromCanceled<OcrResult>(ct);
         var ocr = _ocr;
-        if (ocr is null || !_ready) return Task.FromResult(new OcrResult(Array.Empty<OcrLine>())); // 初始化未完成 → 空（启动窗口，调用方下一拍重试）
+        if (ocr is null || !_ready || Volatile.Read(ref _disposed) != 0)
+            return Task.FromResult(new OcrResult(Array.Empty<OcrLine>())); // 初始化未完成/已销毁 → 空（调用方下一拍重试）
         Interlocked.Increment(ref _detects);
+        // 自增后再确认一次：Dispose 可能恰好在我们读 _ocr 与计数自增之间把 _detects 等成 0 并释放了模型。
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            Interlocked.Decrement(ref _detects);
+            return Task.FromResult(new OcrResult(Array.Empty<OcrLine>()));
+        }
         return Task.Run(() =>
         {
             try
@@ -104,10 +146,15 @@ public sealed class PaddleOcrEngine : IOcrEngine, IDisposable
                 {
                     foreach (var block in res.TextBlocks)
                     {
+                        // 空文本/空几何（BoxPoints 缺失）会产生零尺寸矩形，令下游按位置认行的稳定器永不认领、
+                        // 却占着一次 OCR 行计数。这里直接丢掉。
+                        if (string.IsNullOrWhiteSpace(block.Text)) continue;
+                        var rect = ToRect(block.BoxPoints);
+                        if (rect.Width <= 0 || rect.Height <= 0) continue;
                         float conf = block.CharScores is { Length: > 0 }
                             ? block.CharScores.Average()
                             : 0f;
-                        lines.Add(new OcrLine(block.Text, ToRect(block.BoxPoints), conf));
+                        lines.Add(new OcrLine(block.Text, rect, conf));
                     }
                 }
                 return new OcrResult(lines);

@@ -11,4 +11,19 @@ public sealed class RateLimitException : Exception
     public RateLimitException(string message, TimeSpan? retryAfter) : base(message) { RetryAfter = retryAfter; }
     public RateLimitException(string message, TimeSpan? retryAfter, Exception innerException)
         : base(message, innerException) { RetryAfter = retryAfter; }
+
+    /// <summary>把 Retry-After 头转成等待时长。该头有两种合法形式：秒数（Delta）与 HTTP-date（Date），
+    /// 只读 Delta 会把 HTTP-date 形式当成"没给"→ 退化成 5s 指数退避，服务端要求等 2 分钟时会被反复撞限。
+    /// Date 形式按"该时刻 − 现在"换算，已过期返回 null（视作没给，走退避）。</summary>
+    public static TimeSpan? FromHeader(System.Net.Http.Headers.RetryConditionHeaderValue? header)
+    {
+        if (header is null) return null;
+        if (header.Delta is { } d) return d;
+        if (header.Date is { } date)
+        {
+            var left = date - DateTimeOffset.UtcNow;
+            return left > TimeSpan.Zero ? left : null;
+        }
+        return null;
+    }
 }

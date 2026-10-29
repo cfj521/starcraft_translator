@@ -5,9 +5,11 @@ namespace ScrTranslator.Core.Translation.Providers;
 /// 与本地 Hy-MT2 的占位符保护同一套逻辑，供外部 LLM 引擎（走批量协议）共用。默认开启、无开关。</summary>
 public static class KoreanOnlyProtector
 {
-    /// <summary>行内非韩文、非空白的连续串（英文/数字/标点）。韩文＝谚文（AC00–D7A3）/Jamo（1100–11FF）/兼容字母（3130–318F）。</summary>
+    /// <summary>行内非韩文、非空白的连续串（英文/数字/标点）。韩文判定必须与 <see cref="KoreanText.IsHangul"/> 完全一致：
+    /// 谚文（AC00–D7A3）/Jamo（1100–11FF）/兼容字母（3130–318F）/扩展 A（A960–A97F）/扩展 B（D7B0–D7FB）。
+    /// 漏掉扩展区会把古谚文 Jamo 当占位符抽走（本该翻的韩文被保护掉）。</summary>
     private static readonly Regex TokenRegex =
-        new(@"[^\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F\s]+", RegexOptions.Compiled);
+        new(@"[^\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FB\s]+", RegexOptions.Compiled);
 
     /// <summary>指令回声标记词。占位符指令（PromptBuilder："行内的 ⟨N⟩ 是占位符…请原样保留，不要翻译或修改"；
     /// Hy-MT2 的 PlaceholderHint 是英文版，模型翻成中文后同样是"…占位符…请保持它们原样…"）
@@ -22,6 +24,9 @@ public static class KoreanOnlyProtector
     /// <summary>回填占位符后清理：占位符保护时前后各加了一个空格让模型分词，回填后会留下连续空格，收成单个空格并 trim 首尾。</summary>
     private static readonly Regex MultiSpaceRegex =
         new(@"\s{2,}", RegexOptions.Compiled);
+
+    /// <summary>行内占位符 ⟨N⟩（U+27E8/U+27E9）。</summary>
+    private static readonly Regex PlaceholderRegex = new(@"⟨(\d+)⟩", RegexOptions.Compiled);
 
     /// <summary>批量保护：每行提取非韩文非空白串换 ⟨0⟩⟨1⟩…占位符。占位符**前后各加一个空格**（`⟨0⟩빨...⟨1⟩`→` ⟨0⟩ 빨...⟨1⟩ `），
     /// 让模型把占位符与相邻韩文段分隔开、尽量翻译韩文（纯韩文无空格段内部仍无法拆，那属分词器职责）。
@@ -46,11 +51,21 @@ public static class KoreanOnlyProtector
     /// <summary>这批行里是否有占位符（决定 system prompt 要不要加"占位符原样保留"提示）。</summary>
     public static bool HasTokens(string[][] tokens) => tokens.Any(t => t.Length > 0);
 
-    /// <summary>把译文里的 ⟨N⟩ 占位符还原成原始串。任一占位符丢失（引擎改坏）→ 返回 null（调用方回退原文）。
+    /// <summary>把译文里的 ⟨N⟩ 占位符还原成原始串。任一占位符丢失或**次序被改**（模型把 ⟨0⟩ A ⟨1⟩ 写成 ⟨1⟩ A ⟨0⟩）
+    /// → 返回 null（调用方回退原文）；次序错也照样能"回填成功"会拼出错位文本，比回退更难发现。
     /// 占位符保护时前后各加了一个空格，回填后会留下连续空格，最后收成单个空格并 trim 首尾。</summary>
     public static string? Restore(string translated, string[] tokens)
     {
         if (tokens.Length == 0) return translated;
+        // 先按出现顺序检查占位符次序：必须是 ⟨0⟩⟨1⟩… 递增（允许不是连续数字串，但相对次序不能乱）。
+        int last = -1;
+        foreach (Match m in PlaceholderRegex.Matches(translated))
+        {
+            if (!int.TryParse(m.Groups[1].Value, out int idx)) return null;
+            if (idx <= last) return null; // 乱序/重复 → 引擎改坏了
+            last = idx;
+        }
+        if (last != tokens.Length - 1) return null; // 末位占位符不是最后一个 → 缺号或被删
         string restored = translated;
         for (int i = tokens.Length - 1; i >= 0; i--)
         {

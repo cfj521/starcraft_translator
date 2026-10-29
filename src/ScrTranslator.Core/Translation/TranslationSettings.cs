@@ -54,14 +54,16 @@ public sealed record TranslationSettings
     // 旧 settings.json 里的 Active 字段反序列化时被忽略，SettingsStore 负责迁移到 Providers。
     public static TranslationSettings Default => new();
 
-    /// <summary>默认池顺序：本地 Hy-MT2(离线优先) → 阿里云(免费) → 自定义模型(用户自配) → OpenAI LLM(订阅) → 阿里云LLM(DashScope) → OpenAI LLM(API)。全部启用。</summary>
-    public static IReadOnlyList<TranslationProviderEntry> DefaultProviders { get; } = new TranslationProviderEntry[]
-    {
-        new(TranslationProviderEntry.HyMt2,        true),
-        new(TranslationProviderEntry.Aliyun,       true),
-        new(TranslationProviderEntry.CustomModel,  true),
-        new(TranslationProviderEntry.ChatGpt,      true),
-        new(TranslationProviderEntry.DashScope,    true),
-        new(TranslationProviderEntry.OpenAiApi,    true),
-    };
+    /// <summary>默认池顺序：本地 Hy-MT2(离线优先) → 阿里云(免费) → 自定义模型(用户自配) → OpenAI LLM(订阅) → 阿里云LLM(DashScope) → OpenAI LLM(API)。全部启用。
+    /// 用只读包装暴露：数组本身可被强转回 <c>TranslationProviderEntry[]</c> 改写，进而污染所有默认实例。</summary>
+    public static IReadOnlyList<TranslationProviderEntry> DefaultProviders { get; } =
+        Array.AsReadOnly(new TranslationProviderEntry[]
+        {
+            new(TranslationProviderEntry.HyMt2,        true),
+            new(TranslationProviderEntry.Aliyun,       true),
+            new(TranslationProviderEntry.CustomModel,  true),
+            new(TranslationProviderEntry.ChatGpt,      true),
+            new(TranslationProviderEntry.DashScope,    true),
+            new(TranslationProviderEntry.OpenAiApi,    true),
+        });
 }

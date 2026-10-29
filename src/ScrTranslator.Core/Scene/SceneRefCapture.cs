@@ -76,6 +76,7 @@ public static class SceneRefCapture
     public static void SaveOverride(string path, string sceneId, string label, string gameScene, string? race,
         int width, int height, string source, IReadOnlyList<SceneRefRegion> regions, byte[][] regionBytes)
     {
+        if (regions.Count == 0 || regionBytes.Length == 0) return; // 没算出区域/指纹（空 ROI 集）：不写空条目
         // 损坏文件不设防：旧实现直接 JsonNode.Parse，坏 JSON 抛异常，用户再也无法采集（每次都抛同一异常）。
         // 这里把坏文件挪到 .corrupt-*（保留原字节供抢救）后从空对象重建。
         JsonObject root = new();

@@ -31,13 +31,16 @@ public static class GameSceneIds
     /// <summary>把任意（新/旧）场景键归一为新键；未知键原样返回（交给上层判空，不静默吞）。</summary>
     public static string Normalize(string id) => LegacyToNewId.TryGetValue(id, out var @new) ? @new : id;
 
+    /// <summary>把场景枚举转成配置键。**Unknown 不伪装成具体场景**：旧实现 `_ => Browsing` 会让
+    /// 未判定时取到"寻找房间"的 ROI 去翻主菜单/加载画面（会把无关文字送进翻译并缓存）。
+    /// 这里映射到 other（未判定/其他界面），下游找不到预设就不翻，行为可解释。</summary>
     public static string ToId(this GameScene s) => s switch
     {
         GameScene.Browsing => Browsing,
         GameScene.Room => Room,
         GameScene.InGame => InGame,
         GameScene.Other => Other,
-        _ => Browsing,
+        _ => Other,
     };
 
     public static GameScene FromId(string id) => Normalize(id) switch

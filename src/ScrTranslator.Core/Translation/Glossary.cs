@@ -22,23 +22,32 @@ public sealed class Glossary
     {
         if (!File.Exists(path)) return new Glossary(new(StringComparer.Ordinal));
         var entries = new List<(string, string)>();
-        foreach (var raw in File.ReadLines(path))
+        IEnumerable<string> lines;
+        try { lines = File.ReadLines(path); }
+        catch (IOException) { return new Glossary(new(StringComparer.Ordinal)); }
+        catch (UnauthorizedAccessException) { return new Glossary(new(StringComparer.Ordinal)); }
+        try
         {
-            var line = raw.Trim();
-            if (line.Length < 2 || line[0] != '|') continue;
-            var cells = line.Trim('|').Split('|');
-            if (cells.Length < 2) continue;
-            var ko = cells[0].Trim();
-            var zh = cells[1].Trim();
-            if (ko.Length == 0 || zh.Length == 0) continue;
-            if (ko.Contains("韩文") || ko.StartsWith("---") || ko.StartsWith(":--")) continue; // 表头/分隔
-            var zhFirst = zh.Split('/')[0].Trim();
-            foreach (var koPart in ko.Split('/'))
+            foreach (var raw in lines)
             {
-                var k = koPart.Trim();
-                if (k.Length > 0) entries.Add((k, zhFirst));
+                var line = raw.Trim();
+                if (line.Length < 2 || line[0] != '|') continue;
+                var cells = line.Trim('|').Split('|');
+                if (cells.Length < 2) continue;
+                var ko = cells[0].Trim();
+                var zh = cells[1].Trim();
+                if (ko.Length == 0 || zh.Length == 0) continue;
+                if (ko.Contains("韩文") || ko.StartsWith("---") || ko.StartsWith(":--")) continue; // 表头/分隔
+                var zhFirst = zh.Split('/')[0].Trim();
+                foreach (var koPart in ko.Split('/'))
+                {
+                    var k = koPart.Trim();
+                    if (k.Length > 0) entries.Add((k, zhFirst));
+                }
             }
         }
+        catch (IOException) { } // 读一半被占用/截断：用已读到的条目，别让启动失败
+        catch (UnauthorizedAccessException) { }
         return FromEntries(entries);
     }
 

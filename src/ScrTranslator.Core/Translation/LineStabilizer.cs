@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Linq;
 namespace ScrTranslator.Core.Translation;
 
 /// <summary>OCR 行级两帧共识（动态背景降噪，如 ingame 聊天浮在游戏画面上）：
@@ -22,11 +23,18 @@ public sealed class LineStabilizer
     }
 
     private readonly Dictionary<int, Roi> _byRoi = new();
+    private readonly object _gate = new(); // Stabilize/ResetAll 可能来自不同线程（采集线程 vs 切场景）
     private const int DropAfterMissing = 2; // 缺失两帧才撤行（遮挡一两帧不掉）
 
     /// <summary>给定本帧候选行（已过置信度/韩文/翻译范围闸门，按 OCR 顺序），返回已提交的稳定行及其 bounds。
     /// 挂起行（首帧见到）不在返回值里；宽限行（本帧缺失但仍在宽限内）带最近 bounds 返回。</summary>
     public (List<string> Lines, List<RectangleF> Bounds) Stabilize(
+        int roiIndex, IReadOnlyList<string> frameLines, IReadOnlyList<RectangleF> frameBounds)
+    {
+        lock (_gate) return StabilizeLocked(roiIndex, frameLines, frameBounds);
+    }
+
+    private (List<string> Lines, List<RectangleF> Bounds) StabilizeLocked(
         int roiIndex, IReadOnlyList<string> frameLines, IReadOnlyList<RectangleF> frameBounds)
     {
         var roi = GetOrCreate(roiIndex);
@@ -83,12 +91,21 @@ public sealed class LineStabilizer
             roi.MissingFrames[kv.Key] = frames;
             if (frames >= DropAfterMissing) dropAllMissing.Add(kv.Key);
         }
-        foreach (var kv in frameCount)
-            if (!missingNow.ContainsKey(kv.Key)) roi.MissingFrames[kv.Key] = 0;
 
         var newStable = new List<(string, RectangleF, int)>();
         foreach (var k in kept)
             if (!k.Missing || !dropAllMissing.Contains(k.Text)) newStable.Add((k.Text, k.Bounds, k.LastFrameIdx));
+
+        // 计数表维护：本帧确认过的文本归零（删键＝0），已不在稳定集里的文本立刻退场。
+        // 旧实现只对"本帧仍在"的键清零、且从不 Remove——每个曾出现过的文本（含 OCR 抖动的不同读法）
+        // 都永久留一条，长会话里字典单调增长。
+        var stableTexts = new HashSet<string>(newStable.Count);
+        foreach (var s in newStable) stableTexts.Add(s.Item1);
+        foreach (var t in frameCount.Keys)
+            if (!missingNow.ContainsKey(t)) roi.MissingFrames.Remove(t);
+        if (roi.MissingFrames.Count > 0)
+            foreach (var t in roi.MissingFrames.Keys.ToList())
+                if (!stableTexts.Contains(t)) roi.MissingFrames.Remove(t);
 
         // 提升：本帧里超出"确认数"的出现，上一帧有挂起同文 → 凑满两帧，转正；
         // 插到"帧内下标比它小的已保留行"的最后一条之后（下标相等不可能：同帧内一行只占一个下标）。
@@ -98,13 +115,17 @@ public sealed class LineStabilizer
             string t = kv.Key;
             int confirmed = confirmedSoFar.GetValueOrDefault(t);
             int promote = Math.Min(roi.Pending.GetValueOrDefault(t), kv.Value - confirmed);
-            for (int k = 0; k < promote; k++)
+            int promoted = 0;
+            foreach (int idx in frameOccIdx[t])
             {
-                int idx = frameOccIdx[t][confirmed + k];
+                if (promoted >= promote) break;
+                if (matchedReading.Contains(idx)) continue; // 已被某已提交行认领的读法不能再被提升
                 int at = newStable.FindLastIndex(x => x.Item3 < idx);
                 newStable.Insert(at < 0 ? 0 : at + 1, (t, frameBounds[idx], idx));
+                matchedReading.Add(idx); // 防止同一读法被重复提升
+                promoted++;
             }
-            int rest = kv.Value - confirmed - promote;
+            int rest = kv.Value - confirmed - promoted;
             if (rest > 0) newPending[t] = rest; // 首帧见到：挂起（挂起行本帧没再出现＝噪音，随 newPending 自然丢弃）
         }
         roi.Pending = newPending;
@@ -127,7 +148,10 @@ public sealed class LineStabilizer
     }
 
     /// <summary>ROI 集变化（换场景/分辨率/增删）：清掉全部 ROI 的共识状态。</summary>
-    public void ResetAll() => _byRoi.Clear();
+    public void ResetAll()
+    {
+        lock (_gate) _byRoi.Clear();
+    }
 
     private Roi GetOrCreate(int roiIndex) =>
         _byRoi.TryGetValue(roiIndex, out var r) ? r : _byRoi[roiIndex] = new Roi();

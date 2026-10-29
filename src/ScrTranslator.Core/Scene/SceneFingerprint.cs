@@ -58,6 +58,20 @@ public static class SceneFingerprint
     /// </summary>
     public static void Compute(in FramePixels frame, IReadOnlyList<SceneRefRegion> regions, byte[] into)
     {
+        // 参数不校验时，传错长度的缓冲会在中途 IndexOutOfRange（甚至只写了一半），调用方难以定位；
+        // 行跨距/缓冲不足也会在 span 索引处抛难以理解的越界异常。
+        if (into is null) throw new ArgumentNullException(nameof(into));
+        int need = ByteLength(regions);
+        if (into.Length != need)
+            throw new ArgumentException($"指纹缓冲区长度 {into.Length} 与区域所需 {need} 不符", nameof(into));
+        if (frame.Width <= 0 || frame.Height <= 0 || frame.BytesPerPixel <= 0)
+            throw new ArgumentException($"帧尺寸非法: {frame.Width}x{frame.Height} bpp={frame.BytesPerPixel}");
+        if (frame.RowBytes < frame.Width * frame.BytesPerPixel)
+            throw new ArgumentException($"行跨距 {frame.RowBytes} 小于 宽×bpp={frame.Width * frame.BytesPerPixel}");
+        long requiredBytes = (long)frame.RowBytes * (frame.Height - 1) + (long)frame.Width * frame.BytesPerPixel;
+        if (frame.Bytes.Length < requiredBytes)
+            throw new ArgumentException($"帧缓冲 {frame.Bytes.Length} 字节不足（需 {requiredBytes}）");
+
         int off = 0;
         foreach (var region in regions)
         {
